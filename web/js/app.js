@@ -247,11 +247,18 @@ class DeadDrop {
   /* ── Room management ── */
 
   async createRoom() {
+    // Request a server-generated room code (stronger entropy)
+    try {
+      const res = await fetch('/api/room', { method: 'POST' });
+      const data = await res.json();
+      this.roomCode = data.code;
+    } catch {
+      this._renderSystem('Failed to create room');
+      return;
+    }
     await this._connectSignaling();
-    const code = this._genRoomCode();
-    this.roomCode = code;
-    this.ws.send(JSON.stringify({ type: 'join', room: code }));
-    this._enterChat(code);
+    this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
+    this._enterChat(this.roomCode);
     this._setStatus('waiting', '⏳ Waiting for peer…');
   }
 
@@ -342,14 +349,17 @@ class DeadDrop {
 
   /* ── P2P connection state ── */
 
-  _onConnState(state) {
+  _onConnState(state, sas) {
     switch (state) {
       case 'connected':
         this._setStatus('connected', '🔗 P2P connected — exchanging keys…');
         break;
       case 'encrypted':
         this.encrypted = true;
-        this._setStatus('encrypted', '🔒 End-to-end encrypted');
+        this._setStatus('encrypted', `🔒 E2E Encrypted`);
+        if (sas) {
+          this._renderSystem(`🔐 Security code: ${sas} — Verify this matches your peer's code to confirm no one is intercepting.`);
+        }
         this.el.msgInput.focus();
         this.el.callBtn.style.display = '';
         break;

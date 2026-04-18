@@ -13,6 +13,7 @@ export class CryptoLayer {
     this.keyPair = null;
     this.sharedKey = null;
     this.seenNonces = new Set(); // replay-attack protection
+    this._maxNonces = 10000;     // cap to prevent memory leak
   }
 
   /** Generate an ephemeral ECDH key pair and return the raw public key bytes. */
@@ -39,9 +40,37 @@ export class CryptoLayer {
       { name: 'ECDH', public: peerKey },
       this.keyPair.privateKey,
       { name: 'AES-GCM', length: 256 },
-      false,
+      true, // extractable so we can compute SAS fingerprint
       ['encrypt', 'decrypt']
     );
+  }
+
+  /**
+   * Compute a Short Authentication String (SAS) from the shared key.
+   * Both peers derive the same SAS — users can compare to detect MitM.
+   * Returns a 4-emoji string (262144 combinations).
+   */
+  async computeSAS() {
+    if (!this.sharedKey) throw new Error('No shared key established');
+    const raw = await crypto.subtle.exportKey('raw', this.sharedKey);
+    const hash = await crypto.subtle.digest('SHA-256', raw);
+    const bytes = new Uint8Array(hash);
+    // Use first 8 bytes to pick 4 emoji from a set of 64
+    const emoji = [
+      '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼',
+      '🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔',
+      '🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺',
+      '🐗','🐴','🦄','🐝','🐛','🦋','🐌','🐞',
+      '🍎','🍐','🍊','🍋','🍌','🍉','🍇','🍓',
+      '🍈','🍒','🍑','🥭','🍍','🥥','🥝','🍅',
+      '🌵','🌲','🌴','🌿','🍀','🌺','🌻','🌹',
+      '🔥','⚡','❄️','🌊','💎','🔑','🎯','💀',
+    ];
+    let sas = '';
+    for (let i = 0; i < 4; i++) {
+      sas += emoji[bytes[i] % emoji.length];
+    }
+    return sas;
   }
 
   /**
@@ -91,30 +120,51 @@ export class CryptoLayer {
       throw new Error('Replay attack detected — duplicate nonce');
     }
     this.seenNonces.add(nonceKey);
+    // Evict oldest nonces if the set grows too large
+    if (this.seenNonces.size > this._maxNonces) {
+      const first = this.seenNonces.values().next().value;
+      this.seenNonces.delete(first);
+    }
 
     return envelope.text;
   }
 
-  /** Encrypt raw binary data (for files). Returns { ciphertext: ArrayBuffer, iv: base64 }. */
+  /**
+   * Encrypt raw binary data (for files).
+   * Prepends an 8-byte random nonce to the plaintext before encryption
+   * for application-layer replay protection (defense-in-depth over DTLS).
+   * Returns { ciphertext: ArrayBuffer, iv: base64 }.
+   */
   async encryptBinary(data) {
     if (!this.sharedKey) throw new Error('No shared key established');
     const iv = crypto.getRandomValues(new Uint8Array(12));
+    const nonce = crypto.getRandomValues(new Uint8Array(8));
+    // Prepend nonce to data
+    const withNonce = new Uint8Array(nonce.length + data.byteLength);
+    withNonce.set(nonce, 0);
+    withNonce.set(new Uint8Array(data), nonce.length);
     const ciphertext = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
       this.sharedKey,
-      data,
+      withNonce,
     );
     return { ciphertext, iv: bufToB64(iv) };
   }
 
-  /** Decrypt raw binary data (for files). Returns ArrayBuffer. */
+  /**
+   * Decrypt raw binary data (for files).
+   * Strips the 8-byte nonce prefix added during encryption.
+   * Returns ArrayBuffer.
+   */
   async decryptBinary(ciphertextBuf, ivB64) {
     if (!this.sharedKey) throw new Error('No shared key established');
-    return await crypto.subtle.decrypt(
+    const withNonce = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: b64ToBuf(ivB64) },
       this.sharedKey,
       ciphertextBuf,
     );
+    // Strip the 8-byte nonce prefix
+    return withNonce.slice(8);
   }
 
   /** Destroy all key material. */

@@ -115,6 +115,17 @@ export class FileTransferManager {
   /* ── Private ── */
 
   _onStart(msg) {
+    // Validate totalSize to prevent memory exhaustion from malicious peers
+    // Encrypted size can be slightly larger than MAX_FILE_SIZE due to AES-GCM overhead
+    const maxEncryptedSize = MAX_FILE_SIZE + 1024 * 1024; // 26 MB
+    if (!msg.totalSize || msg.totalSize > maxEncryptedSize || msg.totalSize < 0) {
+      console.warn('File transfer rejected: invalid totalSize', msg.totalSize);
+      return null;
+    }
+    if (!msg.totalChunks || msg.totalChunks < 1 || msg.totalChunks > Math.ceil(maxEncryptedSize / CHUNK_SIZE) + 1) {
+      console.warn('File transfer rejected: invalid totalChunks', msg.totalChunks);
+      return null;
+    }
     this.inbound.set(msg.id, {
       meta:            msg.meta,
       fileIv:          msg.fileIv,
@@ -131,6 +142,11 @@ export class FileTransferManager {
   _onChunk(msg) {
     const t = this.inbound.get(msg.id);
     if (!t) return null;
+    // Validate chunk index to prevent sparse array attacks
+    if (typeof msg.index !== 'number' || msg.index < 0 || msg.index >= t.totalChunks) {
+      console.warn('File chunk rejected: invalid index', msg.index);
+      return null;
+    }
     t.chunks[msg.index] = _b64ToUint8(msg.data);
     t.received++;
     return { event: 'progress', id: msg.id, received: t.received, totalChunks: t.totalChunks };

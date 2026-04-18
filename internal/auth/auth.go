@@ -2,9 +2,11 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -36,7 +38,11 @@ func newStore(dir string) (*store, error) {
 	}
 	s := &store{users: make(map[string]user), path: filepath.Join(dir, "users.json")}
 	if data, err := os.ReadFile(s.path); err == nil {
-		json.Unmarshal(data, &s.users)
+		if err := json.Unmarshal(data, &s.users); err != nil {
+			return nil, fmt.Errorf("corrupt users.json: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read users.json: %w", err)
 	}
 	log.Printf("[auth] loaded %d users from %s", len(s.users), s.path)
 	return s, nil
@@ -46,15 +52,18 @@ func (s *store) register(username, password string) error {
 	if !usernameRe.MatchString(username) {
 		return errors.New("username: 3–20 chars, letters/numbers/underscores")
 	}
-	if len(password) < 6 {
-		return errors.New("password must be at least 6 characters")
+	if len(password) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+	if len(password) > 128 {
+		return errors.New("password must be at most 128 characters")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.users[username]; exists {
 		return errors.New("username already taken")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	hash, err := bcrypt.GenerateFromPassword(prehashPassword(password), 12)
 	if err != nil {
 		return err
 	}
@@ -70,11 +79,11 @@ func (s *store) authenticate(username, password string) error {
 		// Constant-time work to prevent user-enumeration via timing
 		bcrypt.CompareHashAndPassword(
 			[]byte("$2a$12$000000000000000000000u000000000000000000000000000000"),
-			[]byte(password),
+			prehashPassword(password),
 		)
 		return errors.New("invalid credentials")
 	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.Hash), []byte(password)); err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(u.Hash), prehashPassword(password)); err != nil {
 		return errors.New("invalid credentials")
 	}
 	return nil
@@ -86,6 +95,13 @@ func (s *store) save() error {
 		return err
 	}
 	return os.WriteFile(s.path, data, 0600)
+}
+
+// prehashPassword hashes the password with SHA-256 before bcrypt.
+// This prevents bcrypt's 72-byte truncation — passwords of any length are fully compared.
+func prehashPassword(password string) []byte {
+	h := sha256.Sum256([]byte(password))
+	return []byte(hex.EncodeToString(h[:]))
 }
 
 /* ── Sessions (in-memory, ephemeral — lost on restart by design) ── */
@@ -166,11 +182,14 @@ func NewHandler(dataDir string) (*Handler, error) {
 	return &Handler{store: st, sess: newSessions()}, nil
 }
 
+const maxAuthBody = 4096 // 4 KB max for auth JSON payloads
+
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBody)
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
@@ -193,6 +212,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBody)
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`

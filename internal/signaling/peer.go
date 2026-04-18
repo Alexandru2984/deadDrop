@@ -17,10 +17,31 @@ const (
 	pingPeriod = (pongWait * 9) / 10
 )
 
+// AllowedOrigins is set at startup to restrict WebSocket CSRF.
+// Only connections from these origins are accepted.
+var AllowedOrigins []string
+
 var upgrader = websocket.Upgrader{
-	CheckOrigin:  func(r *http.Request) bool { return true },
+	CheckOrigin:     checkOrigin,
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
+}
+
+// checkOrigin validates the Origin header against the allowed list.
+// Blocks cross-site WebSocket hijacking (CSRF).
+func checkOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Non-browser clients (curl, etc.) don't send Origin — allow for now
+		return true
+	}
+	for _, allowed := range AllowedOrigins {
+		if origin == allowed {
+			return true
+		}
+	}
+	log.Printf("[ws] rejected origin=%s", origin)
+	return false
 }
 
 // Peer represents a single WebSocket connection in a room.
@@ -127,46 +148,31 @@ func (p *Peer) writePump() {
 func (p *Peer) handleMessage(msg SignalMessage) {
 	switch msg.Type {
 	case "join":
-		room := p.hub.JoinRoom(msg.Room, p)
-		log.Printf("[hub] peer=%s joined room=%s (now %d peers)", p.ID, room.Code, len(room.Peers))
-
-		// Notify existing peers about the newcomer, and vice versa
-		newPeerMsg, _ := json.Marshal(SignalMessage{Type: "peer-joined", PeerID: p.ID})
-		for _, other := range room.Peers {
-			if other.ID == p.ID {
-				continue
-			}
-			// Tell existing peer about the newcomer
-			safeSend(other.send, newPeerMsg)
-			// Tell the newcomer about the existing peer
-			existingMsg, _ := json.Marshal(SignalMessage{Type: "peer-joined", PeerID: other.ID})
-			safeSend(p.send, existingMsg)
-		}
-
-	case "offer", "answer", "ice-candidate":
-		// Relay WebRTC signaling messages to the target peer.
-		// The server never inspects the payload — it's opaque signaling data.
-		if p.room == nil {
+		if !ValidateRoomCode(msg.Room) {
+			errMsg, _ := json.Marshal(SignalMessage{Type: "error", PeerID: "invalid room code"})
+			safeSend(p.send, errMsg)
 			return
 		}
+		room, err := p.hub.JoinRoom(msg.Room, p)
+		if err != nil {
+			errMsg, _ := json.Marshal(SignalMessage{Type: "error", PeerID: err.Error()})
+			safeSend(p.send, errMsg)
+			return
+		}
+		log.Printf("[hub] peer=%s joined room=%s", p.ID, room.Code)
+
+	case "offer", "answer", "ice-candidate":
+		// Relay WebRTC signaling messages to the target peer via the Hub.
+		// The server never inspects the payload — it's opaque signaling data.
 		msg.From = p.ID
 		data, _ := json.Marshal(msg)
-		if target, ok := p.room.Peers[msg.To]; ok {
-			safeSend(target.send, data)
-		}
+		p.hub.Relay(p, msg.To, data)
 	}
 }
 
-// disconnect notifies other peers and removes this peer from the hub.
+// disconnect removes this peer from the hub (which notifies other peers).
+// All room.Peers access now happens in the Hub goroutine — no data race.
 func (p *Peer) disconnect() {
-	if p.room != nil {
-		leftMsg, _ := json.Marshal(SignalMessage{Type: "peer-left", PeerID: p.ID})
-		for _, other := range p.room.Peers {
-			if other.ID != p.ID {
-				safeSend(other.send, leftMsg)
-			}
-		}
-	}
 	p.hub.RemovePeer(p)
 	close(p.send)
 	log.Printf("[ws] peer=%s disconnected", p.ID)

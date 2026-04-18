@@ -201,7 +201,9 @@ export class PeerConnection {
       if (msg.type === 'key-exchange') {
         // Derive the shared secret from the peer's public key
         await this.crypto.deriveSharedKey(b64ToBuf(msg.publicKey));
-        this.onStateChange('encrypted');
+        // Compute SAS fingerprint for MitM verification
+        const sas = await this.crypto.computeSAS();
+        this.onStateChange('encrypted', sas);
         return;
       }
 
