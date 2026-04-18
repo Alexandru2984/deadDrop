@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>💀 Dead Drop</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
+</head>
+<body>
+
+  <!-- ─── Auth ─── -->
+  <div id="auth" class="page auth-page hidden">
+    <div class="logo">💀</div>
+    <h1>DEAD DROP</h1>
+    <p class="tagline">Anonymous · Encrypted · Ephemeral</p>
+
+    <form id="auth-form" class="auth-form" autocomplete="off">
+      <input id="auth-user" type="text" placeholder="Username" maxlength="20"
+             spellcheck="false" autocomplete="username" required />
+      <input id="auth-pass" type="password" placeholder="Password"
+             autocomplete="current-password" required />
+      <div id="auth-error" class="auth-error hidden"></div>
+      <div class="auth-buttons">
+        <button type="submit" id="login-btn" class="btn primary">Login</button>
+        <button type="button" id="register-btn" class="btn">Register</button>
+      </div>
+      <p class="auth-hint">No email. No recovery. Just a handle and a password.</p>
+    </form>
+  </div>
+
+  <!-- ─── Landing ─── -->
+  <div id="landing" class="page landing hidden">
+    <div class="user-bar">
+      <span>👤 <span id="user-display"></span></span>
+      <button id="logout-btn" class="btn btn-sm">Logout</button>
+    </div>
+
+    <div class="logo">💀</div>
+    <h1>DEAD DROP</h1>
+    <p class="tagline">Anonymous · Encrypted · Ephemeral</p>
+
+    <div class="actions">
+      <button id="create-room" class="btn primary">Create Room</button>
+      <div class="divider">or</div>
+      <div class="join-group">
+        <input id="room-code-input" type="text" placeholder="Room code" maxlength="6"
+               spellcheck="false" autocomplete="off" />
+        <button id="join-room" class="btn">Join</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Chat ─── -->
+  <div id="chat-wrap" class="page chat-wrap hidden">
+    <header class="chat-header">
+      <div class="header-left">
+        <span class="brand">💀 DD</span>
+        <div id="room-info" class="room-info hidden">
+          <code id="room-code"></code>
+          <button id="copy-code" class="btn-icon" title="Copy code">📋</button>
+        </div>
+      </div>
+      <div id="status" class="status waiting">⏳ Initializing…</div>
+    </header>
+
+    <div id="messages" class="messages"></div>
+
+    <footer class="chat-footer">
+      <div class="controls">
+        <label class="toggle-label" title="Burn after reading">
+          <input id="burn-toggle" type="checkbox" />
+          <span>🔥 Burn</span>
+        </label>
+        <select id="ttl-select" title="Self-destruct timer">
+          <option value="0">No TTL</option>
+          <option value="10">10 s</option>
+          <option value="30" selected>30 s</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+        </select>
+      </div>
+      <div class="input-row">
+        <input id="msg-input" type="text" placeholder="Type a message…"
+               autocomplete="off" spellcheck="false" />
+        <button id="send-btn" class="btn primary">Send</button>
+      </div>
+    </footer>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
