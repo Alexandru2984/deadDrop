@@ -48,7 +48,7 @@ export class CryptoLayer {
   /**
    * Compute a Short Authentication String (SAS) from the shared key.
    * Both peers derive the same SAS — users can compare to detect MitM.
-   * Returns a 4-emoji string (262144 combinations).
+   * Returns a 4-emoji string (16,777,216 combinations — 64^4).
    */
   async computeSAS() {
     if (!this.sharedKey) throw new Error('No shared key established');

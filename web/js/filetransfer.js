@@ -12,6 +12,7 @@
 const CHUNK_SIZE = 48 * 1024;   // 48 KB raw → ~64 KB base64
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 const BUFFER_HIGH = 1024 * 1024; // pause sending above 1 MB buffered
+const INBOUND_TIMEOUT = 2 * 60 * 1000; // 2 min — abort stale inbound transfers
 
 export { MAX_FILE_SIZE };
 
@@ -108,6 +109,8 @@ export class FileTransferManager {
   abort(id) {
     const out = this.outbound.get(id);
     if (out) out.aborted = true;
+    const inb = this.inbound.get(id);
+    if (inb) clearTimeout(inb.timer);
     this.inbound.delete(id);
     this.outbound.delete(id);
   }
@@ -135,6 +138,11 @@ export class FileTransferManager {
       burnAfterReading: msg.burnAfterReading,
       chunks:          new Array(msg.totalChunks),
       received:        0,
+      // Auto-abort stale transfers that never complete
+      timer:           setTimeout(() => {
+        console.warn(`File transfer ${msg.id} timed out — cleaning up`);
+        this.inbound.delete(msg.id);
+      }, INBOUND_TIMEOUT),
     });
     return { event: 'start', id: msg.id, totalChunks: msg.totalChunks };
   }
@@ -156,11 +164,21 @@ export class FileTransferManager {
     const t = this.inbound.get(msg.id);
     if (!t) return null;
 
+    clearTimeout(t.timer);
+
+    // Validate all chunks were received before reassembly
+    if (t.received !== t.totalChunks) {
+      console.warn(`File ${msg.id}: incomplete — got ${t.received}/${t.totalChunks} chunks`);
+      this.inbound.delete(msg.id);
+      return { event: 'error', id: msg.id, error: 'Incomplete transfer — missing chunks' };
+    }
+
     // Reassemble ciphertext
     let offset = 0;
     const buf = new Uint8Array(t.totalSize);
     for (const chunk of t.chunks) {
-      if (chunk) { buf.set(chunk, offset); offset += chunk.length; }
+      buf.set(chunk, offset);
+      offset += chunk.length;
     }
 
     const result = {

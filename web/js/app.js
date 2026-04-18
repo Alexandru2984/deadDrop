@@ -322,6 +322,10 @@ class DeadDrop {
         this.crypto.destroy();
         break;
 
+      case 'error':
+        this._setStatus('disconnected', `❌ ${msg.peerId || 'Unknown error'}`);
+        break;
+
       case 'offer':
         this._createPeerConn();
         this.peer.handleOffer(msg.from, JSON.parse(msg.payload));
@@ -342,7 +346,7 @@ class DeadDrop {
       { send: (o) => this.ws.send(JSON.stringify(o)) },
       this.crypto,
       (msg) => this._onPeerMessage(msg),
-      (state) => this._onConnState(state),
+      (state, sas) => this._onConnState(state, sas),
     );
     this.peer.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
   }
@@ -455,6 +459,9 @@ class DeadDrop {
             break;
           case 'complete':
             await this._onFileComplete(result);
+            break;
+          case 'error':
+            this._renderSystem(`⚠️ File transfer failed: ${result.error}`);
             break;
         }
         break;
@@ -835,12 +842,6 @@ class DeadDrop {
     const d = document.createElement('div');
     d.textContent = s;
     return d.innerHTML;
-  }
-
-  _genRoomCode() {
-    const hex = '0123456789abcdef';
-    const arr = crypto.getRandomValues(new Uint8Array(3));
-    return Array.from(arr, (b) => hex[b >> 4] + hex[b & 0xf]).join('');
   }
 
   _fmtSize(bytes) {

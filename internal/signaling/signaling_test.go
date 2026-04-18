@@ -270,3 +270,44 @@ func TestOriginCheck(t *testing.T) {
 	AllowedOrigins = nil
 	t.Log("✅ Origin check working")
 }
+
+func TestWebSocketMessageSizeLimit(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		HandleWebSocket(hub, w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	// Read welcome
+	var welcome SignalMessage
+	conn.ReadJSON(&welcome)
+
+	// Send a message larger than maxMessageSize (64 KB) — should disconnect us
+	huge := make([]byte, 128*1024)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+	err = conn.WriteMessage(websocket.TextMessage, huge)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// The server should close the connection
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_, _, err = conn.ReadMessage()
+	if err == nil {
+		t.Fatal("expected connection to be closed after oversized message")
+	}
+	t.Log("✅ WebSocket message size limit enforced")
+}

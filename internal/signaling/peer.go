@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	writeWait  = 10 * time.Second
-	pongWait   = 60 * time.Second
-	pingPeriod = (pongWait * 9) / 10
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
+	maxMessageSize = 64 * 1024 // 64 KB — SDP offers/answers + ICE are well under this
 )
 
 // AllowedOrigins is set at startup to restrict WebSocket CSRF.
@@ -93,6 +94,7 @@ func (p *Peer) readPump() {
 		p.conn.Close()
 	}()
 
+	p.conn.SetReadLimit(maxMessageSize)
 	p.conn.SetReadDeadline(time.Now().Add(pongWait))
 	p.conn.SetPongHandler(func(string) error {
 		p.conn.SetReadDeadline(time.Now().Add(pongWait))

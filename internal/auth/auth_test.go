@@ -238,3 +238,34 @@ func TestBcryptPrehash(t *testing.T) {
 		t.Fatalf("login with truncated password: expected 401, got %d", w.Code)
 	}
 }
+
+func TestLogoutRequiresPost(t *testing.T) {
+	h := newTestHandler(t)
+
+	// Register and login to get a session
+	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "securepass1"})
+	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Register(w, req)
+
+	cookie := w.Result().Cookies()[0]
+
+	// GET logout should be rejected (CSRF protection)
+	req = httptest.NewRequest(http.MethodGet, "/api/logout", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.Logout(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET logout: expected 405, got %d", w.Code)
+	}
+
+	// POST logout should work
+	req = httptest.NewRequest(http.MethodPost, "/api/logout", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	h.Logout(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST logout: expected 200, got %d", w.Code)
+	}
+}
