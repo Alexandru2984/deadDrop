@@ -89,12 +89,18 @@ func (s *store) authenticate(username, password string) error {
 	return nil
 }
 
+// save writes users.json atomically (write to temp file then rename)
+// to prevent corruption if the server crashes mid-write.
 func (s *store) save() error {
 	data, err := json.MarshalIndent(s.users, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path, data, 0600)
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.path)
 }
 
 // prehashPassword hashes the password with SHA-256 before bcrypt.

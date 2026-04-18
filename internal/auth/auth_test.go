@@ -269,3 +269,45 @@ func TestLogoutRequiresPost(t *testing.T) {
 		t.Fatalf("POST logout: expected 200, got %d", w.Code)
 	}
 }
+
+func TestAtomicSave(t *testing.T) {
+	dir := t.TempDir()
+	h, err := NewHandler(dir)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	// Register a user (triggers save)
+	body, _ := json.Marshal(map[string]string{"username": "bob", "password": "securepass1"})
+	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.Register(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("register: expected 200, got %d", w.Code)
+	}
+
+	// Verify users.json exists and no .tmp file lingers
+	usersPath := filepath.Join(dir, "users.json")
+	tmpPath := usersPath + ".tmp"
+
+	if _, err := os.Stat(usersPath); os.IsNotExist(err) {
+		t.Fatal("users.json not found after save")
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatal("users.json.tmp should not exist after atomic save")
+	}
+
+	// Verify the file is valid JSON
+	data, err := os.ReadFile(usersPath)
+	if err != nil {
+		t.Fatalf("read users.json: %v", err)
+	}
+	var users map[string]interface{}
+	if err := json.Unmarshal(data, &users); err != nil {
+		t.Fatalf("users.json is not valid JSON: %v", err)
+	}
+	if _, ok := users["bob"]; !ok {
+		t.Fatal("user 'bob' not found in users.json")
+	}
+}

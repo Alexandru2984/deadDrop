@@ -271,6 +271,81 @@ func TestOriginCheck(t *testing.T) {
 	t.Log("✅ Origin check working")
 }
 
+// TestDoubleJoinNoPanic verifies that a peer joining a second room
+// properly cleans up the first room, preventing stale references
+// that would cause a send-to-closed-channel panic.
+func TestDoubleJoinNoPanic(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		HandleWebSocket(hub, w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	// Connect peer A and join room1
+	connA, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial A: %v", err)
+	}
+	defer connA.Close()
+	var welcomeA SignalMessage
+	connA.ReadJSON(&welcomeA)
+	connA.WriteJSON(SignalMessage{Type: "join", Room: "aabbcc000001"})
+	time.Sleep(100 * time.Millisecond)
+
+	// Connect peer B and join room1 (to observe events)
+	connB, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial B: %v", err)
+	}
+	defer connB.Close()
+	var welcomeB SignalMessage
+	connB.ReadJSON(&welcomeB)
+	connB.WriteJSON(SignalMessage{Type: "join", Room: "aabbcc000001"})
+	time.Sleep(100 * time.Millisecond)
+
+	// Drain peer-joined notifications
+	connA.SetReadDeadline(time.Now().Add(1 * time.Second))
+	connA.ReadJSON(&SignalMessage{})
+	connB.SetReadDeadline(time.Now().Add(1 * time.Second))
+	connB.ReadJSON(&SignalMessage{})
+
+	// A joins a DIFFERENT room — should be removed from room1 first
+	connA.WriteJSON(SignalMessage{Type: "join", Room: "aabbcc000002"})
+	time.Sleep(100 * time.Millisecond)
+
+	// B should receive peer-left for A (Hub cleaned up room1)
+	var leftMsg SignalMessage
+	connB.SetReadDeadline(time.Now().Add(2 * time.Second))
+	connB.ReadJSON(&leftMsg)
+	if leftMsg.Type != "peer-left" || leftMsg.PeerID != welcomeA.PeerID {
+		t.Fatalf("B expected peer-left(A), got %+v", leftMsg)
+	}
+
+	// Now disconnect A — this must NOT panic the server
+	connA.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	// Server is still alive — verify by connecting a new peer
+	connC, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("server crashed after double-join disconnect: %v", err)
+	}
+	defer connC.Close()
+	var welcomeC SignalMessage
+	connC.ReadJSON(&welcomeC)
+	if welcomeC.Type != "welcome" {
+		t.Fatalf("expected welcome, got %+v", welcomeC)
+	}
+
+	t.Log("✅ Double-join handled safely — no panic")
+}
+
 func TestWebSocketMessageSizeLimit(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

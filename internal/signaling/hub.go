@@ -61,6 +61,23 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case req := <-h.register:
+			// If peer is already in a room, remove them first to prevent
+			// stale references (send-to-closed-channel panic on disconnect).
+			if req.peer.room != nil {
+				oldRoom := req.peer.room
+				delete(oldRoom.Peers, req.peer.ID)
+				if len(oldRoom.Peers) == 0 {
+					delete(h.rooms, oldRoom.Code)
+					log.Printf("[hub] room %s cleaned up", oldRoom.Code)
+				} else {
+					leftMsg, _ := json.Marshal(SignalMessage{Type: "peer-left", PeerID: req.peer.ID})
+					for _, other := range oldRoom.Peers {
+						safeSend(other.send, leftMsg)
+					}
+				}
+				req.peer.room = nil
+			}
+
 			room, exists := h.rooms[req.code]
 			if !exists {
 				if len(h.rooms) >= MaxRooms {

@@ -155,8 +155,11 @@ export class FileTransferManager {
       console.warn('File chunk rejected: invalid index', msg.index);
       return null;
     }
-    t.chunks[msg.index] = _b64ToUint8(msg.data);
-    t.received++;
+    // Only count new chunks — ignore duplicates to prevent inflating received count
+    if (!t.chunks[msg.index]) {
+      t.chunks[msg.index] = _b64ToUint8(msg.data);
+      t.received++;
+    }
     return { event: 'progress', id: msg.id, received: t.received, totalChunks: t.totalChunks };
   }
 

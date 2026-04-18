@@ -201,7 +201,13 @@ export class PeerConnection {
     };
 
     ch.onmessage = async (e) => {
-      const msg = JSON.parse(e.data);
+      let msg;
+      try {
+        msg = JSON.parse(e.data);
+      } catch {
+        console.warn('[peer] Received malformed message — ignoring');
+        return;
+      }
 
       if (msg.type === 'key-exchange') {
         // Derive the shared secret from the peer's public key

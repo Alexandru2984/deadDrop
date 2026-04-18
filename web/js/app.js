@@ -251,6 +251,10 @@ class DeadDrop {
     try {
       const res = await fetch('/api/room', { method: 'POST' });
       const data = await res.json();
+      if (!data.code) {
+        this._renderSystem(data.error || 'Failed to create room');
+        return;
+      }
       this.roomCode = data.code;
     } catch {
       this._renderSystem('Failed to create room');
@@ -841,7 +845,8 @@ class DeadDrop {
   _esc(s) {
     const d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    // innerHTML escapes <, >, & but NOT quotes — add those for attribute safety
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   _fmtSize(bytes) {
