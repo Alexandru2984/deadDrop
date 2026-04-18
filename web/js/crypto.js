@@ -95,6 +95,28 @@ export class CryptoLayer {
     return envelope.text;
   }
 
+  /** Encrypt raw binary data (for files). Returns { ciphertext: ArrayBuffer, iv: base64 }. */
+  async encryptBinary(data) {
+    if (!this.sharedKey) throw new Error('No shared key established');
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      this.sharedKey,
+      data,
+    );
+    return { ciphertext, iv: bufToB64(iv) };
+  }
+
+  /** Decrypt raw binary data (for files). Returns ArrayBuffer. */
+  async decryptBinary(ciphertextBuf, ivB64) {
+    if (!this.sharedKey) throw new Error('No shared key established');
+    return await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64ToBuf(ivB64) },
+      this.sharedKey,
+      ciphertextBuf,
+    );
+  }
+
   /** Destroy all key material. */
   destroy() {
     this.keyPair = null;

@@ -7,6 +7,7 @@
 import { CryptoLayer } from './crypto.js';
 import { PeerConnection } from './peer.js';
 import { MessageManager } from './messages.js';
+import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
 
 class DeadDrop {
   constructor() {
@@ -17,6 +18,7 @@ class DeadDrop {
     this.crypto = new CryptoLayer();
     this.peer = null;
     this.msgMgr = null;
+    this.fileMgr = new FileTransferManager();
     this.encrypted = false;
 
     this._bindDOM();
@@ -53,6 +55,8 @@ class DeadDrop {
       messages:    $('#messages'),
       msgInput:    $('#msg-input'),
       sendBtn:     $('#send-btn'),
+      attachBtn:   $('#attach-btn'),
+      fileInput:   $('#file-input'),
       burnToggle:  $('#burn-toggle'),
       ttlSelect:   $('#ttl-select'),
       status:      $('#status'),
@@ -73,6 +77,30 @@ class DeadDrop {
     this.el.msgInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); }
     });
+    // File attach
+    this.el.attachBtn.addEventListener('click', () => {
+      if (this.encrypted) this.el.fileInput.click();
+    });
+    this.el.fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) this.sendFile(file);
+      e.target.value = '';
+    });
+    // Drag-and-drop on messages area
+    const drop = this.el.messages;
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(ev =>
+      drop.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); })
+    );
+    drop.addEventListener('dragenter', () => drop.classList.add('drag-over'));
+    drop.addEventListener('dragleave', (e) => {
+      if (!drop.contains(e.relatedTarget)) drop.classList.remove('drag-over');
+    });
+    drop.addEventListener('drop', (e) => {
+      drop.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (file && this.encrypted) this.sendFile(file);
+    });
+
     window.addEventListener('beforeunload', () => this._cleanup());
   }
 
@@ -301,6 +329,36 @@ class DeadDrop {
     }
   }
 
+  /* ── File transfer ── */
+
+  async sendFile(file) {
+    if (!this.encrypted) return;
+    if (file.size > MAX_FILE_SIZE) {
+      this._renderSystem(`File too large — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+      return;
+    }
+
+    const burn = this.el.burnToggle.checked;
+    const ttl  = parseInt(this.el.ttlSelect.value, 10);
+    const id   = crypto.randomUUID();
+    const meta = {
+      fileName: file.name,
+      fileType: file.type || 'application/octet-stream',
+      fileSize: file.size,
+    };
+
+    // Show preview immediately (sender has the file locally)
+    const blobUrl = URL.createObjectURL(file);
+    this._renderFileMsg(id, blobUrl, meta, true, ttl, burn);
+
+    try {
+      await this.fileMgr.send(file, id, this.crypto, this.peer, ttl, burn);
+    } catch (err) {
+      console.error('File send failed:', err);
+      this._renderSystem('File transfer failed');
+    }
+  }
+
   /* ── Messaging ── */
 
   async sendMessage() {
@@ -338,6 +396,45 @@ class DeadDrop {
       case 'delete':
         this.msgMgr.remoteDestroy(msg.id);
         break;
+
+      // ── File transfer messages ──
+      case 'file':
+      case 'file-chunk':
+      case 'file-end': {
+        const result = this.fileMgr.handleMessage(msg);
+        if (!result) break;
+        switch (result.event) {
+          case 'start':
+            this._renderFileProgress(result.id, 0, result.totalChunks);
+            break;
+          case 'progress':
+            this._updateFileProgress(result.id, result.received, result.totalChunks);
+            break;
+          case 'complete':
+            await this._onFileComplete(result);
+            break;
+        }
+        break;
+      }
+    }
+  }
+
+  async _onFileComplete(result) {
+    try {
+      // Decrypt metadata
+      const metaJson = await this.crypto.decrypt(result.meta.ciphertext, result.meta.iv);
+      const meta = JSON.parse(metaJson);
+
+      // Decrypt file data
+      const fileData = await this.crypto.decryptBinary(result.ciphertext, result.fileIv);
+      const blob    = new Blob([fileData], { type: meta.fileType });
+      const blobUrl = URL.createObjectURL(blob);
+
+      // Replace progress placeholder with actual preview
+      this._renderFileComplete(result.id, blobUrl, meta, result.ttl, result.burnAfterReading);
+    } catch (err) {
+      console.error('File decryption failed:', err.message);
+      this._renderSystem('Failed to decrypt file');
     }
   }
 
@@ -364,6 +461,84 @@ class DeadDrop {
 
   /* ── UI helpers ── */
 
+  _renderFileMsg(id, blobUrl, meta, mine, ttl, burn) {
+    const el = document.createElement('div');
+    el.className = `msg ${mine ? 'mine' : 'theirs'} file-msg`;
+    if (burn) el.classList.add('burn');
+    el.id = `msg-${id}`;
+
+    let preview = '';
+    const escaped = this._esc(meta.fileName);
+    if (meta.fileType.startsWith('image/')) {
+      preview = `<img src="${blobUrl}" alt="${escaped}" class="file-preview-img" loading="lazy" />`;
+    } else if (meta.fileType.startsWith('video/')) {
+      preview = `<video src="${blobUrl}" controls playsinline class="file-preview-video"></video>`;
+    } else if (meta.fileType.startsWith('audio/')) {
+      preview = `<audio src="${blobUrl}" controls class="file-preview-audio"></audio>`;
+    } else {
+      preview = `<div class="file-generic"><span class="file-icon-lg">📄</span></div>`;
+    }
+
+    let badges = '';
+    if (burn) badges += '<span class="burn-badge">🔥 BURN</span> ';
+    if (ttl > 0) badges += `<span class="countdown">${ttl}s</span>`;
+
+    el.innerHTML = `
+      <div class="file-content">${preview}</div>
+      <div class="file-details">
+        <span class="file-name">${escaped}</span>
+        <span class="file-size">${this._fmtSize(meta.fileSize)}</span>
+        <a href="${blobUrl}" download="${escaped}" class="file-download" title="Download">💾</a>
+      </div>
+      ${badges ? `<div class="msg-meta">${badges}</div>` : ''}
+    `;
+
+    this.el.messages.appendChild(el);
+    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+
+    this.msgMgr.add(id, el, ttl, burn, mine, blobUrl);
+    if (!mine) this.msgMgr.markRead(id);
+  }
+
+  _renderFileProgress(id, received, total) {
+    const el = document.createElement('div');
+    el.className = 'msg theirs file-msg';
+    el.id = `msg-${id}`;
+    el.innerHTML = `
+      <div class="file-receiving">
+        <span>📦 Receiving file…</span>
+        <div class="progress-bar"><div class="progress-fill" style="width: 0%"></div></div>
+        <span class="progress-text">0 / ${total}</span>
+      </div>
+    `;
+    this.el.messages.appendChild(el);
+    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+  }
+
+  _updateFileProgress(id, received, total) {
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) return;
+    const fill = el.querySelector('.progress-fill');
+    const text = el.querySelector('.progress-text');
+    const pct  = Math.round((received / total) * 100);
+    if (fill) fill.style.width = `${pct}%`;
+    if (text) text.textContent = `${received} / ${total}`;
+  }
+
+  _renderFileComplete(id, blobUrl, meta, ttl, burn) {
+    const old = document.getElementById(`msg-${id}`);
+    if (old) old.remove();
+    this._renderFileMsg(id, blobUrl, meta, false, ttl, burn);
+  }
+
+  _renderSystem(text) {
+    const el = document.createElement('div');
+    el.className = 'msg system';
+    el.textContent = text;
+    this.el.messages.appendChild(el);
+    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+  }
+
   _setStatus(cls, text) {
     this.el.status.className = `status ${cls}`;
     this.el.status.textContent = text;
@@ -386,6 +561,12 @@ class DeadDrop {
     const hex = '0123456789abcdef';
     const arr = crypto.getRandomValues(new Uint8Array(3));
     return Array.from(arr, (b) => hex[b >> 4] + hex[b & 0xf]).join('');
+  }
+
+  _fmtSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
   _cleanup() {

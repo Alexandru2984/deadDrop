@@ -335,6 +335,16 @@ select { cursor: pointer; width: auto; }
 
 .msg.burn { border-color: rgba(255, 68, 85, 0.3); }
 
+.msg.system {
+  align-self: center;
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 12px;
+  max-width: 90%;
+  text-align: center;
+}
+
 .msg-meta {
   font-size: 11px;
   color: var(--dim);
@@ -423,4 +433,118 @@ select { cursor: pointer; width: auto; }
 @media (max-width: 360px) {
   .auth-buttons { flex-direction: column; }
   .controls { gap: 10px; }
+}
+
+/* ── File messages ── */
+
+.file-msg { max-width: 85%; }
+.file-content { margin-bottom: 6px; }
+
+.file-preview-img {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 6px;
+  display: block;
+  cursor: pointer;
+}
+
+.file-preview-video {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 6px;
+  display: block;
+}
+
+.file-preview-audio { width: 100%; min-width: 200px; }
+
+.file-generic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+}
+
+.file-icon-lg { font-size: 32px; }
+
+.file-details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--dim);
+  flex-wrap: wrap;
+}
+
+.file-name {
+  color: var(--text);
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.file-size { white-space: nowrap; }
+
+.file-download {
+  text-decoration: none;
+  font-size: 16px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.file-download:hover { opacity: 1; }
+
+/* Attach button */
+
+#attach-btn {
+  font-size: 20px;
+  padding: 6px 4px;
+  min-width: 36px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+#attach-btn:hover { opacity: 1; }
+
+/* ── File receiving progress ── */
+
+.file-receiving {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dim);
+  padding: 4px 0;
+}
+
+.progress-bar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.15s ease;
+}
+
+.progress-text {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Drag-and-drop overlay ── */
+
+.messages.drag-over {
+  background: rgba(0, 232, 123, 0.03);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+@media (max-width: 600px) {
+  .file-msg { max-width: 92%; }
+  .file-preview-img,
+  .file-preview-video { max-height: 200px; }
+  .file-preview-audio { min-width: 160px; }
 }

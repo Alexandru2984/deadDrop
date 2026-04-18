@@ -23,8 +23,8 @@ export class MessageManager {
    * @param {boolean}      burnAfterReading – destroy once the remote peer reads it
    * @param {boolean}      isMine           – true if this client sent the message
    */
-  add(id, element, ttl, burnAfterReading, isMine) {
-    const entry = { id, element, ttl, burnAfterReading, isMine, timer: null, interval: null };
+  add(id, element, ttl, burnAfterReading, isMine, blobUrl = null) {
+    const entry = { id, element, ttl, burnAfterReading, isMine, timer: null, interval: null, blobUrl };
     this.messages.set(id, entry);
 
     if (ttl > 0) {
@@ -54,6 +54,8 @@ export class MessageManager {
     if (m.timer) clearTimeout(m.timer);
     if (m.interval) clearInterval(m.interval);
 
+    if (m.blobUrl) URL.revokeObjectURL(m.blobUrl);
+
     if (m.element) {
       m.element.classList.add('burning');
       setTimeout(() => m.element.remove(), 600);
@@ -71,6 +73,8 @@ export class MessageManager {
     if (m.timer) clearTimeout(m.timer);
     if (m.interval) clearInterval(m.interval);
 
+    if (m.blobUrl) URL.revokeObjectURL(m.blobUrl);
+
     if (m.element) {
       m.element.classList.add('burning');
       setTimeout(() => m.element.remove(), 600);
@@ -85,6 +89,7 @@ export class MessageManager {
     for (const [, m] of this.messages) {
       if (m.timer) clearTimeout(m.timer);
       if (m.interval) clearInterval(m.interval);
+      if (m.blobUrl) URL.revokeObjectURL(m.blobUrl);
     }
     this.messages.clear();
   }
