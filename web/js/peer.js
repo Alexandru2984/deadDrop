@@ -25,6 +25,8 @@ export class PeerConnection {
     this.dc = null;            // data channel
     this.remotePeerId = null;
     this.connected = false;
+    this.onRemoteTrack = null; // callback for incoming remote media
+    this.localStream = null;
   }
 
   /* ── Initiator (caller) ── */
@@ -90,7 +92,55 @@ export class PeerConnection {
     this.dc.send(JSON.stringify(obj));
   }
 
+  /* ── Media (audio / video calls) ── */
+
+  /**
+   * Add local media and create a renegotiation offer.
+   * Called by the call initiator after the remote peer accepts.
+   */
+  async startMedia(stream) {
+    this.localStream = stream;
+    for (const track of stream.getTracks()) this.pc.addTrack(track, stream);
+    const offer = await this.pc.createOffer();
+    await this.pc.setLocalDescription(offer);
+    return this.pc.localDescription;
+  }
+
+  /**
+   * Handle a renegotiation offer from the remote peer.
+   * Adds local tracks (if provided) and returns an SDP answer.
+   */
+  async acceptMedia(offer, localStream) {
+    await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    if (localStream) {
+      this.localStream = localStream;
+      for (const track of localStream.getTracks()) this.pc.addTrack(track, localStream);
+    }
+    const answer = await this.pc.createAnswer();
+    await this.pc.setLocalDescription(answer);
+    return this.pc.localDescription;
+  }
+
+  /** Handle the renegotiation answer. */
+  async completeMedia(answer) {
+    await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
+  }
+
+  /** Stop local media and remove tracks from the connection. */
+  stopMedia() {
+    if (this.localStream) {
+      for (const track of this.localStream.getTracks()) track.stop();
+      this.localStream = null;
+    }
+    if (this.pc) {
+      for (const sender of this.pc.getSenders()) {
+        if (sender.track) { try { this.pc.removeTrack(sender); } catch (_) { /* */ } }
+      }
+    }
+  }
+
   close() {
+    this.stopMedia();
     if (this.dc) this.dc.close();
     if (this.pc) this.pc.close();
     this.connected = false;
@@ -111,6 +161,13 @@ export class PeerConnection {
           to: this.remotePeerId,
           payload: JSON.stringify(e.candidate),
         });
+      }
+    };
+
+    // Incoming remote media tracks (audio/video calls)
+    pc.ontrack = (e) => {
+      if (this.onRemoteTrack) {
+        this.onRemoteTrack(e.streams[0] || new MediaStream([e.track]));
       }
     };
 

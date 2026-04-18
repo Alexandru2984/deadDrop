@@ -61,8 +61,21 @@
           <button id="copy-code" class="btn-icon" title="Copy code">📋</button>
         </div>
       </div>
-      <div id="status" class="status waiting">⏳ Initializing…</div>
+      <div class="header-right">
+        <button id="call-btn" class="btn-icon call-btn" title="Start call" style="display:none">📞</button>
+        <div id="status" class="status waiting">⏳ Initializing…</div>
+      </div>
     </header>
+
+    <!-- Incoming call notification -->
+    <div id="incoming-call" class="incoming-call hidden">
+      <span class="incoming-call-icon">📞</span>
+      <span>Incoming call…</span>
+      <div class="incoming-call-btns">
+        <button id="accept-call" class="btn primary btn-sm">Accept</button>
+        <button id="reject-call" class="btn btn-sm btn-danger">Reject</button>
+      </div>
+    </div>
 
     <div id="messages" class="messages"></div>
 
@@ -88,6 +101,25 @@
       </div>
       <input id="file-input" type="file" class="hidden" />
     </footer>
+  </div>
+
+  <!-- Call overlay (full-screen, over everything) -->
+  <div id="call-overlay" class="call-overlay hidden">
+    <div id="call-status-bar" class="call-status-bar hidden"></div>
+    <div class="call-videos">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div id="remote-placeholder" class="video-placeholder">
+        <span>💀</span>
+        <span class="placeholder-text">Waiting for video…</span>
+      </div>
+    </div>
+    <div class="call-controls">
+      <button id="toggle-mic" class="call-ctrl" title="Mute microphone">🎤</button>
+      <button id="toggle-cam" class="call-ctrl" title="Turn off camera">📹</button>
+      <button id="back-to-chat" class="call-ctrl" title="Show chat">💬</button>
+      <button id="end-call" class="call-ctrl call-ctrl-end" title="End call">📵</button>
+    </div>
   </div>
 
   <script type="module" src="js/app.js"></script>

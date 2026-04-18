@@ -21,6 +21,12 @@ class DeadDrop {
     this.fileMgr = new FileTransferManager();
     this.encrypted = false;
 
+    // Call state
+    this.callState = 'idle'; // idle | requesting | incoming | connecting | active
+    this.localStream = null;
+    this.remoteStream = null;
+    this._callVideo = false;
+
     this._bindDOM();
     this._bindEvents();
     this._initMsgManager();
@@ -60,6 +66,20 @@ class DeadDrop {
       burnToggle:  $('#burn-toggle'),
       ttlSelect:   $('#ttl-select'),
       status:      $('#status'),
+      // Call
+      callBtn:       $('#call-btn'),
+      incomingCall:  $('#incoming-call'),
+      acceptCall:    $('#accept-call'),
+      rejectCall:    $('#reject-call'),
+      callOverlay:   $('#call-overlay'),
+      callStatusBar: $('#call-status-bar'),
+      remoteVideo:   $('#remote-video'),
+      localVideo:    $('#local-video'),
+      remotePlaceholder: $('#remote-placeholder'),
+      toggleMic:     $('#toggle-mic'),
+      toggleCam:     $('#toggle-cam'),
+      backToChat:    $('#back-to-chat'),
+      endCall:       $('#end-call'),
     };
   }
 
@@ -100,6 +120,15 @@ class DeadDrop {
       const file = e.dataTransfer.files[0];
       if (file && this.encrypted) this.sendFile(file);
     });
+
+    // Call controls
+    this.el.callBtn.addEventListener('click', () => this._onCallBtnClick());
+    this.el.acceptCall.addEventListener('click', () => this._acceptCall());
+    this.el.rejectCall.addEventListener('click', () => this._rejectCall());
+    this.el.toggleMic.addEventListener('click', () => this._toggleMic());
+    this.el.toggleCam.addEventListener('click', () => this._toggleCam());
+    this.el.backToChat.addEventListener('click', () => this._toggleCallOverlay(false));
+    this.el.endCall.addEventListener('click', () => this._endCall());
 
     window.addEventListener('beforeunload', () => this._cleanup());
   }
@@ -308,6 +337,7 @@ class DeadDrop {
       (msg) => this._onPeerMessage(msg),
       (state) => this._onConnState(state),
     );
+    this.peer.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
   }
 
   /* ── P2P connection state ── */
@@ -321,10 +351,13 @@ class DeadDrop {
         this.encrypted = true;
         this._setStatus('encrypted', '🔒 End-to-end encrypted');
         this.el.msgInput.focus();
+        this.el.callBtn.style.display = '';
         break;
       case 'disconnected':
         this.encrypted = false;
         this._setStatus('disconnected', '❌ Peer disconnected');
+        this.el.callBtn.style.display = 'none';
+        this._endCallCleanup();
         break;
     }
   }
@@ -416,6 +449,17 @@ class DeadDrop {
         }
         break;
       }
+
+      // ── Call signaling (over encrypted data channel) ──
+      case 'call-req':
+      case 'call-accept':
+      case 'call-reject':
+      case 'call-offer':
+      case 'call-answer':
+      case 'call-end':
+      case 'call-mute':
+        this._handleCallSignal(msg);
+        break;
     }
   }
 
@@ -435,6 +479,232 @@ class DeadDrop {
     } catch (err) {
       console.error('File decryption failed:', err.message);
       this._renderSystem('Failed to decrypt file');
+    }
+  }
+
+  /* ── Calls ── */
+
+  _onCallBtnClick() {
+    if (this.callState === 'active') {
+      this._toggleCallOverlay(true);
+      return;
+    }
+    if (this.callState !== 'idle' || !this.encrypted) return;
+    this._startCall(true);
+  }
+
+  async _startCall(video) {
+    this.callState = 'requesting';
+    this._callVideo = video;
+    this.peer.send({ type: 'call-req', video });
+    this._showCallStatus('📞 Calling…');
+    this._toggleCallOverlay(true);
+  }
+
+  async _acceptCall() {
+    this.el.incomingCall.classList.add('hidden');
+    this.callState = 'connecting';
+
+    try {
+      this.localStream = await this._getMedia(this._callVideo);
+    } catch (err) {
+      console.error('getUserMedia failed:', err);
+      this.peer.send({ type: 'call-reject', reason: 'media-error' });
+      this.callState = 'idle';
+      this._renderSystem('Failed to access camera/microphone');
+      return;
+    }
+
+    this.el.localVideo.srcObject = this.localStream;
+    this._toggleCallOverlay(true);
+    this._showCallStatus('🔄 Connecting…');
+    this.peer.send({ type: 'call-accept' });
+  }
+
+  _rejectCall() {
+    this.el.incomingCall.classList.add('hidden');
+    this.callState = 'idle';
+    this.peer.send({ type: 'call-reject' });
+  }
+
+  _handleCallSignal(msg) {
+    switch (msg.type) {
+      case 'call-req':    this._onCallReq(msg);    break;
+      case 'call-accept': this._onCallAccept();     break;
+      case 'call-reject': this._onCallReject();     break;
+      case 'call-offer':  this._onCallOffer(msg);   break;
+      case 'call-answer': this._onCallAnswer(msg);  break;
+      case 'call-end':    this._onCallEnd();        break;
+      case 'call-mute':   this._onCallMute(msg);    break;
+    }
+  }
+
+  _onCallReq(msg) {
+    if (this.callState !== 'idle') {
+      this.peer.send({ type: 'call-reject', reason: 'busy' });
+      return;
+    }
+    this.callState = 'incoming';
+    this._callVideo = msg.video;
+    this.el.incomingCall.classList.remove('hidden');
+  }
+
+  async _onCallAccept() {
+    if (this.callState !== 'requesting') return;
+    this.callState = 'connecting';
+
+    try {
+      this.localStream = await this._getMedia(this._callVideo);
+    } catch (err) {
+      console.error('getUserMedia failed:', err);
+      this.peer.send({ type: 'call-end' });
+      this._endCallCleanup();
+      this._renderSystem('Failed to access camera/microphone');
+      return;
+    }
+
+    this.el.localVideo.srcObject = this.localStream;
+    this._showCallStatus('🔄 Connecting media…');
+
+    try {
+      const offer = await this.peer.startMedia(this.localStream);
+      this.peer.send({ type: 'call-offer', sdp: JSON.stringify(offer) });
+    } catch (err) {
+      console.error('Media offer failed:', err);
+      this._endCall();
+    }
+  }
+
+  _onCallReject() {
+    this._endCallCleanup();
+    this._renderSystem('Call declined');
+  }
+
+  async _onCallOffer(msg) {
+    try {
+      const offer = JSON.parse(msg.sdp);
+      const answer = await this.peer.acceptMedia(offer, this.localStream);
+      this.peer.send({ type: 'call-answer', sdp: JSON.stringify(answer) });
+      this.callState = 'active';
+      this._showCallStatus('');
+      this._updateCallBtn(true);
+    } catch (err) {
+      console.error('Call offer handling failed:', err);
+      this._endCall();
+    }
+  }
+
+  async _onCallAnswer(msg) {
+    try {
+      const answer = JSON.parse(msg.sdp);
+      await this.peer.completeMedia(answer);
+      this.callState = 'active';
+      this._showCallStatus('');
+      this._updateCallBtn(true);
+    } catch (err) {
+      console.error('Call answer handling failed:', err);
+      this._endCall();
+    }
+  }
+
+  _onCallEnd() {
+    this._endCallCleanup();
+    this._renderSystem('Call ended');
+  }
+
+  _onCallMute(msg) {
+    if (msg.video !== undefined) {
+      this.el.remotePlaceholder.classList.toggle('hidden', msg.video);
+    }
+  }
+
+  _endCall() {
+    if (this.callState === 'idle') return;
+    this.peer?.send({ type: 'call-end' });
+    this._endCallCleanup();
+  }
+
+  _endCallCleanup() {
+    this.callState = 'idle';
+    this.peer?.stopMedia();
+    if (this.localStream) {
+      for (const track of this.localStream.getTracks()) track.stop();
+      this.localStream = null;
+    }
+    this.remoteStream = null;
+    this.el.localVideo.srcObject = null;
+    this.el.remoteVideo.srcObject = null;
+    this._toggleCallOverlay(false);
+    this.el.incomingCall.classList.add('hidden');
+    this.el.remotePlaceholder.classList.remove('hidden');
+    this._updateCallBtn(false);
+    this._resetMuteButtons();
+  }
+
+  _onRemoteTrack(stream) {
+    this.remoteStream = stream;
+    this.el.remoteVideo.srcObject = stream;
+    this.el.remotePlaceholder.classList.add('hidden');
+  }
+
+  _toggleCallOverlay(show) {
+    this.el.callOverlay.classList.toggle('hidden', !show);
+  }
+
+  _showCallStatus(text) {
+    this.el.callStatusBar.textContent = text;
+    this.el.callStatusBar.classList.toggle('hidden', !text);
+  }
+
+  _updateCallBtn(inCall) {
+    this.el.callBtn.textContent = inCall ? '🟢' : '📞';
+    this.el.callBtn.title = inCall ? 'Show call' : 'Start call';
+  }
+
+  _toggleMic() {
+    if (!this.localStream) return;
+    const track = this.localStream.getAudioTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    this.el.toggleMic.classList.toggle('muted', !track.enabled);
+    this.el.toggleMic.textContent = track.enabled ? '🎤' : '🔇';
+    this.peer?.send({
+      type: 'call-mute',
+      audio: track.enabled,
+      video: this.localStream.getVideoTracks()[0]?.enabled ?? false,
+    });
+  }
+
+  _toggleCam() {
+    if (!this.localStream) return;
+    const track = this.localStream.getVideoTracks()[0];
+    if (!track) return;
+    track.enabled = !track.enabled;
+    this.el.toggleCam.classList.toggle('muted', !track.enabled);
+    this.el.toggleCam.textContent = track.enabled ? '📹' : '🚫';
+    this.peer?.send({
+      type: 'call-mute',
+      audio: this.localStream.getAudioTracks()[0]?.enabled ?? true,
+      video: track.enabled,
+    });
+  }
+
+  _resetMuteButtons() {
+    this.el.toggleMic.classList.remove('muted');
+    this.el.toggleMic.textContent = '🎤';
+    this.el.toggleCam.classList.remove('muted');
+    this.el.toggleCam.textContent = '📹';
+  }
+
+  async _getMedia(withVideo) {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+    } catch (err) {
+      if (withVideo) {
+        // Fallback to audio-only if camera unavailable
+        return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
+      throw err;
     }
   }
 
@@ -570,6 +840,7 @@ class DeadDrop {
   }
 
   _cleanup() {
+    this._endCallCleanup();
     this.msgMgr?.destroyAll();
     this.peer?.close();
     this.crypto?.destroy();

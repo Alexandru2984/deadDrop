@@ -548,3 +548,175 @@ select { cursor: pointer; width: auto; }
   .file-preview-video { max-height: 200px; }
   .file-preview-audio { min-width: 160px; }
 }
+
+/* ── Call UI ── */
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.call-btn {
+  font-size: 18px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+
+.call-btn:hover { opacity: 1; }
+
+/* Incoming call notification */
+
+.incoming-call {
+  position: absolute;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 14px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  z-index: 100;
+  animation: fadeIn 0.3s ease-out;
+  box-shadow: 0 4px 24px rgba(0, 232, 123, 0.15);
+  white-space: nowrap;
+}
+
+.incoming-call-icon {
+  font-size: 24px;
+  animation: ring 1s ease-in-out infinite;
+}
+
+@keyframes ring {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(15deg); }
+  75% { transform: rotate(-15deg); }
+}
+
+.incoming-call-btns { display: flex; gap: 8px; }
+
+.btn-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.btn-danger:hover { background: rgba(255, 68, 85, 0.1); }
+
+/* Call overlay */
+
+.call-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+}
+
+.call-status-bar {
+  text-align: center;
+  padding: 8px;
+  font-size: 13px;
+  color: var(--dim);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.call-videos {
+  flex: 1;
+  position: relative;
+  background: #000;
+  overflow: hidden;
+}
+
+#remote-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+#local-video {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 140px;
+  aspect-ratio: 4/3;
+  border-radius: 10px;
+  object-fit: cover;
+  border: 2px solid var(--border);
+  background: #111;
+  z-index: 10;
+}
+
+.video-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--dim);
+  font-size: 64px;
+  pointer-events: none;
+}
+
+.video-placeholder .placeholder-text { font-size: 14px; }
+
+.call-controls {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.call-ctrl {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 24px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.call-ctrl:hover { border-color: var(--accent); }
+
+.call-ctrl.muted {
+  background: rgba(255, 68, 85, 0.15);
+  border-color: var(--danger);
+}
+
+.call-ctrl-end {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: white;
+}
+
+.call-ctrl-end:hover { background: #ff6677; border-color: #ff6677; }
+
+@media (max-width: 600px) {
+  #local-video { width: 100px; bottom: 12px; right: 12px; }
+  .call-ctrl { width: 48px; height: 48px; font-size: 20px; }
+  .call-controls { gap: 12px; padding: 12px; }
+  .incoming-call {
+    left: 12px;
+    right: 12px;
+    transform: none;
+    justify-content: space-between;
+  }
+}
