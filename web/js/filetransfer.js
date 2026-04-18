@@ -129,6 +129,9 @@ export class FileTransferManager {
       console.warn('File transfer rejected: invalid totalChunks', msg.totalChunks);
       return null;
     }
+    // Clear any existing transfer with the same ID (prevents timer leak)
+    const existing = this.inbound.get(msg.id);
+    if (existing) clearTimeout(existing.timer);
     this.inbound.set(msg.id, {
       meta:            msg.meta,
       fileIv:          msg.fileIv,
@@ -200,10 +203,17 @@ export class FileTransferManager {
   /** Pause until the data-channel send buffer drains below threshold. */
   _waitForBuffer(peer) {
     return new Promise((resolve) => {
-      if (!peer.dc || peer.dc.bufferedAmount <= BUFFER_HIGH) { resolve(); return; }
+      if (!peer.dc || peer.dc.readyState !== 'open') { resolve(); return; }
+      if (peer.dc.bufferedAmount <= BUFFER_HIGH) { resolve(); return; }
       peer.dc.bufferedAmountLowThreshold = BUFFER_HIGH / 2;
-      const handler = () => { peer.dc.removeEventListener('bufferedamountlow', handler); resolve(); };
+      const handler = () => { cleanup(); resolve(); };
+      const closeHandler = () => { cleanup(); resolve(); };
+      const cleanup = () => {
+        peer.dc.removeEventListener('bufferedamountlow', handler);
+        peer.dc.removeEventListener('close', closeHandler);
+      };
       peer.dc.addEventListener('bufferedamountlow', handler);
+      peer.dc.addEventListener('close', closeHandler);
     });
   }
 }

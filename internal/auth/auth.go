@@ -27,16 +27,21 @@ type user struct {
 }
 
 type store struct {
-	mu    sync.RWMutex
-	users map[string]user
-	path  string
+	mu        sync.RWMutex
+	users     map[string]user
+	path      string
+	dummyHash []byte // valid bcrypt hash for constant-time comparison on unknown users
 }
 
 func newStore(dir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	s := &store{users: make(map[string]user), path: filepath.Join(dir, "users.json")}
+	// Generate a valid bcrypt hash at startup for constant-time dummy comparison.
+	// This prevents user enumeration via timing — the work is identical whether
+	// the user exists or not. Must be the same cost factor as real hashes.
+	dummy, _ := bcrypt.GenerateFromPassword([]byte("dummy-constant-time"), 12)
+	s := &store{users: make(map[string]user), path: filepath.Join(dir, "users.json"), dummyHash: dummy}
 	if data, err := os.ReadFile(s.path); err == nil {
 		if err := json.Unmarshal(data, &s.users); err != nil {
 			return nil, fmt.Errorf("corrupt users.json: %w", err)
@@ -76,11 +81,9 @@ func (s *store) authenticate(username, password string) error {
 	defer s.mu.RUnlock()
 	u, ok := s.users[username]
 	if !ok {
-		// Constant-time work to prevent user-enumeration via timing
-		bcrypt.CompareHashAndPassword(
-			[]byte("$2a$12$000000000000000000000u000000000000000000000000000000"),
-			prehashPassword(password),
-		)
+		// Constant-time work to prevent user-enumeration via timing.
+		// Uses a valid bcrypt hash generated at startup (same cost factor).
+		bcrypt.CompareHashAndPassword(s.dummyHash, prehashPassword(password))
 		return errors.New("invalid credentials")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.Hash), prehashPassword(password)); err != nil {

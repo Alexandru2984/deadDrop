@@ -332,15 +332,15 @@ class DeadDrop {
 
       case 'offer':
         this._createPeerConn();
-        this.peer.handleOffer(msg.from, JSON.parse(msg.payload));
+        try { this.peer.handleOffer(msg.from, JSON.parse(msg.payload)); } catch {}
         break;
 
       case 'answer':
-        this.peer?.handleAnswer(JSON.parse(msg.payload));
+        try { this.peer?.handleAnswer(JSON.parse(msg.payload)); } catch {}
         break;
 
       case 'ice-candidate':
-        this.peer?.handleIceCandidate(JSON.parse(msg.payload));
+        try { this.peer?.handleIceCandidate(JSON.parse(msg.payload)); } catch {}
         break;
     }
   }
@@ -492,10 +492,12 @@ class DeadDrop {
 
       // Decrypt file data
       const fileData = await this.crypto.decryptBinary(result.ciphertext, result.fileIv);
-      const blob    = new Blob([fileData], { type: meta.fileType });
+      const fileType = typeof meta.fileType === 'string' ? meta.fileType : 'application/octet-stream';
+      const blob    = new Blob([fileData], { type: fileType });
       const blobUrl = URL.createObjectURL(blob);
 
       // Replace progress placeholder with actual preview
+      meta.fileType = fileType; // ensure validated type for rendering
       this._renderFileComplete(result.id, blobUrl, meta, result.ttl, result.burnAfterReading);
     } catch (err) {
       console.error('File decryption failed:', err.message);
