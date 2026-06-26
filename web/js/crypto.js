@@ -13,6 +13,7 @@ export class CryptoLayer {
     this.keyPair = null;
     this.sharedKey = null;
     this.seenNonces = new Set(); // replay-attack protection
+    this.seenBinaryNonces = new Set();
     this._maxNonces = 10000;     // cap to prevent memory leak
   }
 
@@ -115,6 +116,9 @@ export class CryptoLayer {
     const envelope = JSON.parse(new TextDecoder().decode(plainBuf));
 
     // Replay protection — reject duplicate nonces
+    if (!Array.isArray(envelope.nonce) || envelope.nonce.length !== 8) {
+      throw new Error('Invalid nonce');
+    }
     const nonceKey = envelope.nonce.join(',');
     if (this.seenNonces.has(nonceKey)) {
       throw new Error('Replay attack detected — duplicate nonce');
@@ -163,6 +167,18 @@ export class CryptoLayer {
       this.sharedKey,
       ciphertextBuf,
     );
+    if (withNonce.byteLength < 8) {
+      throw new Error('Invalid encrypted file payload');
+    }
+    const nonce = Array.from(new Uint8Array(withNonce.slice(0, 8))).join(',');
+    if (this.seenBinaryNonces.has(nonce)) {
+      throw new Error('Replay attack detected — duplicate file nonce');
+    }
+    this.seenBinaryNonces.add(nonce);
+    if (this.seenBinaryNonces.size > this._maxNonces) {
+      const first = this.seenBinaryNonces.values().next().value;
+      this.seenBinaryNonces.delete(first);
+    }
     // Strip the 8-byte nonce prefix
     return withNonce.slice(8);
   }
@@ -172,7 +188,7 @@ export class CryptoLayer {
     this.keyPair = null;
     this.sharedKey = null;
     this.seenNonces.clear();
+    this.seenBinaryNonces.clear();
   }
 }
-
 

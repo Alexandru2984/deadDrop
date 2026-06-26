@@ -9,6 +9,11 @@ import { PeerConnection } from './peer.js';
 import { MessageManager } from './messages.js';
 import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
 
+const ROOM_CODE_RE = /^[0-9a-f]{6,12}$/;
+const MAX_MESSAGE_ID_LEN = 80;
+const MAX_TEXT_LEN = 16 * 1024;
+const ALLOWED_TTLS = new Set([0, 10, 30, 60, 300]);
+
 class DeadDrop {
   constructor() {
     this.username = null;
@@ -260,8 +265,13 @@ class DeadDrop {
       this._renderSystem('Failed to create room');
       return;
     }
-    await this._connectSignaling();
-    this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
+    try {
+      await this._connectSignaling();
+      this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
+    } catch {
+      this._renderSystem('Failed to connect to signaling server');
+      return;
+    }
     this._enterChat(this.roomCode);
     this._setStatus('waiting', '⏳ Waiting for peer…');
   }
@@ -269,7 +279,16 @@ class DeadDrop {
   async joinRoom() {
     const code = this.el.roomInput.value.trim().toLowerCase();
     if (!code) return;
-    await this._connectSignaling();
+    if (!ROOM_CODE_RE.test(code)) {
+      this._renderSystem('Invalid room code');
+      return;
+    }
+    try {
+      await this._connectSignaling();
+    } catch {
+      this._renderSystem('Failed to connect to signaling server');
+      return;
+    }
     this.roomCode = code;
     this.ws.send(JSON.stringify({ type: 'join', room: code }));
     this._enterChat(code);
@@ -290,7 +309,13 @@ class DeadDrop {
       this.ws = new WebSocket(`${proto}//${location.host}/ws`);
 
       this.ws.onmessage = (e) => {
-        const msg = JSON.parse(e.data);
+        let msg;
+        try {
+          msg = JSON.parse(e.data);
+        } catch {
+          console.warn('[ws] Ignoring malformed signaling message');
+          return;
+        }
         if (msg.type === 'welcome' && !this.peerId) {
           this.peerId = msg.peerId;
           resolve();
@@ -390,7 +415,7 @@ class DeadDrop {
     }
 
     const burn = this.el.burnToggle.checked;
-    const ttl  = parseInt(this.el.ttlSelect.value, 10);
+    const ttl  = this._normalizeTTL(this.el.ttlSelect.value);
     const id   = crypto.randomUUID();
     const meta = {
       fileName: file.name,
@@ -415,9 +440,13 @@ class DeadDrop {
   async sendMessage() {
     const text = this.el.msgInput.value.trim();
     if (!text || !this.encrypted) return;
+    if (text.length > MAX_TEXT_LEN) {
+      this._renderSystem('Message too large');
+      return;
+    }
 
     const burn = this.el.burnToggle.checked;
-    const ttl = parseInt(this.el.ttlSelect.value, 10);
+    const ttl = this._normalizeTTL(this.el.ttlSelect.value);
     const id = crypto.randomUUID();
 
     const { ciphertext, iv } = await this.crypto.encrypt(text);
@@ -428,10 +457,13 @@ class DeadDrop {
   }
 
   async _onPeerMessage(msg) {
+    if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
     switch (msg.type) {
       case 'chat': {
+        if (!this._validMessageID(msg.id) || !this._validEncryptedPayload(msg)) return;
         try {
           const text = await this.crypto.decrypt(msg.ciphertext, msg.iv);
+          if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
           this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading);
           if (msg.burnAfterReading) {
             this.peer.send({ type: 'read', id: msg.id });
@@ -442,9 +474,11 @@ class DeadDrop {
         break;
       }
       case 'read':
+        if (!this._validMessageID(msg.id)) return;
         this.msgMgr.remoteDestroy(msg.id);
         break;
       case 'delete':
+        if (!this._validMessageID(msg.id)) return;
         this.msgMgr.remoteDestroy(msg.id);
         break;
 
@@ -452,7 +486,13 @@ class DeadDrop {
       case 'file':
       case 'file-chunk':
       case 'file-end': {
-        const result = this.fileMgr.handleMessage(msg);
+        let result;
+        try {
+          result = this.fileMgr.handleMessage(msg);
+        } catch (err) {
+          console.warn('File transfer message rejected:', err);
+          break;
+        }
         if (!result) break;
         switch (result.event) {
           case 'start':
@@ -488,16 +528,15 @@ class DeadDrop {
     try {
       // Decrypt metadata
       const metaJson = await this.crypto.decrypt(result.meta.ciphertext, result.meta.iv);
-      const meta = JSON.parse(metaJson);
+      const meta = this._sanitizeFileMeta(JSON.parse(metaJson));
+      if (!meta) throw new Error('Invalid file metadata');
 
       // Decrypt file data
       const fileData = await this.crypto.decryptBinary(result.ciphertext, result.fileIv);
-      const fileType = typeof meta.fileType === 'string' ? meta.fileType : 'application/octet-stream';
-      const blob    = new Blob([fileData], { type: fileType });
+      const blob    = new Blob([fileData], { type: meta.fileType });
       const blobUrl = URL.createObjectURL(blob);
 
       // Replace progress placeholder with actual preview
-      meta.fileType = fileType; // ensure validated type for rendering
       this._renderFileComplete(result.id, blobUrl, meta, result.ttl, result.burnAfterReading);
     } catch (err) {
       console.error('File decryption failed:', err.message);
@@ -732,6 +771,8 @@ class DeadDrop {
   }
 
   _renderMsg(id, text, mine, ttl, burn) {
+    ttl = this._normalizeTTL(ttl);
+    burn = burn === true;
     const el = document.createElement('div');
     el.className = `msg ${mine ? 'mine' : 'theirs'}`;
     if (burn) el.classList.add('burn');
@@ -755,6 +796,10 @@ class DeadDrop {
   /* ── UI helpers ── */
 
   _renderFileMsg(id, blobUrl, meta, mine, ttl, burn) {
+    ttl = this._normalizeTTL(ttl);
+    burn = burn === true;
+    meta = this._sanitizeFileMeta(meta);
+    if (!meta) return;
     const el = document.createElement('div');
     el.className = `msg ${mine ? 'mine' : 'theirs'} file-msg`;
     if (burn) el.classList.add('burn');
@@ -794,6 +839,7 @@ class DeadDrop {
   }
 
   _renderFileProgress(id, received, total) {
+    if (!this._validMessageID(id) || !Number.isSafeInteger(total) || total < 1) return;
     const el = document.createElement('div');
     el.className = 'msg theirs file-msg';
     el.id = `msg-${id}`;
@@ -809,6 +855,7 @@ class DeadDrop {
   }
 
   _updateFileProgress(id, received, total) {
+    if (!this._validMessageID(id) || !Number.isSafeInteger(received) || !Number.isSafeInteger(total) || total < 1) return;
     const el = document.getElementById(`msg-${id}`);
     if (!el) return;
     const fill = el.querySelector('.progress-fill');
@@ -819,6 +866,7 @@ class DeadDrop {
   }
 
   _renderFileComplete(id, blobUrl, meta, ttl, burn) {
+    if (!this._validMessageID(id)) return;
     const old = document.getElementById(`msg-${id}`);
     if (old) old.remove();
     this._renderFileMsg(id, blobUrl, meta, false, ttl, burn);
@@ -852,6 +900,7 @@ class DeadDrop {
   }
 
   _fmtSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
@@ -865,6 +914,33 @@ class DeadDrop {
     this.ws?.close();
     this.peer = null;
     this.encrypted = false;
+  }
+
+  _normalizeTTL(value) {
+    const ttl = Number.parseInt(value, 10);
+    return ALLOWED_TTLS.has(ttl) ? ttl : 0;
+  }
+
+  _validMessageID(id) {
+    return typeof id === 'string' && id.length > 0 && id.length <= MAX_MESSAGE_ID_LEN;
+  }
+
+  _validEncryptedPayload(msg) {
+    return typeof msg.ciphertext === 'string' && typeof msg.iv === 'string';
+  }
+
+  _sanitizeFileMeta(meta) {
+    if (!meta || typeof meta !== 'object') return null;
+    const fileName = typeof meta.fileName === 'string' && meta.fileName.trim()
+      ? meta.fileName.slice(0, 180)
+      : 'file';
+    const fileType = typeof meta.fileType === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(meta.fileType)
+      ? meta.fileType.slice(0, 100)
+      : 'application/octet-stream';
+    const fileSize = Number.isFinite(meta.fileSize) && meta.fileSize >= 0 && meta.fileSize <= MAX_FILE_SIZE
+      ? meta.fileSize
+      : 0;
+    return { fileName, fileType, fileSize };
   }
 }
 

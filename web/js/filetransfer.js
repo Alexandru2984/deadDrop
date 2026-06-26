@@ -13,6 +13,7 @@ const CHUNK_SIZE = 48 * 1024;   // 48 KB raw → ~64 KB base64
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
 const BUFFER_HIGH = 1024 * 1024; // pause sending above 1 MB buffered
 const INBOUND_TIMEOUT = 2 * 60 * 1000; // 2 min — abort stale inbound transfers
+const MAX_ID_LEN = 80;
 
 export { MAX_FILE_SIZE };
 
@@ -121,12 +122,20 @@ export class FileTransferManager {
     // Validate totalSize to prevent memory exhaustion from malicious peers
     // Encrypted size can be slightly larger than MAX_FILE_SIZE due to AES-GCM overhead
     const maxEncryptedSize = MAX_FILE_SIZE + 1024 * 1024; // 26 MB
-    if (!msg.totalSize || msg.totalSize > maxEncryptedSize || msg.totalSize < 0) {
+    if (!this._validID(msg.id)) {
+      console.warn('File transfer rejected: invalid id');
+      return null;
+    }
+    if (!Number.isSafeInteger(msg.totalSize) || msg.totalSize <= 0 || msg.totalSize > maxEncryptedSize) {
       console.warn('File transfer rejected: invalid totalSize', msg.totalSize);
       return null;
     }
-    if (!msg.totalChunks || msg.totalChunks < 1 || msg.totalChunks > Math.ceil(maxEncryptedSize / CHUNK_SIZE) + 1) {
+    if (!Number.isSafeInteger(msg.totalChunks) || msg.totalChunks < 1 || msg.totalChunks > Math.ceil(maxEncryptedSize / CHUNK_SIZE) + 1) {
       console.warn('File transfer rejected: invalid totalChunks', msg.totalChunks);
+      return null;
+    }
+    if (!this._validEncryptedMeta(msg.meta) || typeof msg.fileIv !== 'string') {
+      console.warn('File transfer rejected: invalid encrypted metadata');
       return null;
     }
     // Clear any existing transfer with the same ID (prevents timer leak)
@@ -141,6 +150,7 @@ export class FileTransferManager {
       burnAfterReading: msg.burnAfterReading,
       chunks:          new Array(msg.totalChunks),
       received:        0,
+      receivedBytes:   0,
       // Auto-abort stale transfers that never complete
       timer:           setTimeout(() => {
         console.warn(`File transfer ${msg.id} timed out — cleaning up`);
@@ -154,14 +164,30 @@ export class FileTransferManager {
     const t = this.inbound.get(msg.id);
     if (!t) return null;
     // Validate chunk index to prevent sparse array attacks
-    if (typeof msg.index !== 'number' || msg.index < 0 || msg.index >= t.totalChunks) {
+    if (!Number.isSafeInteger(msg.index) || msg.index < 0 || msg.index >= t.totalChunks) {
       console.warn('File chunk rejected: invalid index', msg.index);
+      return null;
+    }
+    if (typeof msg.data !== 'string') {
+      console.warn('File chunk rejected: invalid data');
       return null;
     }
     // Only count new chunks — ignore duplicates to prevent inflating received count
     if (!t.chunks[msg.index]) {
-      t.chunks[msg.index] = _b64ToUint8(msg.data);
+      let chunk;
+      try {
+        chunk = _b64ToUint8(msg.data);
+      } catch {
+        console.warn('File chunk rejected: invalid base64');
+        return null;
+      }
+      if (chunk.byteLength > CHUNK_SIZE || t.receivedBytes + chunk.byteLength > t.totalSize) {
+        console.warn('File chunk rejected: invalid size');
+        return null;
+      }
+      t.chunks[msg.index] = chunk;
       t.received++;
+      t.receivedBytes += chunk.byteLength;
     }
     return { event: 'progress', id: msg.id, received: t.received, totalChunks: t.totalChunks };
   }
@@ -177,6 +203,11 @@ export class FileTransferManager {
       console.warn(`File ${msg.id}: incomplete — got ${t.received}/${t.totalChunks} chunks`);
       this.inbound.delete(msg.id);
       return { event: 'error', id: msg.id, error: 'Incomplete transfer — missing chunks' };
+    }
+    if (t.receivedBytes !== t.totalSize) {
+      console.warn(`File ${msg.id}: size mismatch — got ${t.receivedBytes}/${t.totalSize} bytes`);
+      this.inbound.delete(msg.id);
+      return { event: 'error', id: msg.id, error: 'Transfer size mismatch' };
     }
 
     // Reassemble ciphertext
@@ -215,6 +246,17 @@ export class FileTransferManager {
       peer.dc.addEventListener('bufferedamountlow', handler);
       peer.dc.addEventListener('close', closeHandler);
     });
+  }
+
+  _validID(id) {
+    return typeof id === 'string' && id.length > 0 && id.length <= MAX_ID_LEN;
+  }
+
+  _validEncryptedMeta(meta) {
+    return meta &&
+      typeof meta === 'object' &&
+      typeof meta.ciphertext === 'string' &&
+      typeof meta.iv === 'string';
   }
 }
 

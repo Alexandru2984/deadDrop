@@ -9,6 +9,9 @@
 
 import { bufToB64, b64ToBuf } from './util.js';
 
+const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
+const P256_RAW_PUBLIC_KEY_BYTES = 65;
+
 export class PeerConnection {
   /**
    * @param {Object}      signaling    – { send(msg) }
@@ -201,6 +204,10 @@ export class PeerConnection {
     };
 
     ch.onmessage = async (e) => {
+      if (typeof e.data !== 'string' || e.data.length > MAX_DATA_CHANNEL_MESSAGE) {
+        console.warn('[peer] Received invalid message size — ignoring');
+        return;
+      }
       let msg;
       try {
         msg = JSON.parse(e.data);
@@ -211,7 +218,18 @@ export class PeerConnection {
 
       if (msg.type === 'key-exchange') {
         // Derive the shared secret from the peer's public key
-        await this.crypto.deriveSharedKey(b64ToBuf(msg.publicKey));
+        let publicKey;
+        try {
+          publicKey = b64ToBuf(msg.publicKey);
+        } catch {
+          console.warn('[peer] Received malformed public key — ignoring');
+          return;
+        }
+        if (publicKey.byteLength !== P256_RAW_PUBLIC_KEY_BYTES) {
+          console.warn('[peer] Received invalid public key length — ignoring');
+          return;
+        }
+        await this.crypto.deriveSharedKey(publicKey);
         // Compute SAS fingerprint for MitM verification
         const sas = await this.crypto.computeSAS();
         this.onStateChange('encrypted', sas);
