@@ -30,6 +30,12 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 
+button,
+input,
+select {
+  max-width: 100%;
+}
+
 .hidden { display: none !important; }
 
 /* ── Pages (shared) ── */
@@ -49,6 +55,7 @@ body {
   height: 100dvh;
   gap: 12px;
   padding: 20px;
+  overflow-y: auto;
 }
 
 .auth-form {
@@ -96,6 +103,7 @@ body {
   height: 100dvh;
   gap: 12px;
   padding: 20px;
+  overflow-y: auto;
 }
 
 .user-bar {
@@ -105,6 +113,9 @@ body {
   font-size: 13px;
   color: var(--dim);
   margin-bottom: 8px;
+  max-width: min(100%, 360px);
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .logo {
@@ -241,6 +252,7 @@ select { cursor: pointer; width: auto; }
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .header-left {
@@ -248,6 +260,7 @@ select { cursor: pointer; width: auto; }
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .brand {
@@ -264,6 +277,7 @@ select { cursor: pointer; width: auto; }
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
 
 .room-info code {
@@ -273,6 +287,9 @@ select { cursor: pointer; width: auto; }
   color: var(--accent);
   font-size: 13px;
   letter-spacing: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .status {
@@ -281,6 +298,9 @@ select { cursor: pointer; width: auto; }
   border-radius: 12px;
   white-space: nowrap;
   flex-shrink: 0;
+  max-width: min(48vw, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .status.waiting      { color: #ffaa00; }
@@ -299,6 +319,7 @@ select { cursor: pointer; width: auto; }
   flex-direction: column;
   gap: 8px;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .messages::-webkit-scrollbar { width: 6px; }
@@ -394,6 +415,8 @@ select { cursor: pointer; width: auto; }
   display: flex;
   gap: 14px;
   align-items: center;
+  justify-content: space-between;
+  min-width: 0;
 }
 
 .toggle-label {
@@ -413,9 +436,12 @@ select { cursor: pointer; width: auto; }
 .input-row {
   display: flex;
   gap: 8px;
+  align-items: center;
 }
 
 .input-row input { flex: 1; min-width: 0; }
+
+#send-btn { min-width: 72px; }
 
 /* ── Responsive: mobile ── */
 
@@ -426,13 +452,29 @@ select { cursor: pointer; width: auto; }
   .chat-footer { padding: 8px 12px; }
   .messages { padding: 12px; }
   .brand { font-size: 13px; letter-spacing: 1px; }
+  .header-right {
+    min-width: 0;
+    justify-content: flex-end;
+  }
+  .status { max-width: 42vw; }
 }
 
 /* ── Responsive: very small ── */
 
 @media (max-width: 360px) {
   .auth-buttons { flex-direction: column; }
-  .controls { gap: 10px; }
+  .controls {
+    align-items: stretch;
+    gap: 8px;
+  }
+  .toggle-label { flex: 1; }
+  #ttl-select { flex: 1; }
+  #send-btn {
+    min-width: 60px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .join-group { flex-direction: column; }
 }
 
 /* ── File messages ── */
@@ -473,12 +515,14 @@ select { cursor: pointer; width: auto; }
   font-size: 12px;
   color: var(--dim);
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .file-name {
   color: var(--text);
   font-weight: 500;
   word-break: break-all;
+  min-width: 0;
 }
 
 .file-size { white-space: nowrap; }
@@ -631,6 +675,7 @@ select { cursor: pointer; width: auto; }
   position: relative;
   background: #000;
   overflow: hidden;
+  min-height: 0;
 }
 
 #remote-video {
@@ -718,5 +763,35 @@ select { cursor: pointer; width: auto; }
     right: 12px;
     transform: none;
     justify-content: space-between;
+    white-space: normal;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 420px) {
+  .chat-header { flex-wrap: wrap; }
+  .header-left,
+  .header-right { width: 100%; }
+  .header-right { justify-content: space-between; }
+  .status { max-width: calc(100vw - 88px); }
+  .controls { flex-wrap: wrap; }
+  .input-row {
+    display: grid;
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+  }
+  .call-controls {
+    gap: 8px;
+    justify-content: space-around;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }
