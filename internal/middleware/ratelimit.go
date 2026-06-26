@@ -3,6 +3,8 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -49,7 +51,7 @@ func (rl *RateLimiter) Allow(ip string) bool {
 
 	// Refill tokens based on elapsed time
 	elapsed := now.Sub(b.lastSeen)
-	refill := int(elapsed / rl.interval) * rl.rate
+	refill := int(elapsed/rl.interval) * rl.rate
 	if refill > 0 {
 		b.tokens += refill
 		if b.tokens > rl.burst {
@@ -80,19 +82,55 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// ExtractIP returns the client IP from the request, respecting reverse proxy headers.
+// ExtractIP returns the client IP from the request.
+// Reverse proxy headers are trusted only when the direct peer is local/private
+// or TRUST_PROXY_HEADERS=1 is set. This prevents public clients from spoofing
+// X-Forwarded-For to bypass rate limits if the Go port is reachable directly.
 func ExtractIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return ip
+	if isTrustedProxyRequest(r) {
+		if ip := r.Header.Get("CF-Connecting-IP"); validIP(ip) {
+			return strings.TrimSpace(ip)
+		}
+		if ip := firstForwardedFor(r.Header.Get("X-Forwarded-For")); validIP(ip) {
+			return ip
+		}
+		if ip := r.Header.Get("X-Real-IP"); validIP(ip) {
+			return strings.TrimSpace(ip)
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+func isTrustedProxyRequest(r *http.Request) bool {
+	if os.Getenv("TRUST_PROXY_HEADERS") == "1" {
+		return true
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+}
+
+func firstForwardedFor(value string) string {
+	for _, part := range strings.Split(value, ",") {
+		if ip := strings.TrimSpace(part); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
+func validIP(ip string) bool {
+	return net.ParseIP(strings.TrimSpace(ip)) != nil
 }
 
 // cleanup removes stale entries every 5 minutes.

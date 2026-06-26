@@ -131,12 +131,15 @@ func newSessions() *sessions {
 	return sm
 }
 
-func (sm *sessions) create(username string) string {
-	tok := genToken()
+func (sm *sessions) create(username string) (string, error) {
+	tok, err := genToken()
+	if err != nil {
+		return "", err
+	}
 	sm.mu.Lock()
 	sm.m[tok] = &session{username: username, expiresAt: time.Now().Add(24 * time.Hour)}
 	sm.mu.Unlock()
-	return tok
+	return tok, nil
 }
 
 func (sm *sessions) get(token string) (string, bool) {
@@ -169,10 +172,12 @@ func (sm *sessions) reap() {
 	}
 }
 
-func genToken() string {
+func genToken() (string, error) {
 	b := make([]byte, 32)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 /* ── HTTP Handler ── */
@@ -211,8 +216,14 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	token, err := h.sess.create(body.Username)
+	if err != nil {
+		log.Printf("[auth] session token error: %v", err)
+		jsonErr(w, "could not create session", http.StatusInternalServerError)
+		return
+	}
 	log.Printf("[auth] registered user=%s", body.Username)
-	h.setCookie(w, r, h.sess.create(body.Username))
+	h.setCookie(w, r, token)
 	jsonOK(w, map[string]string{"username": body.Username})
 }
 
@@ -234,8 +245,14 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	token, err := h.sess.create(body.Username)
+	if err != nil {
+		log.Printf("[auth] session token error: %v", err)
+		jsonErr(w, "could not create session", http.StatusInternalServerError)
+		return
+	}
 	log.Printf("[auth] login user=%s", body.Username)
-	h.setCookie(w, r, h.sess.create(body.Username))
+	h.setCookie(w, r, token)
 	jsonOK(w, map[string]string{"username": body.Username})
 }
 
@@ -248,8 +265,13 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		h.sess.delete(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: "dd_session", Value: "", Path: "/",
-		MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Name:     "dd_session",
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   isSecureRequest(r),
+		SameSite: http.SameSiteLaxMode,
 	})
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -286,16 +308,19 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 
 // setCookie detects HTTPS (via X-Forwarded-Proto from nginx) to set the Secure flag.
 func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string) {
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     "dd_session",
 		Value:    token,
 		Path:     "/",
 		MaxAge:   86400,
 		HttpOnly: true,
-		Secure:   secure,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func isSecureRequest(r *http.Request) bool {
+	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 func jsonOK(w http.ResponseWriter, v any) {

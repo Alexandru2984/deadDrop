@@ -1,14 +1,14 @@
 package signaling
 
 import (
-"encoding/json"
-"net/http"
-"net/http/httptest"
-"strings"
-"testing"
-"time"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
 
-"github.com/gorilla/websocket"
+	"github.com/gorilla/websocket"
 )
 
 func TestSignalingFlow(t *testing.T) {
@@ -125,7 +125,10 @@ func TestValidateRoomCode(t *testing.T) {
 }
 
 func TestGenerateRoomCode(t *testing.T) {
-	code := GenerateRoomCode()
+	code, err := GenerateRoomCode()
+	if err != nil {
+		t.Fatalf("GenerateRoomCode: %v", err)
+	}
 	if len(code) != 12 {
 		t.Fatalf("expected 12-char code, got %d: %s", len(code), code)
 	}
@@ -136,7 +139,10 @@ func TestGenerateRoomCode(t *testing.T) {
 	// Should be unique
 	codes := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		c := GenerateRoomCode()
+		c, err := GenerateRoomCode()
+		if err != nil {
+			t.Fatalf("GenerateRoomCode: %v", err)
+		}
 		if codes[c] {
 			t.Fatalf("duplicate code after %d generations: %s", i, c)
 		}
@@ -269,6 +275,27 @@ func TestOriginCheck(t *testing.T) {
 	// Reset for other tests
 	AllowedOrigins = nil
 	t.Log("✅ Origin check working")
+}
+
+func TestOriginCheckRejectsMissingOriginWhenConfigured(t *testing.T) {
+	AllowedOrigins = []string{"https://dead.micutu.com"}
+	defer func() { AllowedOrigins = nil }()
+
+	hub := NewHub()
+	go hub.Run()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		HandleWebSocket(hub, w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	_, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		t.Fatal("expected missing origin to be rejected")
+	}
 }
 
 // TestDoubleJoinNoPanic verifies that a peer joining a second room

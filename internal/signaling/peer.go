@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -33,8 +34,9 @@ var upgrader = websocket.Upgrader{
 func checkOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		// Non-browser clients (curl, etc.) don't send Origin — allow for now
-		return true
+		// Tests and explicit non-browser deployments can omit Origin. In production
+		// main configures AllowedOrigins, so browser-like CSRF without Origin is rejected.
+		return len(AllowedOrigins) == 0 || os.Getenv("ALLOW_EMPTY_WS_ORIGIN") == "1"
 	}
 	for _, allowed := range AllowedOrigins {
 		if origin == allowed {
@@ -66,6 +68,13 @@ type SignalMessage struct {
 
 // HandleWebSocket upgrades an HTTP request to a WebSocket and starts read/write pumps.
 func HandleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
+	peerID, err := generatePeerID()
+	if err != nil {
+		log.Printf("[ws] peer id generation error: %v", err)
+		http.Error(w, "could not create peer", http.StatusInternalServerError)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("[ws] upgrade error: %v", err)
@@ -73,7 +82,7 @@ func HandleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer := &Peer{
-		ID:   generatePeerID(),
+		ID:   peerID,
 		hub:  hub,
 		conn: conn,
 		send: make(chan []byte, 256),
@@ -164,6 +173,11 @@ func (p *Peer) handleMessage(msg SignalMessage) {
 		log.Printf("[hub] peer=%s joined room=%s", p.ID, room.Code)
 
 	case "offer", "answer", "ice-candidate":
+		if !ValidatePeerID(msg.To) || len(msg.Payload) == 0 {
+			errMsg, _ := json.Marshal(SignalMessage{Type: "error", PeerID: "invalid signaling message"})
+			safeSend(p.send, errMsg)
+			return
+		}
 		// Relay WebRTC signaling messages to the target peer via the Hub.
 		// The server never inspects the payload — it's opaque signaling data.
 		msg.From = p.ID
@@ -182,14 +196,21 @@ func (p *Peer) disconnect() {
 
 // safeSend writes to a channel without blocking (drops message if full).
 func safeSend(ch chan []byte, data []byte) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[ws] dropped send to closed channel")
+		}
+	}()
 	select {
 	case ch <- data:
 	default:
 	}
 }
 
-func generatePeerID() string {
+func generatePeerID() (string, error) {
 	b := make([]byte, 8) // 16 hex chars
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

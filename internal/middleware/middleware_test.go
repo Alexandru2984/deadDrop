@@ -90,8 +90,8 @@ func TestSecurityHeaders(t *testing.T) {
 
 	expected := map[string]string{
 		"X-Content-Type-Options":    "nosniff",
-		"X-Frame-Options":          "DENY",
-		"Referrer-Policy":          "no-referrer",
+		"X-Frame-Options":           "DENY",
+		"Referrer-Policy":           "no-referrer",
 		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
 	}
 	for k, v := range expected {
@@ -115,8 +115,9 @@ func TestExtractIP(t *testing.T) {
 		expected string
 	}{
 		{"X-Real-IP", "10.0.0.1", "", "127.0.0.1:1234", "10.0.0.1"},
-		{"X-Forwarded-For", "", "10.0.0.2", "127.0.0.1:1234", "10.0.0.2"},
+		{"X-Forwarded-For", "", "10.0.0.2, 10.0.0.3", "127.0.0.1:1234", "10.0.0.2"},
 		{"RemoteAddr", "", "", "192.168.1.1:5678", "192.168.1.1"},
+		{"Untrusted proxy header ignored", "", "10.0.0.2", "8.8.8.8:5678", "8.8.8.8"},
 	}
 
 	for _, tt := range tests {
@@ -134,5 +135,36 @@ func TestExtractIP(t *testing.T) {
 				t.Errorf("ExtractIP = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestRequireSameOrigin(t *testing.T) {
+	called := false
+	handler := RequireSameOrigin(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "https://dead.micutu.com/api/logout", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	w := httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	if called {
+		t.Fatal("handler should not be called for cross-origin request")
+	}
+
+	called = false
+	req = httptest.NewRequest(http.MethodPost, "https://dead.micutu.com/api/logout", nil)
+	req.Header.Set("Origin", "https://dead.micutu.com")
+	w = httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	if !called {
+		t.Fatal("handler should be called for same-origin request")
 	}
 }

@@ -1,6 +1,6 @@
 # Go binaries
-deaddrop
-server
+/deaddrop
+/server
 *.exe
 *.exe~
 *.dll

@@ -35,8 +35,8 @@ type registerRequest struct {
 }
 
 type unregisterRequest struct {
-	peer     *Peer
-	done     chan struct{}
+	peer *Peer
+	done chan struct{}
 }
 
 // relayRequest routes a message to a target peer within a room, safely.
@@ -168,15 +168,19 @@ func (h *Hub) RemovePeer(peer *Peer) {
 // Relay routes a signaling message to a target peer within the sender's room.
 // Thread-safe via channel — avoids reading room.Peers from the readPump goroutine.
 func (h *Hub) Relay(from *Peer, targetID string, data []byte) {
-	h.relay <- &relayRequest{from: from, targetID: targetID, data: data}
+	select {
+	case h.relay <- &relayRequest{from: from, targetID: targetID, data: data}:
+	default:
+		log.Printf("[hub] relay queue full peer=%s target=%s", from.ID, targetID)
+	}
 }
 
-func GenerateRoomCode() string {
+func GenerateRoomCode() (string, error) {
 	b := make([]byte, 6) // produces 12 hex characters (~281 trillion combinations)
 	if _, err := rand.Read(b); err != nil {
-		log.Printf("[hub] crypto/rand error: %v", err)
+		return "", err
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 // ValidateRoomCode checks that a room code is 6-12 hex characters.
@@ -184,7 +188,19 @@ func ValidateRoomCode(code string) bool {
 	if len(code) < 6 || len(code) > 12 {
 		return false
 	}
-	for _, c := range code {
+	return isLowerHex(code)
+}
+
+// ValidatePeerID checks server-generated peer identifiers.
+func ValidatePeerID(id string) bool {
+	if len(id) != 16 {
+		return false
+	}
+	return isLowerHex(id)
+}
+
+func isLowerHex(s string) bool {
+	for _, c := range s {
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
 			return false
 		}
