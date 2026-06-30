@@ -81,6 +81,7 @@ func main() {
 
 	// Account management (auth enforced inside the handlers).
 	mux.HandleFunc("/api/account/verifier", authRL.Wrap(middleware.RequireSameOrigin(authH.SetVerifier)))
+	mux.HandleFunc("/api/account/duress", authRL.Wrap(middleware.RequireSameOrigin(authH.SetDuress)))
 	mux.HandleFunc("/api/account/delete", authRL.Wrap(middleware.RequireSameOrigin(authH.DeleteAccount)))
 
 	// Admin: issue single-use invite codes (X-Admin-Token header).

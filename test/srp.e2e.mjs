@@ -45,8 +45,19 @@ async function srpLogin(username, password, jar) {
   if (ch.json?.legacy) return { legacy: true };
   if (ch.status !== 200) return { status: ch.status };
   const { M1 } = await client.finish(ch.json.salt, ch.json.B);
-  const auth = await post('/api/srp/authenticate', { token: ch.json.token, M1 }, jar);
-  return { status: auth.status, json: auth.json, serverOK: auth.json?.M2 ? client.verifyServer(auth.json.M2) : false };
+  let M1d = '', clientD = null;
+  if (ch.json.salt2 && ch.json.B2) {
+    clientD = new ClientLogin(username, password, client.a);
+    clientD.start();
+    M1d = (await clientD.finish(ch.json.salt2, ch.json.B2)).M1;
+  }
+  const auth = await post('/api/srp/authenticate', { token: ch.json.token, M1, M1d }, jar);
+  const dur = !!auth.json?.duress;
+  const verifier = dur && clientD ? clientD : client;
+  return {
+    status: auth.status, json: auth.json, duress: dur,
+    serverOK: auth.json?.M2 ? verifier.verifyServer(auth.json.M2) : false,
+  };
 }
 
 (async () => {
@@ -68,7 +79,20 @@ async function srpLogin(username, password, jar) {
   const me = await get('/api/me', jar2);
   ok(me.status === 200 && me.json.username === USER, 'session works (/api/me)');
 
-  // 3. Wrong password must fail.
+  ok(login.duress === false, 'real login is not flagged as duress');
+
+  // 3. Duress password (decoy).
+  const DURESS = 'duress-decoy-pass-99';
+  const dreg = await register(USER, DURESS);
+  const setD = await post('/api/account/duress', { salt: dreg.salt, verifier: dreg.verifier }, jar2);
+  ok(setD.status === 200, 'set duress password (computed client-side)');
+  const dlogin = await srpLogin(USER, DURESS, {});
+  ok(dlogin.status === 200 && dlogin.duress === true, 'duress password logs in, flagged as duress');
+  ok(dlogin.serverOK === true, 'server proof verifies on duress login');
+  const rlogin = await srpLogin(USER, PASS, {});
+  ok(rlogin.status === 200 && rlogin.duress === false, 'real password still logs in as real');
+
+  // 4. A third (neither) password must fail.
   const bad = await srpLogin(USER, 'totally-wrong-password', {});
   ok(bad.status === 401, 'wrong password rejected (401)');
 

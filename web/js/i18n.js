@@ -45,6 +45,12 @@ const STRINGS = {
     'share.copied': '✓ Copied',
     'verify.verified': '✓ Verified',
     'lang.toggle': 'RO',
+    'duress.ph': 'Duress password (decoy)',
+    'duress.set': 'Set duress password',
+    'duress.saved': '✓ Saved',
+    'account.delete': 'Delete account',
+    'account.confirmDelete': 'Delete your account permanently?',
+    'duress.hint': 'Optional: a second password that also logs in (to a decoy). Hand it over under coercion without revealing your real one.',
   },
   ro: {
     'tagline': 'Anonim · Criptat · Efemer',
@@ -84,6 +90,12 @@ const STRINGS = {
     'share.copied': '✓ Copiat',
     'verify.verified': '✓ Verificat',
     'lang.toggle': 'EN',
+    'duress.ph': 'Parolă duress (decoy)',
+    'duress.set': 'Setează parola duress',
+    'duress.saved': '✓ Salvat',
+    'account.delete': 'Șterge contul',
+    'account.confirmDelete': 'Ștergi contul definitiv?',
+    'duress.hint': 'Opțional: o a doua parolă care tot te loghează (într-un decoy). O dai sub constrângere fără să dezvălui parola reală.',
   },
 };
 

@@ -48,7 +48,18 @@
   <div id="landing" class="page landing hidden">
     <div class="user-bar">
       <span>👤 <span id="user-display"></span></span>
+      <button id="settings-btn" class="btn btn-sm" title="Account">⚙️</button>
       <button id="logout-btn" class="btn btn-sm" data-i18n="logout">Logout</button>
+    </div>
+
+    <div id="account-panel" class="account-panel hidden">
+      <input id="duress-pass" type="password" placeholder="Duress password (decoy)"
+             data-i18n-ph="duress.ph" autocomplete="new-password" />
+      <div class="account-actions">
+        <button id="set-duress-btn" class="btn btn-sm" data-i18n="duress.set">Set duress password</button>
+        <button id="del-account-btn" class="btn btn-sm btn-danger" data-i18n="account.delete">Delete account</button>
+      </div>
+      <p class="account-hint" data-i18n="duress.hint">Optional: a second password that also logs in (to a decoy).</p>
     </div>
 
     <div class="logo">💀</div>

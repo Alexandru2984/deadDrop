@@ -92,14 +92,39 @@ func (s *store) deleteUser(username string) error {
 	return s.save()
 }
 
+// setDuress sets (or clears, when salt/verifier are empty) the duress credential
+// for an existing account.
+func (s *store) setDuress(username, saltHex, verifierHex string) error {
+	clear := saltHex == "" && verifierHex == ""
+	if !clear {
+		if !validSalt(saltHex) {
+			return errors.New("invalid salt")
+		}
+		if _, err := srp.DecodeVerifier(verifierHex); err != nil {
+			return errors.New("invalid verifier")
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, ok := s.users[username]
+	if !ok {
+		return errors.New("no such account")
+	}
+	u.DuressSalt, u.DuressVerifier = saltHex, verifierHex
+	s.users[username] = u
+	return s.save()
+}
+
 /* ── pending SRP challenges (one-time, short-lived) ── */
 
 type pendingChallenge struct {
-	username string
-	A        *big.Int
-	ch       *srp.Challenge
-	real     bool
-	expiry   time.Time
+	username   string
+	A          *big.Int
+	ch         *srp.Challenge // real verifier
+	real       bool           // a real account exists
+	chDuress   *srp.Challenge // duress verifier (or a deterministic dummy)
+	realDuress bool           // a real duress verifier exists
+	expiry     time.Time
 }
 
 type challengeStore struct {
@@ -151,10 +176,11 @@ func (cs *challengeStore) reap() {
 }
 
 // fakeSaltAndVerifier deterministically derives a plausible salt+verifier for an
-// unknown username so the challenge step is indistinguishable from a real account.
-func (cs *challengeStore) fakeSaltAndVerifier(username string) (string, *srp.Challenge) {
-	salt := hmacSum(cs.secret, "salt:"+username)[:16]
-	fakePw := hex.EncodeToString(hmacSum(cs.secret, "pw:"+username))
+// unknown username (or a missing duress slot) so the challenge step is
+// indistinguishable from a real account. kind separates the real vs duress dummies.
+func (cs *challengeStore) fakeSaltAndVerifier(kind, username string) (string, *srp.Challenge) {
+	salt := hmacSum(cs.secret, kind+":salt:"+username)[:16]
+	fakePw := hex.EncodeToString(hmacSum(cs.secret, kind+":pw:"+username))
 	v := srp.Verifier(username, fakePw, salt)
 	ch, _ := srp.NewChallenge(v)
 	return hex.EncodeToString(salt), ch
@@ -373,6 +399,7 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build the real challenge (real verifier, or an anti-enumeration dummy).
 	var ch *srp.Challenge
 	var saltHex string
 	real := false
@@ -385,20 +412,44 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 		ch, _ = srp.NewChallenge(v)
 		saltHex, real = u.Salt, true
 	} else {
-		// Unknown user: emit a deterministic fake challenge (anti-enumeration).
-		saltHex, ch = h.challenges.fakeSaltAndVerifier(body.Username)
+		saltHex, ch = h.challenges.fakeSaltAndVerifier("real", body.Username)
 	}
-	if ch == nil {
+
+	// Always also emit a SECOND (duress) challenge — a real one if the account has a
+	// duress credential, otherwise a deterministic dummy. Because the response shape
+	// never changes, an observer cannot tell whether a duress password is configured.
+	var chD *srp.Challenge
+	var saltD string
+	realDuress := false
+	if ok && u.hasDuress() {
+		if vd, derr := srp.DecodeVerifier(u.DuressVerifier); derr == nil {
+			chD, _ = srp.NewChallenge(vd)
+			saltD, realDuress = u.DuressSalt, true
+		}
+	}
+	if chD == nil {
+		saltD, chD = h.challenges.fakeSaltAndVerifier("duress", body.Username)
+	}
+	if ch == nil || chD == nil {
 		jsonErr(w, "server error", http.StatusInternalServerError)
 		return
 	}
-	token := h.challenges.put(&pendingChallenge{username: body.Username, A: A, ch: ch, real: real})
-	jsonOK(w, map[string]any{"token": token, "salt": saltHex, "B": ch.Bpub.Text(16)})
+
+	token := h.challenges.put(&pendingChallenge{
+		username: body.Username, A: A,
+		ch: ch, real: real, chDuress: chD, realDuress: realDuress,
+	})
+	jsonOK(w, map[string]any{
+		"token": token,
+		"salt":  saltHex, "B": ch.Bpub.Text(16),
+		"salt2": saltD, "B2": chD.Bpub.Text(16),
+	})
 }
 
 type srpAuthReq struct {
 	Token string `json:"token"`
 	M1    string `json:"M1"`
+	M1d   string `json:"M1d"`
 }
 
 func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
@@ -421,20 +472,27 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
 	}
-	M1, err := hex.DecodeString(body.M1)
-	if err != nil {
-		jsonErr(w, "invalid credentials", http.StatusUnauthorized)
+	M1, _ := hex.DecodeString(body.M1)
+	M1d, _ := hex.DecodeString(body.M1d)
+
+	// Try the real proof first, then the duress proof. Exactly one can match,
+	// depending on which password the client used.
+	if M2, _, verr := p.ch.Verify(p.A, M1); verr == nil && p.real {
+		h.lockout.reset(p.username)
+		h.setCookieSession(w, r, p.username, false)
+		jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "duress": false})
 		return
 	}
-	M2, _, verr := p.ch.Verify(p.A, M1)
-	if verr != nil || !p.real {
-		h.lockout.fail(p.username)
-		jsonErr(w, "invalid credentials", http.StatusUnauthorized)
-		return
+	if len(M1d) > 0 && p.realDuress {
+		if M2, _, verr := p.chDuress.Verify(p.A, M1d); verr == nil {
+			h.lockout.reset(p.username)
+			h.setCookieSession(w, r, p.username, true)
+			jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "duress": true})
+			return
+		}
 	}
-	h.lockout.reset(p.username)
-	h.setCookieSession(w, r, p.username)
-	jsonOK(w, map[string]string{"username": p.username, "M2": hex.EncodeToString(M2)})
+	h.lockout.fail(p.username)
+	jsonErr(w, "invalid credentials", http.StatusUnauthorized)
 }
 
 // SetVerifier installs a new salt+verifier for the logged-in user (legacy upgrade
@@ -459,6 +517,44 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.setVerifier(username, body.Salt, body.Verifier); err != nil {
+		jsonErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	jsonOK(w, map[string]string{"status": "ok"})
+}
+
+// SetDuress sets or clears the duress credential for the logged-in user. The
+// browser computes (salt, verifier) from the duress password — it never reaches
+// the server. A duress session must not be allowed to change the duress credential.
+func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	c, err := r.Cookie("dd_session")
+	if err != nil {
+		jsonErr(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+	username, duress, ok := h.sess.getMeta(c.Value)
+	if !ok {
+		jsonErr(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+	if duress {
+		jsonErr(w, "forbidden", http.StatusForbidden) // a decoy session can't touch duress settings
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
+	var body struct {
+		Salt     string `json:"salt"`
+		Verifier string `json:"verifier"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.setDuress(username, body.Salt, body.Verifier); err != nil {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -506,7 +602,7 @@ func (h *Handler) GenerateInvite(w http.ResponseWriter, r *http.Request) {
 /* ── helpers ── */
 
 func (h *Handler) startSession(w http.ResponseWriter, r *http.Request, username string) {
-	token, err := h.sess.create(username)
+	token, err := h.sess.create(username, false)
 	if err != nil {
 		jsonErr(w, "could not create session", http.StatusInternalServerError)
 		return
@@ -515,8 +611,8 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request, username 
 	jsonOK(w, map[string]string{"username": username})
 }
 
-func (h *Handler) setCookieSession(w http.ResponseWriter, r *http.Request, username string) {
-	token, err := h.sess.create(username)
+func (h *Handler) setCookieSession(w http.ResponseWriter, r *http.Request, username string, duress bool) {
+	token, err := h.sess.create(username, duress)
 	if err != nil {
 		jsonErr(w, "could not create session", http.StatusInternalServerError)
 		return

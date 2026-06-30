@@ -73,6 +73,11 @@ class DeadDrop {
       landing:     $('#landing'),
       userDisplay: $('#user-display'),
       logoutBtn:   $('#logout-btn'),
+      settingsBtn:  $('#settings-btn'),
+      accountPanel: $('#account-panel'),
+      duressPass:   $('#duress-pass'),
+      setDuressBtn: $('#set-duress-btn'),
+      delAccountBtn:$('#del-account-btn'),
       createBtn:   $('#create-room'),
       joinBtn:     $('#join-room'),
       roomInput:   $('#room-code-input'),
@@ -120,6 +125,9 @@ class DeadDrop {
     this.el.registerBtn.addEventListener('click', () => this._register());
     this.el.langBtn.addEventListener('click', () => setLang(getLang() === 'ro' ? 'en' : 'ro'));
     this.el.logoutBtn.addEventListener('click', () => this._logout());
+    this.el.settingsBtn.addEventListener('click', () => this.el.accountPanel.classList.toggle('hidden'));
+    this.el.setDuressBtn.addEventListener('click', () => this._setDuress());
+    this.el.delAccountBtn.addEventListener('click', () => this._deleteAccount());
     // Room
     this.el.createBtn.addEventListener('click', () => this.createRoom());
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
@@ -189,6 +197,7 @@ class DeadDrop {
       if (res.ok) {
         const data = await res.json();
         this.username = data.username;
+        this._duress = !!data.duress;
         this._showPage('landing');
       } else {
         this._showPage('auth');
@@ -212,14 +221,24 @@ class DeadDrop {
       if (!ch.ok) { this._showAuthError(ch.data.error || 'Login failed'); return; }
 
       const { M1 } = await client.finish(ch.data.salt, ch.data.B);
-      const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1 });
+      // Second proof against the duress challenge, reusing the same ephemeral `a`.
+      // Exactly one of the two proofs matches server-side (real vs duress password).
+      let clientD = null, M1d = '';
+      if (ch.data.salt2 && ch.data.B2) {
+        clientD = new ClientLogin(username, password, client.a);
+        clientD.start();
+        M1d = (await clientD.finish(ch.data.salt2, ch.data.B2)).M1;
+      }
+      const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d });
       if (!auth.ok) { this._showAuthError(auth.data.error || 'Invalid credentials'); return; }
-      // Authenticate the SERVER too — proves it knows our verifier, not just us.
-      if (!client.verifyServer(auth.data.M2)) {
+      // Authenticate the SERVER too — against whichever proof matched.
+      const verifier = auth.data.duress && clientD ? clientD : client;
+      if (!verifier.verifyServer(auth.data.M2)) {
         this._showAuthError('Server authentication failed — do not trust this connection.');
         return;
       }
       this.username = auth.data.username;
+      this._duress = !!auth.data.duress;
       this._afterAuth();
     } catch {
       this._showAuthError('Connection failed');
@@ -238,6 +257,7 @@ class DeadDrop {
       await this._postJSON('/api/account/verifier', { salt, verifier });
     } catch { /* upgrade is best-effort; legacy login already succeeded */ }
     this.username = res.data.username;
+    this._duress = false;
     this._afterAuth();
   }
 
@@ -270,7 +290,30 @@ class DeadDrop {
   _afterAuth() {
     this.el.authPass.value = '';
     this.el.authInvite.value = '';
+    this.el.accountPanel.classList.add('hidden');
     this._showPage('landing');
+  }
+
+  // Set (or update) the duress password. Computed locally — never sent in the clear.
+  async _setDuress() {
+    const pw = this.el.duressPass.value;
+    if (pw.length < 8) {
+      this.el.setDuressBtn.textContent = t('duress.set');
+      this.el.duressPass.focus();
+      return;
+    }
+    const { salt, verifier } = await srpRegister(this.username, pw);
+    const res = await this._postJSON('/api/account/duress', { salt, verifier });
+    this.el.duressPass.value = '';
+    this.el.setDuressBtn.textContent = res.ok ? t('duress.saved') : (res.data.error || t('duress.set'));
+    setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);
+  }
+
+  async _deleteAccount() {
+    if (!confirm(t('account.confirmDelete'))) return;
+    try { await this._postJSON('/api/account/delete', {}); } catch { /* */ }
+    this._cleanup();
+    location.replace(location.origin + '/');
   }
 
   async _postJSON(path, body) {
@@ -323,6 +366,8 @@ class DeadDrop {
       case 'landing':
         this.el.landing.classList.remove('hidden');
         this.el.userDisplay.textContent = this.username;
+        // Decoy: a duress session hides account settings so the coercer can't poke at them.
+        this.el.settingsBtn.style.display = this._duress ? 'none' : '';
         if (this._pendingJoin) {
           this.el.roomInput.value = this._pendingJoin;
           this._pendingJoin = null;

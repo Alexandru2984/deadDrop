@@ -60,6 +60,9 @@
     <span class="onion">http://bhfutxa5e7tvpw4y4zhm2bc7o3kvbdgug34i6bahjr2eb5ifpfobuvid.onion</span>
     <p style="margin-top:8px"><em>Limitation:</em> Tor carries TCP only, so the peer-to-peer channel (UDP) may not establish over the onion. The onion is best for privately loading the app and signing in; the live P2P chat still needs a normal connection.</p>
 
+    <h2>Duress / decoy password</h2>
+    <p>In account settings (⚙️) you can set an optional <strong>duress password</strong>. Entering it logs you into a normal-looking decoy session instead of your real one. Because Dead Drop stores nothing between sessions, the practical value is mainly that you can hand over a <em>working</em> password under coercion without revealing your real one — the verifier check is done so the server can’t tell, from the request, whether a duress password even exists. It is not a substitute for the panic button (💣) or for simply not opening the app under duress.</p>
+
     <h2>What this does NOT protect against</h2>
     <ul>
       <li>A <strong>compromised device</strong> (malware, keylogger, someone reading over your shoulder). Encryption can’t help if your screen is already visible.</li>

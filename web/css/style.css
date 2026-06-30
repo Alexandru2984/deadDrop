@@ -153,6 +153,22 @@ select {
   justify-content: center;
 }
 
+.account-panel {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: -4px 0 8px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.account-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.account-actions .btn { flex: 1; }
+.account-hint { color: var(--dim); font-size: 11px; line-height: 1.5; }
+
 .logo {
   font-size: 56px;
   filter: drop-shadow(0 0 20px rgba(0, 232, 123, 0.3));

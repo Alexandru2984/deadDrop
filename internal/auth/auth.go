@@ -29,9 +29,15 @@ type user struct {
 	Hash     string `json:"hash,omitempty"`     // legacy bcrypt over SHA-256(password)
 	Salt     string `json:"salt,omitempty"`     // SRP salt (hex)
 	Verifier string `json:"verifier,omitempty"` // SRP verifier v = g^x mod N (hex)
+	// Optional duress credential: logging in with it succeeds but flags the session
+	// as duress (decoy), so a coerced user can surrender a working password without
+	// revealing the real one.
+	DuressSalt     string `json:"duressSalt,omitempty"`
+	DuressVerifier string `json:"duressVerifier,omitempty"`
 }
 
-func (u user) isSRP() bool { return u.Verifier != "" }
+func (u user) isSRP() bool      { return u.Verifier != "" }
+func (u user) hasDuress() bool  { return u.DuressVerifier != "" }
 
 type store struct {
 	mu        sync.RWMutex
@@ -124,6 +130,7 @@ func prehashPassword(password string) []byte {
 
 type session struct {
 	username  string
+	duress    bool
 	expiresAt time.Time
 }
 
@@ -138,25 +145,30 @@ func newSessions() *sessions {
 	return sm
 }
 
-func (sm *sessions) create(username string) (string, error) {
+func (sm *sessions) create(username string, duress bool) (string, error) {
 	tok, err := genToken()
 	if err != nil {
 		return "", err
 	}
 	sm.mu.Lock()
-	sm.m[tok] = &session{username: username, expiresAt: time.Now().Add(24 * time.Hour)}
+	sm.m[tok] = &session{username: username, duress: duress, expiresAt: time.Now().Add(24 * time.Hour)}
 	sm.mu.Unlock()
 	return tok, nil
 }
 
 func (sm *sessions) get(token string) (string, bool) {
+	username, _, ok := sm.getMeta(token)
+	return username, ok
+}
+
+func (sm *sessions) getMeta(token string) (string, bool, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	s, ok := sm.m[token]
 	if !ok || time.Now().After(s.expiresAt) {
-		return "", false
+		return "", false, false
 	}
-	return s.username, true
+	return s.username, s.duress, true
 }
 
 func (sm *sessions) delete(token string) {
@@ -245,7 +257,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	token, err := h.sess.create(body.Username)
+	token, err := h.sess.create(body.Username, false)
 	if err != nil {
 		log.Printf("[auth] session token error: %v", err)
 		jsonErr(w, "could not create session", http.StatusInternalServerError)
@@ -274,7 +286,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
-	token, err := h.sess.create(body.Username)
+	token, err := h.sess.create(body.Username, false)
 	if err != nil {
 		log.Printf("[auth] session token error: %v", err)
 		jsonErr(w, "could not create session", http.StatusInternalServerError)
@@ -310,12 +322,12 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	username, ok := h.sess.get(c.Value)
+	username, duress, ok := h.sess.getMeta(c.Value)
 	if !ok {
 		jsonErr(w, "session expired", http.StatusUnauthorized)
 		return
 	}
-	jsonOK(w, map[string]string{"username": username})
+	jsonOK(w, map[string]any{"username": username, "duress": duress})
 }
 
 // RequireAuth rejects unauthenticated requests before they reach the next handler.

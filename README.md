@@ -142,5 +142,3 @@ Production setup (systemd, nginx, coturn, Tor, invites) is documented in
 ## Future Work
 
 - [ ] Multi-peer mesh group rooms
-- [ ] Duress / decoy password
-- [ ] QR code for room joining
