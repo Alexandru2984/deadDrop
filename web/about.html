@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex, nofollow" />
+  <title>💀 Dead Drop — Security &amp; Privacy</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
+  <style>
+    .doc { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; overflow-y: auto; height: 100dvh; }
+    .doc h1 { color: var(--accent); font-size: clamp(22px, 5vw, 30px); letter-spacing: 4px; margin-bottom: 4px; }
+    .doc h2 { color: var(--text); font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .doc p, .doc li { color: var(--text); font-size: 14px; line-height: 1.7; }
+    .doc ul { margin: 8px 0 8px 20px; }
+    .doc li { margin: 4px 0; }
+    .doc .lead { color: var(--dim); margin-bottom: 8px; }
+    .doc a { color: var(--accent); }
+    .doc code, .doc .onion { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; font-size: 12px; word-break: break-all; }
+    .doc .onion { display: inline-block; color: var(--accent); padding: 8px 10px; margin-top: 6px; }
+    .yes { color: var(--accent); } .no { color: var(--danger); }
+    .back { display: inline-block; margin-bottom: 16px; color: var(--dim); text-decoration: none; }
+    .pill { display:inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--dim); margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <main class="doc">
+    <a class="back" href="/">← Back to Dead Drop</a>
+    <h1>SECURITY &amp; PRIVACY</h1>
+    <p class="lead">Honest threat model. What this protects, and — just as important — what it does not.</p>
+
+    <h2>How a conversation is protected</h2>
+    <ul>
+      <li><strong>End-to-end encryption.</strong> Messages, files and calls travel directly between the two browsers over a WebRTC data channel. They are encrypted with <strong>AES-256-GCM</strong> using a key agreed by <strong>ECDH (P-256)</strong> → <strong>HKDF-SHA256</strong>. The server only relays connection setup — it never sees keys or content.</li>
+      <li><strong>Authenticated handshake.</strong> A ZRTP-style commit-reveal step stops a relay from secretly sitting in the middle and grinding keys.</li>
+      <li><strong>Forward secrecy.</strong> The session re-keys with fresh ECDH every ~10 minutes and destroys old keys, so a device seized later cannot decrypt earlier messages.</li>
+      <li><strong>Zero-knowledge login (SRP-6a).</strong> Your password is turned into a verifier <em>in your browser</em>. It never reaches the server — or Cloudflare.</li>
+      <li><strong>Self-destruct.</strong> Messages can carry a TTL and/or burn-after-reading; deletion is bilateral and nothing is stored on the server.</li>
+    </ul>
+
+    <h2>⚠️ Verify your safety code</h2>
+    <p>When a chat becomes encrypted, both sides see a <strong>6-emoji safety code</strong>. Read it aloud to your peer (in person or on a call you trust). If the codes match, no one is intercepting. <strong>If they differ, stop — the line is compromised.</strong> This is the one step only <em>you</em> can do.</p>
+
+    <h2>What the server can and cannot see</h2>
+    <ul>
+      <li><span class="no">✗ Cannot</span> read your messages, files, or call audio/video (end-to-end encrypted).</li>
+      <li><span class="no">✗ Cannot</span> see your password (SRP — it never leaves your device).</li>
+      <li><span class="yes">✓ Can</span> see connection metadata: that two peers shared a room code, and (unless you use “Max anonymity”) their IP addresses during setup.</li>
+      <li><strong>Cloudflare</strong> terminates TLS in front of the site, so it can see request metadata and signalling. It <em>cannot</em> see message content (that goes peer-to-peer) or your password (SRP). To avoid it entirely, use the Tor address below.</li>
+    </ul>
+
+    <h2>Hide your IP from your peer</h2>
+    <p>Enable <strong>🛡️ Max anonymity</strong> on the home screen to relay the connection through the server (self-hosted TURN). Your peer then never learns your IP, and vice-versa — the relay only ever sees encrypted DTLS, never content.</p>
+
+    <h2>Access over Tor <span class="pill">no Cloudflare · no DNS</span></h2>
+    <p>Reach the app without touching Cloudflare or leaking a DNS lookup:</p>
+    <span class="onion">http://bhfutxa5e7tvpw4y4zhm2bc7o3kvbdgug34i6bahjr2eb5ifpfobuvid.onion</span>
+    <p style="margin-top:8px"><em>Limitation:</em> Tor carries TCP only, so the peer-to-peer channel (UDP) may not establish over the onion. The onion is best for privately loading the app and signing in; the live P2P chat still needs a normal connection.</p>
+
+    <h2>What this does NOT protect against</h2>
+    <ul>
+      <li>A <strong>compromised device</strong> (malware, keylogger, someone reading over your shoulder). Encryption can’t help if your screen is already visible.</li>
+      <li>Your <strong>peer</strong> screenshotting or saving what you send. Burn/TTL are cooperative, not enforced on a malicious peer.</li>
+      <li><strong>Skipping the safety-code check</strong> — without it, end-to-end encryption can’t rule out a man-in-the-middle.</li>
+      <li><strong>Traffic analysis</strong> at a global scale (who talks to whom, when). Tor + Max-anonymity help, but nothing is magic.</li>
+    </ul>
+
+    <h2>Transparency</h2>
+    <p>No accounts beyond a handle, no email, no message storage, no third-party analytics, no third-party STUN/TURN. Security headers and CSP are strict and same-origin only.</p>
+
+    <a class="back" href="/">← Back to Dead Drop</a>
+  </main>
+</body>
+</html>

@@ -111,3 +111,30 @@ empty list, registration is effectively closed.
 Pre-SRP (bcrypt) accounts still log in via the legacy path and are transparently
 upgraded to SRP on first login (the verifier is computed locally; the password is
 not resent). Failed logins are throttled per-account (lockout after 5 tries).
+
+## 6. Tor onion service (Cloudflare-free access)
+
+`tor` serves the app as a v3 onion straight to the Go app on loopback, so visitors
+never touch Cloudflare or leak the DNS lookup for dead.micutu.com.
+
+`/etc/tor/torrc`:
+
+```
+HiddenServiceDir /var/lib/tor/deaddrop/
+HiddenServicePort 80 127.0.0.1:8100
+```
+
+The onion address is in `/var/lib/tor/deaddrop/hostname`. Add it to
+`ALLOWED_ORIGINS` in `/etc/deaddrop.env` (this env REPLACES the built-in list, so
+include every origin):
+
+```
+ALLOWED_ORIGINS=https://dead.micutu.com,http://dead.micutu.com,http://<onion>.onion,http://localhost:8100,http://127.0.0.1:8100
+```
+
+Test through Tor: `curl --socks5-hostname 127.0.0.1:9050 http://<onion>.onion/`.
+
+> **Limitation:** Tor carries TCP only, so the WebRTC P2P data channel (UDP) does
+> not establish over the onion — the onion is for **private access** to load the
+> app and run signalling without Cloudflare/DNS exposure. Actual peer-to-peer chat
+> still needs a non-Tor transport (or TURN-over-TCP, which reveals the relay IP).
