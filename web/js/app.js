@@ -38,7 +38,17 @@ class DeadDrop {
     this._bindDOM();
     this._bindEvents();
     this._initMsgManager();
+    this._readJoinHash();
     this._checkAuth();
+  }
+
+  // Parse a shared join link (#join=<code>) and remember the room to pre-fill.
+  _readJoinHash() {
+    const m = location.hash.match(/^#join=([0-9a-f]{6,12})$/i);
+    if (m) {
+      this._pendingJoin = m[1].toLowerCase();
+      history.replaceState(null, '', location.pathname); // drop the code from the URL bar
+    }
   }
 
   /* ── DOM ── */
@@ -72,6 +82,7 @@ class DeadDrop {
       msgInput:    $('#msg-input'),
       sendBtn:     $('#send-btn'),
       attachBtn:   $('#attach-btn'),
+      recordBtn:   $('#record-btn'),
       fileInput:   $('#file-input'),
       burnToggle:  $('#burn-toggle'),
       ttlSelect:   $('#ttl-select'),
@@ -131,6 +142,7 @@ class DeadDrop {
       if (file) this.sendFile(file);
       e.target.value = '';
     });
+    this.el.recordBtn.addEventListener('click', () => this._toggleRecord());
     // Drag-and-drop on messages area
     const drop = this.el.messages;
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(ev =>
@@ -306,6 +318,11 @@ class DeadDrop {
       case 'landing':
         this.el.landing.classList.remove('hidden');
         this.el.userDisplay.textContent = this.username;
+        if (this._pendingJoin) {
+          this.el.roomInput.value = this._pendingJoin;
+          this._pendingJoin = null;
+          this.el.joinBtn.focus();
+        }
         break;
       case 'chat':
         this.el.chatWrap.classList.remove('hidden');
@@ -338,7 +355,26 @@ class DeadDrop {
       return;
     }
     this._enterChat(this.roomCode);
+    this._renderShareLink(this.roomCode);
     this._setStatus('waiting', '⏳ Waiting for peer…');
+  }
+
+  _renderShareLink(code) {
+    const link = `${location.origin}/#join=${code}`;
+    const el = document.createElement('div');
+    el.className = 'msg system share-link';
+    el.innerHTML = 'Send your peer this link (or the code above):<br>' +
+      '<span class="share-url"></span> <button class="btn btn-sm copy-link-btn">Copy link</button>';
+    el.querySelector('.share-url').textContent = link;
+    const btn = el.querySelector('.copy-link-btn');
+    btn.addEventListener('click', () => {
+      navigator.clipboard.writeText(link).then(() => {
+        btn.textContent = '✓ Copied';
+        setTimeout(() => (btn.textContent = 'Copy link'), 1500);
+      });
+    });
+    this.el.messages.appendChild(el);
+    this.el.messages.scrollTop = this.el.messages.scrollHeight;
   }
 
   async joinRoom() {
@@ -538,6 +574,49 @@ class DeadDrop {
       console.error('File send failed:', err);
       this._renderSystem('File transfer failed');
     }
+  }
+
+  /* ── Voice messages ── */
+
+  async _toggleRecord() {
+    if (this._recorder && this._recorder.state === 'recording') { this._stopRecording(); return; }
+    if (!this.encrypted) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this._recordStream = stream;
+      const rec = new MediaRecorder(stream);
+      this._recorder = rec;
+      this._recChunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) this._recChunks.push(e.data); };
+      rec.onstop = () => this._finishRecording();
+      rec.start();
+      this.el.recordBtn.classList.add('recording');
+      this.el.recordBtn.textContent = '⏹️';
+      this._recTimer = setTimeout(() => this._stopRecording(), 120000); // 2 min cap
+    } catch {
+      this._renderSystem('Microphone access denied');
+    }
+  }
+
+  _stopRecording() {
+    clearTimeout(this._recTimer);
+    if (this._recorder && this._recorder.state === 'recording') this._recorder.stop();
+  }
+
+  _finishRecording() {
+    this.el.recordBtn.classList.remove('recording');
+    this.el.recordBtn.textContent = '🎙️';
+    if (this._recordStream) {
+      for (const t of this._recordStream.getTracks()) t.stop();
+      this._recordStream = null;
+    }
+    const type = (this._recorder && this._recorder.mimeType) || 'audio/webm';
+    const blob = new Blob(this._recChunks, { type });
+    this._recChunks = [];
+    this._recorder = null;
+    if (!blob.size || !this.encrypted) return;
+    const ext = type.includes('ogg') ? 'ogg' : 'webm';
+    this.sendFile(new File([blob], `voice-${Date.now()}.${ext}`, { type }));
   }
 
   /* ── Messaging ── */
@@ -1109,3 +1188,10 @@ class DeadDrop {
 }
 
 new DeadDrop();
+
+// Register the service worker (installable PWA + offline shell). Best-effort.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}

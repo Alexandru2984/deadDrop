@@ -499,6 +499,19 @@ select { cursor: pointer; width: auto; }
   text-align: center;
 }
 
+.msg.share-link {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  line-height: 1.8;
+}
+.share-url {
+  color: var(--accent);
+  word-break: break-all;
+  font-size: 11px;
+}
+
 .msg-meta {
   font-size: 11px;
   color: var(--dim);
@@ -680,6 +693,21 @@ select { cursor: pointer; width: auto; }
 }
 
 #attach-btn:hover { opacity: 1; }
+
+#record-btn {
+  font-size: 18px;
+  padding: 6px 4px;
+  min-width: 32px;
+  opacity: 0.7;
+  transition: opacity 0.2s;
+}
+#record-btn:hover { opacity: 1; }
+#record-btn.recording {
+  opacity: 1;
+  color: var(--danger);
+  animation: rec-pulse 1s ease-in-out infinite;
+}
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* ── File receiving progress ── */
 
@@ -910,7 +938,7 @@ select { cursor: pointer; width: auto; }
   .controls { flex-wrap: wrap; }
   .input-row {
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr) auto;
+    grid-template-columns: 32px 32px minmax(0, 1fr) auto;
   }
   .call-controls {
     gap: 8px;
