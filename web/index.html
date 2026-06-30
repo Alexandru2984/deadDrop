@@ -71,6 +71,19 @@
       </div>
     </header>
 
+    <!-- Safety-code verification (SAS) -->
+    <div id="verify-bar" class="verify-bar hidden">
+      <div class="verify-row">
+        <span class="verify-label">🔐 Safety code</span>
+        <span id="verify-sas" class="verify-sas" aria-live="polite"></span>
+        <button id="verify-btn" class="btn btn-sm verify-btn">Mark verified</button>
+      </div>
+      <p class="verify-hint">
+        Read this aloud to your peer (call/in person). If your codes match, no one is
+        intercepting. If they differ, <strong>stop</strong> — the line is compromised.
+      </p>
+    </div>
+
     <!-- Incoming call notification -->
     <div id="incoming-call" class="incoming-call hidden">
       <span class="incoming-call-icon">📞</span>

@@ -9,7 +9,10 @@ import (
 )
 
 const (
-	MaxPeersPerRoom = 10
+	// Dead Drop is strictly 1:1 — the client manages a single peer connection, so a
+	// third participant would silently corrupt the session. Cap rooms at two until
+	// mesh group chat lands. (Bump this when multi-peer support is added.)
+	MaxPeersPerRoom = 2
 	MaxRooms        = 1000
 )
 

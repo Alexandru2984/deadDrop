@@ -71,6 +71,9 @@ class DeadDrop {
       burnToggle:  $('#burn-toggle'),
       ttlSelect:   $('#ttl-select'),
       status:      $('#status'),
+      verifyBar:   $('#verify-bar'),
+      verifySas:   $('#verify-sas'),
+      verifyBtn:   $('#verify-btn'),
       // Call
       callBtn:       $('#call-btn'),
       incomingCall:  $('#incoming-call'),
@@ -97,6 +100,7 @@ class DeadDrop {
     this.el.createBtn.addEventListener('click', () => this.createRoom());
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
+    this.el.verifyBtn.addEventListener('click', () => this._markVerified());
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
     this.el.msgInput.addEventListener('keydown', (e) => {
@@ -390,19 +394,45 @@ class DeadDrop {
       case 'encrypted':
         this.encrypted = true;
         this._setStatus('encrypted', `🔒 E2E Encrypted`);
-        if (sas) {
-          this._renderSystem(`🔐 Security code: ${sas} — Verify this matches your peer's code to confirm no one is intercepting.`);
-        }
+        if (sas) this._showVerify(sas);
         this.el.msgInput.focus();
         this.el.callBtn.style.display = '';
+        break;
+      case 'insecure':
+        // Commit-reveal handshake (or rekey) failed — the channel may be tampered with.
+        this.encrypted = false;
+        this._setStatus('disconnected', '⛔ Insecure — handshake failed');
+        this.el.verifyBar.classList.remove('hidden', 'verified');
+        this.el.verifyBar.classList.add('insecure');
+        this.el.verifySas.textContent = '⚠️ MITM?';
+        this._renderSystem('⛔ Secure handshake failed — someone may be intercepting the connection. The session was closed. Do not trust this channel.');
+        this.el.callBtn.style.display = 'none';
+        this._endCallCleanup();
         break;
       case 'disconnected':
         this.encrypted = false;
         this._setStatus('disconnected', '❌ Peer disconnected');
+        this._hideVerify();
         this.el.callBtn.style.display = 'none';
         this._endCallCleanup();
         break;
     }
+  }
+
+  _showVerify(sas) {
+    this.el.verifyBar.classList.remove('hidden', 'verified', 'insecure');
+    this.el.verifySas.textContent = sas;
+    this.el.verifyBtn.textContent = 'Mark verified';
+  }
+
+  _markVerified() {
+    this.el.verifyBar.classList.add('verified');
+    this.el.verifyBtn.textContent = '✓ Verified';
+  }
+
+  _hideVerify() {
+    this.el.verifyBar.classList.add('hidden');
+    this.el.verifyBar.classList.remove('verified', 'insecure');
   }
 
   /* ── File transfer ── */
@@ -449,8 +479,8 @@ class DeadDrop {
     const ttl = this._normalizeTTL(this.el.ttlSelect.value);
     const id = crypto.randomUUID();
 
-    const { ciphertext, iv } = await this.crypto.encrypt(text);
-    this.peer.send({ type: 'chat', id, ciphertext, iv, ttl, burnAfterReading: burn });
+    const { ciphertext, iv, epoch } = await this.crypto.encrypt(text);
+    this.peer.send({ type: 'chat', id, ciphertext, iv, epoch, ttl, burnAfterReading: burn });
 
     this._renderMsg(id, text, true, ttl, burn);
     this.el.msgInput.value = '';
@@ -462,7 +492,7 @@ class DeadDrop {
       case 'chat': {
         if (!this._validMessageID(msg.id) || !this._validEncryptedPayload(msg)) return;
         try {
-          const text = await this.crypto.decrypt(msg.ciphertext, msg.iv);
+          const text = await this.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
           this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading);
           if (msg.burnAfterReading) {
@@ -527,12 +557,12 @@ class DeadDrop {
   async _onFileComplete(result) {
     try {
       // Decrypt metadata
-      const metaJson = await this.crypto.decrypt(result.meta.ciphertext, result.meta.iv);
+      const metaJson = await this.crypto.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch);
       const meta = this._sanitizeFileMeta(JSON.parse(metaJson));
       if (!meta) throw new Error('Invalid file metadata');
 
       // Decrypt file data
-      const fileData = await this.crypto.decryptBinary(result.ciphertext, result.fileIv);
+      const fileData = await this.crypto.decryptBinary(result.ciphertext, result.fileIv, result.fileEpoch);
       const blob    = new Blob([fileData], { type: meta.fileType });
       const blobUrl = URL.createObjectURL(blob);
 

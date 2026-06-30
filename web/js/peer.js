@@ -7,10 +7,10 @@
  * so the server never sees encryption keys.
  */
 
-import { bufToB64, b64ToBuf } from './util.js';
+import { Handshake } from './handshake.js';
 
 const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
-const P256_RAW_PUBLIC_KEY_BYTES = 65;
+const REKEY_INTERVAL_MS = 10 * 60 * 1000; // DH ratchet every 10 min for forward secrecy
 
 export class PeerConnection {
   /**
@@ -30,12 +30,16 @@ export class PeerConnection {
     this.connected = false;
     this.onRemoteTrack = null; // callback for incoming remote media
     this.localStream = null;
+    this.isInitiator = false;  // the data-channel creator drives rekeys
+    this.handshake = null;
+    this._rekeyTimer = null;
   }
 
   /* ── Initiator (caller) ── */
 
   async createOffer(remotePeerId) {
     this.remotePeerId = remotePeerId;
+    this.isInitiator = true;
     this.pc = this._newRTCPeerConnection();
 
     // The initiator creates the data channel before the offer
@@ -56,6 +60,7 @@ export class PeerConnection {
 
   async handleOffer(from, offer) {
     this.remotePeerId = from;
+    this.isInitiator = false;
     this.pc = this._newRTCPeerConnection();
 
     // The callee waits for the data channel from the initiator
@@ -143,6 +148,8 @@ export class PeerConnection {
   }
 
   close() {
+    this._clearRekey();
+    this.handshake = null;
     this.stopMedia();
     if (this.dc) this.dc.close();
     if (this.pc) this.pc.close();
@@ -195,12 +202,20 @@ export class PeerConnection {
 
   _wireDataChannel(ch) {
     ch.onopen = async () => {
-      // Initiate ephemeral key exchange over the data channel
-      const pubKey = await this.crypto.generateKeyPair();
-      ch.send(JSON.stringify({
-        type: 'key-exchange',
-        publicKey: bufToB64(pubKey),
-      }));
+      // Authenticated key exchange (commit-reveal) over the data channel.
+      this.handshake = new Handshake(this.crypto, (m) => this._dcSend(m), {
+        onEstablished: (sas) => this._onEstablished(sas),
+        onError: (reason) => {
+          console.warn('[peer] handshake failed:', reason);
+          this.onStateChange('insecure', reason);
+          this.close();
+        },
+      });
+      try {
+        await this.handshake.start();
+      } catch (err) {
+        console.warn('[peer] handshake start failed:', err);
+      }
     };
 
     ch.onmessage = async (e) => {
@@ -215,34 +230,85 @@ export class PeerConnection {
         console.warn('[peer] Received malformed message — ignoring');
         return;
       }
+      if (!msg || typeof msg.type !== 'string') return;
 
-      if (msg.type === 'key-exchange') {
-        // Derive the shared secret from the peer's public key
-        let publicKey;
-        try {
-          publicKey = b64ToBuf(msg.publicKey);
-        } catch {
-          console.warn('[peer] Received malformed public key — ignoring');
-          return;
+      // Key-exchange and rekey traffic is handled here, never forwarded to the app.
+      if (msg.type === 'kex-commit' || msg.type === 'kex-reveal') {
+        if (this.handshake) {
+          try { await this.handshake.handle(msg); } catch (err) { console.warn('[peer] kex error', err); }
         }
-        if (publicKey.byteLength !== P256_RAW_PUBLIC_KEY_BYTES) {
-          console.warn('[peer] Received invalid public key length — ignoring');
-          return;
-        }
-        await this.crypto.deriveSharedKey(publicKey);
-        // Compute SAS fingerprint for MitM verification
-        const sas = await this.crypto.computeSAS();
-        this.onStateChange('encrypted', sas);
         return;
       }
+      if (msg.type === 'rekey-offer')  { await this._onRekeyOffer(msg);  return; }
+      if (msg.type === 'rekey-answer') { await this._onRekeyAnswer(msg); return; }
 
-      // All other messages are forwarded to the application layer
+      // Everything else only makes sense once the session is encrypted.
+      if (!this.crypto.established) {
+        console.warn('[peer] dropping pre-handshake app message');
+        return;
+      }
       this.onMessage(msg);
     };
 
     ch.onclose = () => {
       this.connected = false;
+      this._clearRekey();
       this.onStateChange('disconnected');
     };
+  }
+
+  _dcSend(obj) {
+    if (this.dc && this.dc.readyState === 'open') this.dc.send(JSON.stringify(obj));
+  }
+
+  _onEstablished(sas) {
+    this.onStateChange('encrypted', sas);
+    if (this.isInitiator) this._scheduleRekey();
+  }
+
+  /* ── DH ratchet (forward secrecy) — only the initiator drives the schedule ── */
+
+  _scheduleRekey() {
+    this._clearRekey();
+    this._rekeyTimer = setTimeout(() => this._doRekey(), REKEY_INTERVAL_MS);
+  }
+
+  _clearRekey() {
+    if (this._rekeyTimer) { clearTimeout(this._rekeyTimer); this._rekeyTimer = null; }
+  }
+
+  async _doRekey() {
+    if (!this.crypto.established || !this.dc || this.dc.readyState !== 'open') return;
+    try {
+      const offer = await this.crypto.beginRekey();
+      this._dcSend({ type: 'rekey-offer', epoch: offer.epoch, publicKey: offer.publicKey });
+    } catch (err) {
+      console.warn('[peer] rekey offer failed', err);
+      this._scheduleRekey(); // retry next interval
+    }
+  }
+
+  async _onRekeyOffer(msg) {
+    if (!this.crypto.established || typeof msg.publicKey !== 'string' || !Number.isInteger(msg.epoch)) return;
+    try {
+      const answer = await this.crypto.acceptRekey(msg.publicKey, msg.epoch);
+      this._dcSend({ type: 'rekey-answer', epoch: answer.epoch, publicKey: answer.publicKey });
+    } catch (err) {
+      console.warn('[peer] rekey accept failed — tearing down to avoid key divergence', err);
+      this.onStateChange('insecure', 'rekey failed');
+      this.close();
+    }
+  }
+
+  async _onRekeyAnswer(msg) {
+    if (typeof msg.publicKey !== 'string' || !Number.isInteger(msg.epoch)) return;
+    try {
+      await this.crypto.completeRekey(msg.publicKey, msg.epoch);
+      this._scheduleRekey(); // line up the next ratchet
+    } catch (err) {
+      console.warn('[peer] rekey complete failed — tearing down to avoid key divergence', err);
+      this.onStateChange('insecure', 'rekey failed');
+      this.close();
+    }
   }
 }

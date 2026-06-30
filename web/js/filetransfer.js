@@ -42,7 +42,7 @@ export class FileTransferManager {
     const data = await file.arrayBuffer();
 
     // Encrypt file content
-    const { ciphertext, iv: fileIv } = await crypto.encryptBinary(data);
+    const { ciphertext, iv: fileIv, epoch: fileEpoch } = await crypto.encryptBinary(data);
 
     // Encrypt metadata (file name, type, size)
     const metaStr = JSON.stringify({
@@ -62,6 +62,7 @@ export class FileTransferManager {
       id,
       meta: encMeta,
       fileIv,
+      fileEpoch,
       totalChunks,
       totalSize: bytes.length,
       ttl,
@@ -144,6 +145,7 @@ export class FileTransferManager {
     this.inbound.set(msg.id, {
       meta:            msg.meta,
       fileIv:          msg.fileIv,
+      fileEpoch:       msg.fileEpoch,
       totalChunks:     msg.totalChunks,
       totalSize:       msg.totalSize,
       ttl:             msg.ttl,
@@ -223,6 +225,7 @@ export class FileTransferManager {
       id:              msg.id,
       ciphertext:      buf.buffer,
       fileIv:          t.fileIv,
+      fileEpoch:       t.fileEpoch,
       meta:            t.meta,
       ttl:             t.ttl,
       burnAfterReading: t.burnAfterReading,

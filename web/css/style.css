@@ -309,6 +309,69 @@ select { cursor: pointer; width: auto; }
 .status.encrypted    { color: var(--accent); background: rgba(0, 232, 123, 0.1); }
 .status.disconnected { color: var(--danger); }
 
+/* ── Safety-code verification (SAS) ── */
+
+.verify-bar {
+  flex-shrink: 0;
+  padding: 10px 16px;
+  background: rgba(255, 170, 0, 0.07);
+  border-bottom: 1px solid rgba(255, 170, 0, 0.35);
+  transition: background 0.3s, border-color 0.3s;
+}
+
+.verify-bar.verified {
+  background: rgba(0, 232, 123, 0.07);
+  border-bottom-color: rgba(0, 232, 123, 0.35);
+}
+
+.verify-bar.insecure {
+  background: rgba(255, 68, 85, 0.12);
+  border-bottom-color: var(--danger);
+}
+
+.verify-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.verify-label {
+  font-size: 12px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  white-space: nowrap;
+}
+
+.verify-sas {
+  font-size: 22px;
+  letter-spacing: 4px;
+  line-height: 1;
+  flex: 1;
+  min-width: 0;
+  word-break: keep-all;
+}
+
+.verify-btn { white-space: nowrap; }
+
+.verify-bar.verified .verify-btn {
+  border-color: var(--accent);
+  color: var(--accent);
+  pointer-events: none;
+}
+
+.verify-hint {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 6px;
+  line-height: 1.5;
+}
+
+.verify-bar.verified .verify-hint { display: none; }
+
+.verify-hint strong { color: var(--danger); }
+
 /* ── Messages ── */
 
 .messages {
