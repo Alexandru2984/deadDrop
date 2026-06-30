@@ -241,6 +241,9 @@ type invites struct {
 	path string
 }
 
+// OpenRegistration reports whether registration is open to everyone (no invite).
+func OpenRegistration() bool { return os.Getenv("OPEN_REGISTRATION") == "1" }
+
 func newInvites(dir string) *invites { return &invites{path: filepath.Join(dir, "invites.json")} }
 
 // GenerateInviteForDir creates and stores a new invite code in dataDir. For the
@@ -353,7 +356,9 @@ func (h *Handler) SRPRegister(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "username already taken", http.StatusBadRequest)
 		return
 	}
-	if !h.invites.consume(body.Invite) {
+	// Registration is invite-only unless OPEN_REGISTRATION=1 is set (then anyone can
+	// register and the invite field is ignored).
+	if !OpenRegistration() && !h.invites.consume(body.Invite) {
 		jsonErr(w, "invalid or used invite code", http.StatusForbidden)
 		return
 	}

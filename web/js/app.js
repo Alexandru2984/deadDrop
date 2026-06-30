@@ -41,8 +41,23 @@ class DeadDrop {
     this._bindEvents();
     this._initMsgManager();
     applyI18n();
+    this._loadConfig();
     this._readJoinHash();
     this._checkAuth();
+  }
+
+  // Fetch public client config (e.g. whether registration is open).
+  async _loadConfig() {
+    try {
+      const res = await fetch('/api/config');
+      if (!res.ok) return;
+      const cfg = await res.json();
+      if (cfg.openRegistration) {
+        this.el.authInvite.classList.add('hidden');
+        const hint = this.el.authForm.querySelector('.auth-hint');
+        if (hint) { hint.dataset.i18n = 'auth.hintOpen'; hint.textContent = t('auth.hintOpen'); }
+      }
+    } catch { /* default: invite required */ }
   }
 
   // Parse a shared join link (#join=<code>) and remember the room to pre-fill.
@@ -267,7 +282,8 @@ class DeadDrop {
     const invite = this.el.authInvite.value.trim();
     if (!username || !password) return;
     if (password.length < 8) { this._showAuthError('Password must be at least 8 characters'); return; }
-    if (!invite) { this._showAuthError('An invite code is required to register'); return; }
+    // Invite requirement is enforced by the server; the field is hidden when
+    // registration is open, so don't block on it here.
 
     this._hideAuthError();
     this._setAuthBusy(true);

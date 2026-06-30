@@ -74,6 +74,12 @@ func main() {
 	mux.HandleFunc("/api/logout", authRL.Wrap(middleware.RequireSameOrigin(authH.Logout)))
 	mux.HandleFunc("/api/me", authH.Me)
 
+	// Public client config (no auth) — lets the UI know whether to require an invite.
+	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"openRegistration":%t}`, auth.OpenRegistration())
+	})
+
 	// SRP-6a zero-knowledge auth — the password never reaches the server.
 	mux.HandleFunc("/api/srp/register", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPRegister)))
 	mux.HandleFunc("/api/srp/challenge", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPChallenge)))
