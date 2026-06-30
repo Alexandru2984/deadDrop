@@ -76,6 +76,9 @@ class DeadDrop {
       burnToggle:  $('#burn-toggle'),
       ttlSelect:   $('#ttl-select'),
       status:      $('#status'),
+      panicBtn:    $('#panic-btn'),
+      typingIndicator: $('#typing-indicator'),
+      privacyScreen:   $('#privacy-screen'),
       verifyBar:   $('#verify-bar'),
       verifySas:   $('#verify-sas'),
       verifyBtn:   $('#verify-btn'),
@@ -112,6 +115,13 @@ class DeadDrop {
     this.el.msgInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); }
     });
+    this.el.msgInput.addEventListener('input', () => this._sendTyping());
+    // Panic wipe: button or three Escapes within a second.
+    this.el.panicBtn.addEventListener('click', () => this._panicWipe());
+    window.addEventListener('keydown', (e) => this._onGlobalKey(e));
+    // Privacy screen: blur messages whenever the tab is backgrounded.
+    document.addEventListener('visibilitychange', () => this._onVisibilityChange());
+    this.el.privacyScreen.addEventListener('click', () => this._hidePrivacyScreen());
     // File attach
     this.el.attachBtn.addEventListener('click', () => {
       if (this.encrypted) this.el.fileInput.click();
@@ -477,6 +487,7 @@ class DeadDrop {
         this.encrypted = false;
         this._setStatus('disconnected', '❌ Peer disconnected');
         this._hideVerify();
+        this._hideTyping();
         this.el.callBtn.style.display = 'none';
         this._endCallCleanup();
         break;
@@ -553,8 +564,13 @@ class DeadDrop {
   async _onPeerMessage(msg) {
     if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
     switch (msg.type) {
+      case 'typing':
+        this._showTyping();
+        break;
+
       case 'chat': {
         if (!this._validMessageID(msg.id) || !this._validEncryptedPayload(msg)) return;
+        this._hideTyping();
         try {
           const text = await this.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
@@ -1008,6 +1024,60 @@ class DeadDrop {
     this.ws?.close();
     this.peer = null;
     this.encrypted = false;
+  }
+
+  /* ── Panic wipe ── */
+
+  _onGlobalKey(e) {
+    if (e.key !== 'Escape') return;
+    const now = Date.now();
+    this._escTimes = (this._escTimes || []).filter((t) => now - t < 1000);
+    this._escTimes.push(now);
+    if (this._escTimes.length >= 3) { this._escTimes = []; this._panicWipe(); }
+  }
+
+  async _panicWipe() {
+    // Tear down every trace locally, end the session, and reload to a clean screen.
+    this._cleanup();
+    if (this.el.messages) this.el.messages.innerHTML = '';
+    if (this.el.msgInput) this.el.msgInput.value = '';
+    this.roomCode = null;
+    this.username = null;
+    try { await fetch('/api/logout', { method: 'POST' }); } catch { /* best effort */ }
+    location.replace(location.origin + '/');
+  }
+
+  /* ── Typing indicator ── */
+
+  _sendTyping() {
+    if (!this.encrypted || !this.peer?.connected) return;
+    const now = Date.now();
+    if (this._lastTypingSent && now - this._lastTypingSent < 1500) return;
+    this._lastTypingSent = now;
+    try { this.peer.send({ type: 'typing' }); } catch { /* channel closed */ }
+  }
+
+  _showTyping() {
+    this.el.typingIndicator.classList.remove('hidden');
+    clearTimeout(this._typingHideTimer);
+    this._typingHideTimer = setTimeout(() => this.el.typingIndicator.classList.add('hidden'), 3000);
+  }
+
+  _hideTyping() {
+    clearTimeout(this._typingHideTimer);
+    this.el.typingIndicator.classList.add('hidden');
+  }
+
+  /* ── Privacy screen ── */
+
+  _onVisibilityChange() {
+    if (document.hidden && !this.el.chatWrap.classList.contains('hidden')) {
+      this.el.privacyScreen.classList.remove('hidden');
+    }
+  }
+
+  _hidePrivacyScreen() {
+    this.el.privacyScreen.classList.add('hidden');
   }
 
   _normalizeTTL(value) {

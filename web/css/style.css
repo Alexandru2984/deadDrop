@@ -257,7 +257,61 @@ select { cursor: pointer; width: auto; }
   flex-direction: column;
   height: 100dvh;
   height: 100vh;
+  position: relative;
 }
+
+/* ── Panic button ── */
+.panic-btn { font-size: 16px; opacity: 0.6; transition: opacity 0.2s, transform 0.1s; }
+.panic-btn:hover { opacity: 1; }
+.panic-btn:active { transform: scale(0.9); }
+
+/* ── Typing indicator ── */
+.typing-indicator {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  font-size: 12px;
+  color: var(--dim);
+  font-style: italic;
+}
+.typing-dots { display: inline-flex; gap: 3px; }
+.typing-dots span {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--dim);
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ── Privacy screen (blur when tab backgrounded) ── */
+.privacy-screen {
+  position: absolute;
+  inset: 0;
+  z-index: 150;
+  background: rgba(10, 10, 15, 0.85);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.privacy-screen-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: var(--dim);
+  font-size: 13px;
+  padding: 24px;
+}
+.privacy-screen-icon { font-size: 48px; }
 
 .chat-header {
   display: flex;

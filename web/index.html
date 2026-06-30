@@ -76,6 +76,7 @@
       </div>
       <div class="header-right">
         <button id="call-btn" class="btn-icon call-btn" title="Start call" style="display:none">📞</button>
+        <button id="panic-btn" class="btn-icon panic-btn" title="Panic — wipe everything (or press Esc three times)">💣</button>
         <div id="status" class="status waiting">⏳ Initializing…</div>
       </div>
     </header>
@@ -104,6 +105,20 @@
     </div>
 
     <div id="messages" class="messages"></div>
+
+    <!-- Privacy screen: hides messages when the tab loses focus -->
+    <div id="privacy-screen" class="privacy-screen hidden">
+      <div class="privacy-screen-inner">
+        <span class="privacy-screen-icon">🙈</span>
+        <span>Hidden while this tab is in the background</span>
+        <button id="reveal-btn" class="btn btn-sm">Tap to reveal</button>
+      </div>
+    </div>
+
+    <div id="typing-indicator" class="typing-indicator hidden">
+      <span class="typing-dots"><span></span><span></span><span></span></span>
+      peer is typing…
+    </div>
 
     <footer class="chat-footer">
       <div class="controls">
