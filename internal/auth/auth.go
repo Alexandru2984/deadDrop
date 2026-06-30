@@ -20,11 +20,18 @@ import (
 
 var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_]{3,20}$`)
 
-/* ── User Store (file-backed, password hashes only) ── */
+/* ── User Store (file-backed) ── */
 
+// user holds either a legacy bcrypt hash (kept so existing accounts are never
+// locked out) or an SRP verifier+salt (zero-knowledge — the server never sees the
+// password). New accounts are SRP-only; legacy accounts auto-upgrade on next login.
 type user struct {
-	Hash string `json:"hash"`
+	Hash     string `json:"hash,omitempty"`     // legacy bcrypt over SHA-256(password)
+	Salt     string `json:"salt,omitempty"`     // SRP salt (hex)
+	Verifier string `json:"verifier,omitempty"` // SRP verifier v = g^x mod N (hex)
 }
+
+func (u user) isSRP() bool { return u.Verifier != "" }
 
 type store struct {
 	mu        sync.RWMutex
@@ -184,8 +191,11 @@ func genToken() (string, error) {
 
 // Handler exposes auth endpoints and middleware.
 type Handler struct {
-	store *store
-	sess  *sessions
+	store      *store
+	sess       *sessions
+	invites    *invites
+	lockout    *lockout
+	challenges *challengeStore
 }
 
 func NewHandler(dataDir string) (*Handler, error) {
@@ -193,7 +203,26 @@ func NewHandler(dataDir string) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Handler{store: st, sess: newSessions()}, nil
+	return &Handler{
+		store:      st,
+		sess:       newSessions(),
+		invites:    newInvites(dataDir),
+		lockout:    newLockout(),
+		challenges: newChallengeStore(),
+	}, nil
+}
+
+// currentUser returns the authenticated username for a request, or "" if none.
+func (h *Handler) currentUser(r *http.Request) string {
+	c, err := r.Cookie("dd_session")
+	if err != nil {
+		return ""
+	}
+	username, ok := h.sess.get(c.Value)
+	if !ok {
+		return ""
+	}
+	return username
 }
 
 const maxAuthBody = 4096 // 4 KB max for auth JSON payloads

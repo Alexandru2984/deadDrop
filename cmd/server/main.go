@@ -20,6 +20,16 @@ import (
 )
 
 func main() {
+	// CLI: `deaddrop invite` mints a single-use invite code and exits.
+	if len(os.Args) > 1 && os.Args[1] == "invite" {
+		code, err := auth.GenerateInviteForDir("data")
+		if err != nil {
+			log.Fatalf("invite: %v", err)
+		}
+		fmt.Println(code)
+		return
+	}
+
 	port := 8088
 	if p := os.Getenv("PORT"); p != "" {
 		if v, err := strconv.Atoi(p); err == nil {
@@ -57,11 +67,24 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Auth API (rate limited)
-	mux.HandleFunc("/api/register", authRL.Wrap(middleware.RequireSameOrigin(authH.Register)))
+	// Legacy bcrypt login — kept ONLY so pre-SRP accounts are not locked out; the
+	// client auto-upgrades them to SRP on first login. Open bcrypt registration is
+	// gone; new accounts use SRP + an invite code.
 	mux.HandleFunc("/api/login", authRL.Wrap(middleware.RequireSameOrigin(authH.Login)))
 	mux.HandleFunc("/api/logout", authRL.Wrap(middleware.RequireSameOrigin(authH.Logout)))
 	mux.HandleFunc("/api/me", authH.Me)
+
+	// SRP-6a zero-knowledge auth — the password never reaches the server.
+	mux.HandleFunc("/api/srp/register", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPRegister)))
+	mux.HandleFunc("/api/srp/challenge", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPChallenge)))
+	mux.HandleFunc("/api/srp/authenticate", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPAuthenticate)))
+
+	// Account management (auth enforced inside the handlers).
+	mux.HandleFunc("/api/account/verifier", authRL.Wrap(middleware.RequireSameOrigin(authH.SetVerifier)))
+	mux.HandleFunc("/api/account/delete", authRL.Wrap(middleware.RequireSameOrigin(authH.DeleteAccount)))
+
+	// Admin: issue single-use invite codes (X-Admin-Token header).
+	mux.HandleFunc("/api/admin/invite", authRL.Wrap(authH.GenerateInvite))
 
 	// Room code generation (server-side for stronger entropy, rate limited)
 	mux.HandleFunc("/api/room", authRL.Wrap(middleware.RequireSameOrigin(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {

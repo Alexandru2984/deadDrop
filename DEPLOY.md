@@ -87,3 +87,27 @@ turnutils_uclient -y -u "$U" -w "$P" -p 3478 -n 2 <PUBLIC_IP>   # expect 0 lost 
 > origin IP is disclosed to call participants (Cloudflare cannot proxy TURN). The
 > win from "Max anonymity" (relay-only) mode is that the two *peers* never see each
 > other's IPs and the payload stays end-to-end encrypted.
+
+## 5. Accounts (SRP) & invites
+
+Login uses SRP-6a: the password is turned into a verifier in the browser and never
+reaches the server (or Cloudflare). Registration requires a single-use invite code.
+
+Mint an invite from the CLI:
+
+```bash
+cd /home/micu/deaddrop && ./deaddrop invite      # prints e.g. DD-FXAV-XKH6-JC22
+```
+
+…or via the admin endpoint (set `ADMIN_TOKEN` in `/etc/deaddrop.env`):
+
+```bash
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://dead.micutu.com/api/admin/invite
+```
+
+Invites live in `data/invites.json` (single-use, consumed on registration). With an
+empty list, registration is effectively closed.
+
+Pre-SRP (bcrypt) accounts still log in via the legacy path and are transparently
+upgraded to SRP on first login (the verifier is computed locally; the password is
+not resent). Failed logins are throttled per-account (lockout after 5 tries).

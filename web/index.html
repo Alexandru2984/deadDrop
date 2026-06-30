@@ -24,12 +24,17 @@
              spellcheck="false" autocomplete="username" required />
       <input id="auth-pass" type="password" placeholder="Password"
              autocomplete="current-password" required />
+      <input id="auth-invite" type="text" placeholder="Invite code (only to register)"
+             spellcheck="false" autocomplete="off" maxlength="32" />
       <div id="auth-error" class="auth-error hidden"></div>
       <div class="auth-buttons">
         <button type="submit" id="login-btn" class="btn primary">Login</button>
         <button type="button" id="register-btn" class="btn">Register</button>
       </div>
-      <p class="auth-hint">No email. No recovery. Just a handle and a password.</p>
+      <p class="auth-hint">
+        Zero-knowledge login (SRP) — your password never leaves this device.
+        No email. No recovery. Registration needs an invite code.
+      </p>
     </form>
   </div>
 

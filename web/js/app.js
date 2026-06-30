@@ -8,6 +8,7 @@ import { CryptoLayer } from './crypto.js';
 import { PeerConnection } from './peer.js';
 import { MessageManager } from './messages.js';
 import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
+import { register as srpRegister, ClientLogin } from './srp.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{6,12}$/;
 const MAX_MESSAGE_ID_LEN = 80;
@@ -50,6 +51,7 @@ class DeadDrop {
       authForm:    $('#auth-form'),
       authUser:    $('#auth-user'),
       authPass:    $('#auth-pass'),
+      authInvite:  $('#auth-invite'),
       authError:   $('#auth-error'),
       loginBtn:    $('#login-btn'),
       registerBtn: $('#register-btn'),
@@ -175,46 +177,90 @@ class DeadDrop {
     if (!username || !password) return;
 
     this._hideAuthError();
+    this._setAuthBusy(true);
     try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await res.json();
-      if (res.ok) {
-        this.username = data.username;
-        this._showPage('landing');
-      } else {
-        this._showAuthError(data.error);
+      const client = new ClientLogin(username, password);
+      const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A });
+      if (ch.data.legacy) { await this._legacyLogin(username, password); return; }
+      if (!ch.ok) { this._showAuthError(ch.data.error || 'Login failed'); return; }
+
+      const { M1 } = await client.finish(ch.data.salt, ch.data.B);
+      const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1 });
+      if (!auth.ok) { this._showAuthError(auth.data.error || 'Invalid credentials'); return; }
+      // Authenticate the SERVER too — proves it knows our verifier, not just us.
+      if (!client.verifyServer(auth.data.M2)) {
+        this._showAuthError('Server authentication failed — do not trust this connection.');
+        return;
       }
+      this.username = auth.data.username;
+      this._afterAuth();
     } catch {
       this._showAuthError('Connection failed');
+    } finally {
+      this._setAuthBusy(false);
     }
+  }
+
+  // Legacy bcrypt accounts: log in the old way, then transparently upgrade to SRP
+  // (the verifier is computed locally; the password is not resent).
+  async _legacyLogin(username, password) {
+    const res = await this._postJSON('/api/login', { username, password });
+    if (!res.ok) { this._showAuthError(res.data.error || 'Invalid credentials'); return; }
+    try {
+      const { salt, verifier } = await srpRegister(username, password);
+      await this._postJSON('/api/account/verifier', { salt, verifier });
+    } catch { /* upgrade is best-effort; legacy login already succeeded */ }
+    this.username = res.data.username;
+    this._afterAuth();
   }
 
   async _register() {
     const username = this.el.authUser.value.trim();
     const password = this.el.authPass.value;
+    const invite = this.el.authInvite.value.trim();
     if (!username || !password) return;
+    if (password.length < 8) { this._showAuthError('Password must be at least 8 characters'); return; }
+    if (!invite) { this._showAuthError('An invite code is required to register'); return; }
 
     this._hideAuthError();
+    this._setAuthBusy(true);
     try {
-      const res = await fetch('/api/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-      const data = await res.json();
+      const { salt, verifier } = await srpRegister(username, password);
+      const res = await this._postJSON('/api/srp/register', { username, salt, verifier, invite });
       if (res.ok) {
-        this.username = data.username;
-        this._showPage('landing');
+        this.username = res.data.username;
+        this._afterAuth();
       } else {
-        this._showAuthError(data.error);
+        this._showAuthError(res.data.error || 'Registration failed');
       }
     } catch {
       this._showAuthError('Connection failed');
+    } finally {
+      this._setAuthBusy(false);
     }
+  }
+
+  _afterAuth() {
+    this.el.authPass.value = '';
+    this.el.authInvite.value = '';
+    this._showPage('landing');
+  }
+
+  async _postJSON(path, body) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    let data = {};
+    try { data = await res.json(); } catch { /* empty body */ }
+    return { ok: res.ok, status: res.status, data };
+  }
+
+  _setAuthBusy(busy) {
+    this.el.loginBtn.disabled = busy;
+    this.el.registerBtn.disabled = busy;
+    this.el.loginBtn.textContent = busy ? '…' : 'Login';
   }
 
   async _logout() {
