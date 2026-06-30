@@ -63,7 +63,25 @@ select {
   gap: 12px;
   padding: 20px;
   overflow-y: auto;
+  position: relative;
 }
+
+.lang-btn {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--dim);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: var(--font);
+  cursor: pointer;
+  min-height: 32px;
+  -webkit-tap-highlight-color: transparent;
+}
+.lang-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 .auth-form {
   width: 100%;

@@ -19,27 +19,28 @@
 
   <!-- ─── Auth ─── -->
   <div id="auth" class="page auth-page hidden">
+    <button id="lang-btn" class="lang-btn" data-i18n="lang.toggle" title="Language">RO</button>
     <div class="logo">💀</div>
     <h1>DEAD DROP</h1>
-    <p class="tagline">Anonymous · Encrypted · Ephemeral</p>
+    <p class="tagline" data-i18n="tagline">Anonymous · Encrypted · Ephemeral</p>
 
     <form id="auth-form" class="auth-form" autocomplete="off">
-      <input id="auth-user" type="text" placeholder="Username" maxlength="20"
+      <input id="auth-user" type="text" placeholder="Username" data-i18n-ph="auth.user" maxlength="20"
              spellcheck="false" autocomplete="username" required />
-      <input id="auth-pass" type="password" placeholder="Password"
+      <input id="auth-pass" type="password" placeholder="Password" data-i18n-ph="auth.pass"
              autocomplete="current-password" required />
-      <input id="auth-invite" type="text" placeholder="Invite code (only to register)"
+      <input id="auth-invite" type="text" placeholder="Invite code (only to register)" data-i18n-ph="auth.invite"
              spellcheck="false" autocomplete="off" maxlength="32" />
       <div id="auth-error" class="auth-error hidden"></div>
       <div class="auth-buttons">
-        <button type="submit" id="login-btn" class="btn primary">Login</button>
-        <button type="button" id="register-btn" class="btn">Register</button>
+        <button type="submit" id="login-btn" class="btn primary" data-i18n="auth.login">Login</button>
+        <button type="button" id="register-btn" class="btn" data-i18n="auth.register">Register</button>
       </div>
-      <p class="auth-hint">
+      <p class="auth-hint" data-i18n="auth.hint">
         Zero-knowledge login (SRP) — your password never leaves this device.
         No email. No recovery. Registration needs an invite code.
       </p>
-      <a href="/about.html" class="about-link">🔐 How your privacy is protected</a>
+      <a href="/about.html" class="about-link" data-i18n="about.link">🔐 How your privacy is protected</a>
     </form>
   </div>
 
@@ -47,26 +48,26 @@
   <div id="landing" class="page landing hidden">
     <div class="user-bar">
       <span>👤 <span id="user-display"></span></span>
-      <button id="logout-btn" class="btn btn-sm">Logout</button>
+      <button id="logout-btn" class="btn btn-sm" data-i18n="logout">Logout</button>
     </div>
 
     <div class="logo">💀</div>
     <h1>DEAD DROP</h1>
-    <p class="tagline">Anonymous · Encrypted · Ephemeral</p>
+    <p class="tagline" data-i18n="tagline">Anonymous · Encrypted · Ephemeral</p>
 
     <div class="actions">
-      <button id="create-room" class="btn primary">Create Room</button>
-      <div class="divider">or</div>
+      <button id="create-room" class="btn primary" data-i18n="landing.create">Create Room</button>
+      <div class="divider" data-i18n="landing.or">or</div>
       <div class="join-group">
-        <input id="room-code-input" type="text" placeholder="Room code" maxlength="12"
+        <input id="room-code-input" type="text" placeholder="Room code" data-i18n-ph="landing.code" maxlength="12"
                spellcheck="false" autocomplete="off" />
-        <button id="join-room" class="btn">Join</button>
+        <button id="join-room" class="btn" data-i18n="landing.join">Join</button>
       </div>
       <label class="relay-toggle" title="Route the connection through the server so your peer never sees your IP address">
         <input id="relay-toggle" type="checkbox" />
-        <span>🛡️ Max anonymity <small>— relay via server, hide IP from peer</small></span>
+        <span><span data-i18n="relay.label">🛡️ Max anonymity</span> <small data-i18n="relay.sub">— relay via server, hide IP from peer</small></span>
       </label>
-      <a href="/about.html" class="about-link">🔐 Security &amp; privacy</a>
+      <a href="/about.html" class="about-link" data-i18n="about.link.short">🔐 Security &amp; privacy</a>
     </div>
   </div>
 
@@ -90,23 +91,23 @@
     <!-- Safety-code verification (SAS) -->
     <div id="verify-bar" class="verify-bar hidden">
       <div class="verify-row">
-        <span class="verify-label">🔐 Safety code</span>
+        <span class="verify-label" data-i18n="verify.label">🔐 Safety code</span>
         <span id="verify-sas" class="verify-sas" aria-live="polite"></span>
-        <button id="verify-btn" class="btn btn-sm verify-btn">Mark verified</button>
+        <button id="verify-btn" class="btn btn-sm verify-btn" data-i18n="verify.btn">Mark verified</button>
       </div>
-      <p class="verify-hint">
+      <p class="verify-hint" data-i18n="verify.hint">
         Read this aloud to your peer (call/in person). If your codes match, no one is
-        intercepting. If they differ, <strong>stop</strong> — the line is compromised.
+        intercepting. If they differ, stop — the line is compromised.
       </p>
     </div>
 
     <!-- Incoming call notification -->
     <div id="incoming-call" class="incoming-call hidden">
       <span class="incoming-call-icon">📞</span>
-      <span>Incoming call…</span>
+      <span data-i18n="call.incoming">Incoming call…</span>
       <div class="incoming-call-btns">
-        <button id="accept-call" class="btn primary btn-sm">Accept</button>
-        <button id="reject-call" class="btn btn-sm btn-danger">Reject</button>
+        <button id="accept-call" class="btn primary btn-sm" data-i18n="call.accept">Accept</button>
+        <button id="reject-call" class="btn btn-sm btn-danger" data-i18n="call.reject">Reject</button>
       </div>
     </div>
 
@@ -116,24 +117,24 @@
     <div id="privacy-screen" class="privacy-screen hidden">
       <div class="privacy-screen-inner">
         <span class="privacy-screen-icon">🙈</span>
-        <span>Hidden while this tab is in the background</span>
-        <button id="reveal-btn" class="btn btn-sm">Tap to reveal</button>
+        <span data-i18n="privacy.hidden">Hidden while this tab is in the background</span>
+        <button id="reveal-btn" class="btn btn-sm" data-i18n="privacy.reveal">Tap to reveal</button>
       </div>
     </div>
 
     <div id="typing-indicator" class="typing-indicator hidden">
       <span class="typing-dots"><span></span><span></span><span></span></span>
-      peer is typing…
+      <span data-i18n="typing">peer is typing…</span>
     </div>
 
     <footer class="chat-footer">
       <div class="controls">
         <label class="toggle-label" title="Burn after reading">
           <input id="burn-toggle" type="checkbox" />
-          <span>🔥 Burn</span>
+          <span data-i18n="chat.burn">🔥 Burn</span>
         </label>
         <select id="ttl-select" title="Self-destruct timer">
-          <option value="0">No TTL</option>
+          <option value="0" data-i18n="chat.ttl.none">No TTL</option>
           <option value="10">10 s</option>
           <option value="30" selected>30 s</option>
           <option value="60">1 min</option>
@@ -143,9 +144,9 @@
       <div class="input-row">
         <button id="attach-btn" class="btn-icon" title="Attach file (max 25 MB)">📎</button>
         <button id="record-btn" class="btn-icon" title="Record a voice message">🎙️</button>
-        <input id="msg-input" type="text" placeholder="Type a message…"
+        <input id="msg-input" type="text" placeholder="Type a message…" data-i18n-ph="chat.msg"
                autocomplete="off" spellcheck="false" />
-        <button id="send-btn" class="btn primary">Send</button>
+        <button id="send-btn" class="btn primary" data-i18n="chat.send">Send</button>
       </div>
       <input id="file-input" type="file" class="hidden" />
     </footer>

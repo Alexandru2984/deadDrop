@@ -10,6 +10,7 @@ import { MessageManager } from './messages.js';
 import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
 import { register as srpRegister, ClientLogin } from './srp.js';
 import qrcode from './vendor/qrcode.js';
+import { t, applyI18n, setLang, getLang } from './i18n.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{6,12}$/;
 const MAX_MESSAGE_ID_LEN = 80;
@@ -39,6 +40,7 @@ class DeadDrop {
     this._bindDOM();
     this._bindEvents();
     this._initMsgManager();
+    applyI18n();
     this._readJoinHash();
     this._checkAuth();
   }
@@ -66,6 +68,7 @@ class DeadDrop {
       authError:   $('#auth-error'),
       loginBtn:    $('#login-btn'),
       registerBtn: $('#register-btn'),
+      langBtn:     $('#lang-btn'),
       // Landing
       landing:     $('#landing'),
       userDisplay: $('#user-display'),
@@ -115,6 +118,7 @@ class DeadDrop {
     // Auth
     this.el.authForm.addEventListener('submit', (e) => { e.preventDefault(); this._login(); });
     this.el.registerBtn.addEventListener('click', () => this._register());
+    this.el.langBtn.addEventListener('click', () => setLang(getLang() === 'ro' ? 'en' : 'ro'));
     this.el.logoutBtn.addEventListener('click', () => this._logout());
     // Room
     this.el.createBtn.addEventListener('click', () => this.createRoom());
@@ -283,7 +287,7 @@ class DeadDrop {
   _setAuthBusy(busy) {
     this.el.loginBtn.disabled = busy;
     this.el.registerBtn.disabled = busy;
-    this.el.loginBtn.textContent = busy ? '…' : 'Login';
+    this.el.loginBtn.textContent = busy ? '…' : t('auth.login');
   }
 
   async _logout() {
@@ -357,21 +361,23 @@ class DeadDrop {
     }
     this._enterChat(this.roomCode);
     this._renderShareLink(this.roomCode);
-    this._setStatus('waiting', '⏳ Waiting for peer…');
+    this._setStatus('waiting', t('st.waiting'));
   }
 
   _renderShareLink(code) {
     const link = `${location.origin}/#join=${code}`;
     const el = document.createElement('div');
     el.className = 'msg system share-link';
-    el.innerHTML = 'Send your peer this link (or the code above):<br>' +
-      '<span class="share-url"></span> <button class="btn btn-sm copy-link-btn">Copy link</button>';
+    el.innerHTML = '<span class="share-intro"></span><br>' +
+      '<span class="share-url"></span> <button class="btn btn-sm copy-link-btn"></button>';
+    el.querySelector('.share-intro').textContent = t('share.intro');
     el.querySelector('.share-url').textContent = link;
     const btn = el.querySelector('.copy-link-btn');
+    btn.textContent = t('share.copy');
     btn.addEventListener('click', () => {
       navigator.clipboard.writeText(link).then(() => {
-        btn.textContent = '✓ Copied';
-        setTimeout(() => (btn.textContent = 'Copy link'), 1500);
+        btn.textContent = t('share.copied');
+        setTimeout(() => (btn.textContent = t('share.copy')), 1500);
       });
     });
     const qr = this._qrDataURL(link);
@@ -464,7 +470,7 @@ class DeadDrop {
         break;
 
       case 'peer-left':
-        this._setStatus('disconnected', '👋 Peer disconnected');
+        this._setStatus('disconnected', t('st.peerLeft'));
         this.peer?.close();
         this.peer = null;
         this.encrypted = false;
@@ -521,7 +527,7 @@ class DeadDrop {
         break;
       case 'encrypted':
         this.encrypted = true;
-        this._setStatus('encrypted', `🔒 E2E Encrypted`);
+        this._setStatus('encrypted', t('st.encrypted'));
         if (sas) this._showVerify(sas);
         this.el.msgInput.focus();
         this.el.callBtn.style.display = '';
@@ -551,12 +557,12 @@ class DeadDrop {
   _showVerify(sas) {
     this.el.verifyBar.classList.remove('hidden', 'verified', 'insecure');
     this.el.verifySas.textContent = sas;
-    this.el.verifyBtn.textContent = 'Mark verified';
+    this.el.verifyBtn.textContent = t('verify.btn');
   }
 
   _markVerified() {
     this.el.verifyBar.classList.add('verified');
-    this.el.verifyBtn.textContent = '✓ Verified';
+    this.el.verifyBtn.textContent = t('verify.verified');
   }
 
   _hideVerify() {
