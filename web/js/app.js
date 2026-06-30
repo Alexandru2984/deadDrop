@@ -9,6 +9,7 @@ import { PeerConnection } from './peer.js';
 import { MessageManager } from './messages.js';
 import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
 import { register as srpRegister, ClientLogin } from './srp.js';
+import qrcode from './vendor/qrcode.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{6,12}$/;
 const MAX_MESSAGE_ID_LEN = 80;
@@ -373,8 +374,25 @@ class DeadDrop {
         setTimeout(() => (btn.textContent = 'Copy link'), 1500);
       });
     });
+    const qr = this._qrDataURL(link);
+    if (qr) {
+      const img = document.createElement('img');
+      img.className = 'share-qr';
+      img.src = qr;
+      img.alt = 'QR code — scan to join';
+      el.appendChild(img);
+    }
     this.el.messages.appendChild(el);
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
+  }
+
+  _qrDataURL(text) {
+    try {
+      const qr = qrcode(0, 'M');
+      qr.addData(text);
+      qr.make();
+      return qr.createDataURL(5, 2);
+    } catch { return null; }
   }
 
   async joinRoom() {

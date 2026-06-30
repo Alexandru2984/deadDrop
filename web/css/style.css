@@ -528,6 +528,14 @@ select { cursor: pointer; width: auto; }
   word-break: break-all;
   font-size: 11px;
 }
+.share-qr {
+  display: block;
+  width: 160px;
+  height: 160px;
+  margin: 12px auto 0;
+  border-radius: 8px;
+  image-rendering: pixelated;
+}
 
 .msg-meta {
   font-size: 11px;
