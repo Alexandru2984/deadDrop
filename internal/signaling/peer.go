@@ -114,14 +114,14 @@ func (p *Peer) readPump() {
 		_, raw, err := p.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-				log.Printf("[ws] read error peer=%s: %v", p.ID, err)
+				log.Printf("[ws] read error: %v", err)
 			}
 			return
 		}
 
 		var msg SignalMessage
 		if err := json.Unmarshal(raw, &msg); err != nil {
-			log.Printf("[ws] bad json from peer=%s", p.ID)
+			log.Printf("[ws] bad json from peer")
 			continue
 		}
 		p.handleMessage(msg)
@@ -164,13 +164,11 @@ func (p *Peer) handleMessage(msg SignalMessage) {
 			safeSend(p.send, errMsg)
 			return
 		}
-		room, err := p.hub.JoinRoom(msg.Room, p)
-		if err != nil {
+		if _, err := p.hub.JoinRoom(msg.Room, p); err != nil {
 			errMsg, _ := json.Marshal(SignalMessage{Type: "error", PeerID: err.Error()})
 			safeSend(p.send, errMsg)
 			return
 		}
-		log.Printf("[hub] peer=%s joined room=%s", p.ID, room.Code)
 
 	case "offer", "answer", "ice-candidate":
 		if !ValidatePeerID(msg.To) || len(msg.Payload) == 0 {
@@ -191,7 +189,7 @@ func (p *Peer) handleMessage(msg SignalMessage) {
 func (p *Peer) disconnect() {
 	p.hub.RemovePeer(p)
 	close(p.send)
-	log.Printf("[ws] peer=%s disconnected", p.ID)
+	log.Printf("[ws] peer disconnected")
 }
 
 // safeSend writes to a channel without blocking (drops message if full).

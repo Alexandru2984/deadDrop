@@ -222,7 +222,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[auth] registered user=%s", body.Username)
+	log.Printf("[auth] new account registered")
 	h.setCookie(w, r, token)
 	jsonOK(w, map[string]string{"username": body.Username})
 }
@@ -251,7 +251,6 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "could not create session", http.StatusInternalServerError)
 		return
 	}
-	log.Printf("[auth] login user=%s", body.Username)
 	h.setCookie(w, r, token)
 	jsonOK(w, map[string]string{"username": body.Username})
 }

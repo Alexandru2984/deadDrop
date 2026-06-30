@@ -68,7 +68,7 @@ func (h *Hub) Run() {
 				delete(oldRoom.Peers, req.peer.ID)
 				if len(oldRoom.Peers) == 0 {
 					delete(h.rooms, oldRoom.Code)
-					log.Printf("[hub] room %s cleaned up", oldRoom.Code)
+					log.Printf("[hub] room cleaned up")
 				} else {
 					leftMsg, _ := json.Marshal(SignalMessage{Type: "peer-left", PeerID: req.peer.ID})
 					for _, other := range oldRoom.Peers {
@@ -128,7 +128,7 @@ func (h *Hub) Run() {
 				delete(room.Peers, peer.ID)
 				if len(room.Peers) == 0 {
 					delete(h.rooms, room.Code)
-					log.Printf("[hub] room %s cleaned up", room.Code)
+					log.Printf("[hub] room cleaned up")
 				}
 			}
 			close(req.done)
@@ -171,7 +171,7 @@ func (h *Hub) Relay(from *Peer, targetID string, data []byte) {
 	select {
 	case h.relay <- &relayRequest{from: from, targetID: targetID, data: data}:
 	default:
-		log.Printf("[hub] relay queue full peer=%s target=%s", from.ID, targetID)
+		log.Printf("[hub] relay queue full, dropping message")
 	}
 }
 

@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"deaddrop/internal/auth"
@@ -23,8 +26,17 @@ func main() {
 		}
 	}
 
+	// Bind to loopback by default so the Go server is only reachable through the
+	// reverse proxy (nginx/Cloudflare). Binding to 0.0.0.0 would let anyone who
+	// knows the origin IP bypass the proxy, defeating origin-hiding and the WAF.
+	// Override with HOST=0.0.0.0 only for direct local testing.
+	host := "127.0.0.1"
+	if h := strings.TrimSpace(os.Getenv("HOST")); h != "" {
+		host = h
+	}
+
 	// Find an available port without killing existing processes
-	port = findAvailablePort(port)
+	port = findAvailablePort(host, port)
 
 	// Auth (username + password only, no email or identifying data)
 	authH, err := auth.NewHandler("data")
@@ -75,12 +87,12 @@ func main() {
 	fs := http.FileServer(http.Dir("web"))
 	mux.Handle("/", fs)
 
-	addr := fmt.Sprintf(":%d", port)
+	addr := fmt.Sprintf("%s:%d", host, port)
 	fmt.Println("┌─────────────────────────────────────────┐")
-	fmt.Println("│           💀 DEAD DROP v0.1.0           │")
+	fmt.Println("│           💀 DEAD DROP v0.2.0           │")
 	fmt.Println("├─────────────────────────────────────────┤")
-	fmt.Printf("│  Server: http://localhost%-15s │\n", addr)
-	fmt.Println("│  Open in two browser tabs to chat       │")
+	fmt.Printf("│  Listening on %-26s│\n", addr)
+	fmt.Println("│  Behind nginx → https://dead.micutu.com │")
 	fmt.Println("│  Ctrl+C to stop                         │")
 	fmt.Println("└─────────────────────────────────────────┘")
 
@@ -96,7 +108,21 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	if err := server.ListenAndServe(); err != nil {
+	// Graceful shutdown: drain in-flight requests on SIGINT/SIGTERM instead of
+	// dropping connections mid-flight.
+	go func() {
+		stop := make(chan os.Signal, 1)
+		signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+		<-stop
+		log.Printf("[server] shutdown signal received, draining…")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			log.Printf("[server] graceful shutdown error: %v", err)
+		}
+	}()
+
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server failed: %v", err)
 	}
 }
@@ -121,16 +147,16 @@ func allowedOrigins(port int) []string {
 
 // findAvailablePort tries the preferred port, then increments up to 100 times.
 // Falls back to OS-assigned port if none found. Never kills existing processes.
-func findAvailablePort(preferred int) int {
+func findAvailablePort(host string, preferred int) int {
 	for port := preferred; port < preferred+100; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+		ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
 		if err == nil {
 			ln.Close()
 			return port
 		}
 	}
 	// Let the OS assign a port
-	ln, err := net.Listen("tcp", ":0")
+	ln, err := net.Listen("tcp", host+":0")
 	if err != nil {
 		log.Fatal("cannot find any available port")
 	}

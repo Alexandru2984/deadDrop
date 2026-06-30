@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -92,7 +93,7 @@ func TestSecurityHeaders(t *testing.T) {
 		"X-Content-Type-Options":    "nosniff",
 		"X-Frame-Options":           "DENY",
 		"Referrer-Policy":           "no-referrer",
-		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+		"Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
 	}
 	for k, v := range expected {
 		if got := w.Header().Get(k); got != v {
@@ -103,6 +104,13 @@ func TestSecurityHeaders(t *testing.T) {
 	csp := w.Header().Get("Content-Security-Policy")
 	if csp == "" {
 		t.Error("expected Content-Security-Policy header")
+	}
+	// Privacy-first CSP must not leak to external origins or allow inline scripts.
+	if strings.Contains(csp, "http://") || strings.Contains(csp, "https://") {
+		t.Errorf("CSP should not reference external origins: %q", csp)
+	}
+	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
+		t.Errorf("CSP must not allow inline scripts: %q", csp)
 	}
 }
 
