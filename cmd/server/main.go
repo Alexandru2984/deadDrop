@@ -16,6 +16,7 @@ import (
 	"deaddrop/internal/auth"
 	"deaddrop/internal/middleware"
 	"deaddrop/internal/signaling"
+	"deaddrop/internal/turn"
 )
 
 func main() {
@@ -77,6 +78,15 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"code":"` + code + `"}`))
 	}))))
+
+	// Ephemeral TURN/STUN credentials (auth required; never exposes the secret).
+	turnCfg := turn.FromEnv()
+	if turnCfg.Enabled() {
+		log.Printf("[turn] ephemeral TURN credentials enabled (%d url(s))", len(turnCfg.TurnURLs))
+	} else {
+		log.Printf("[turn] no TURN configured — clients use STUN/host candidates only")
+	}
+	mux.HandleFunc("/api/turn", authRL.Wrap(middleware.RequireSameOrigin(authH.RequireAuth(turnCfg.Handler()))))
 
 	// WebSocket signaling — requires valid session + rate limited
 	mux.HandleFunc("/ws", wsRL.Wrap(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {

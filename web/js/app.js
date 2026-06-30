@@ -25,6 +25,8 @@ class DeadDrop {
     this.msgMgr = null;
     this.fileMgr = new FileTransferManager();
     this.encrypted = false;
+    this.iceConfig = { iceServers: [] };
+    this._relayOnly = false;
 
     // Call state
     this.callState = 'idle'; // idle | requesting | incoming | connecting | active
@@ -58,6 +60,7 @@ class DeadDrop {
       createBtn:   $('#create-room'),
       joinBtn:     $('#join-room'),
       roomInput:   $('#room-code-input'),
+      relayToggle: $('#relay-toggle'),
       // Chat
       chatWrap:    $('#chat-wrap'),
       roomInfo:    $('#room-info'),
@@ -101,6 +104,7 @@ class DeadDrop {
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
     this.el.verifyBtn.addEventListener('click', () => this._markVerified());
+    this.el.relayToggle.addEventListener('change', (e) => { this._relayOnly = e.target.checked; });
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
     this.el.msgInput.addEventListener('keydown', (e) => {
@@ -269,6 +273,7 @@ class DeadDrop {
       this._renderSystem('Failed to create room');
       return;
     }
+    await this._loadIceServers();
     try {
       await this._connectSignaling();
       this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
@@ -287,6 +292,7 @@ class DeadDrop {
       this._renderSystem('Invalid room code');
       return;
     }
+    await this._loadIceServers();
     try {
       await this._connectSignaling();
     } catch {
@@ -380,8 +386,20 @@ class DeadDrop {
       this.crypto,
       (msg) => this._onPeerMessage(msg),
       (state, sas) => this._onConnState(state, sas),
+      { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly },
     );
     this.peer.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
+  }
+
+  /** Fetch self-hosted STUN/TURN ICE servers (with an ephemeral credential). */
+  async _loadIceServers() {
+    try {
+      const res = await fetch('/api/turn');
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.iceServers)) this.iceConfig.iceServers = data.iceServers;
+      }
+    } catch { /* keep host candidates only */ }
   }
 
   /* ── P2P connection state ── */

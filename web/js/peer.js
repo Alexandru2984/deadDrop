@@ -19,11 +19,15 @@ export class PeerConnection {
    * @param {Function}    onMessage    – called with each decrypted peer message
    * @param {Function}    onStateChange – called with 'connected' | 'encrypted' | 'disconnected'
    */
-  constructor(signaling, cryptoLayer, onMessage, onStateChange) {
+  constructor(signaling, cryptoLayer, onMessage, onStateChange, iceConfig = {}) {
     this.signaling = signaling;
     this.crypto = cryptoLayer;
     this.onMessage = onMessage;
     this.onStateChange = onStateChange;
+    this.iceServers = Array.isArray(iceConfig.iceServers) ? iceConfig.iceServers : [];
+    // relayOnly forces all traffic through the TURN relay so the peer never learns
+    // our IP (and we never learn theirs) — at the cost of routing via the server.
+    this.relayOnly = !!iceConfig.relayOnly;
     this.pc = null;
     this.dc = null;            // data channel
     this.remotePeerId = null;
@@ -160,13 +164,11 @@ export class PeerConnection {
   /* ── Private ── */
 
   _newRTCPeerConnection() {
+    // ICE servers come from the server's /api/turn (self-hosted coturn) — no
+    // third-party STUN, so peer IPs are never disclosed to Google et al.
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun.stunprotocol.org:3478' },
-      ],
+      iceServers: this.iceServers,
+      iceTransportPolicy: this.relayOnly ? 'relay' : 'all',
     });
 
     pc.onicecandidate = (e) => {
