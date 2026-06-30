@@ -2,7 +2,8 @@
 
 Anonymous, end-to-end encrypted, self-destructing peer-to-peer chat.
 
-No accounts. No servers storing messages. No trace left behind.
+Invite-only handles (no email, zero-knowledge login). No message storage. No
+third-party services. No trace left behind.
 
 ## Architecture
 
@@ -111,20 +112,35 @@ deaddrop/
 
 ## Security Notes
 
-- ✅ All messages encrypted before transmission (never plaintext on the wire)
-- ✅ Ephemeral keys — no long-term key storage
-- ✅ Crypto-secure random for IDs, nonces, room codes
-- ✅ Replay protection via nonce tracking
-- ✅ Signaling server is metadata-minimal (relays opaque blobs)
-- ⚠️ STUN server (`stun.l.google.com:19302`) used for NAT traversal — Google sees IP addresses
-- ⚠️ No TURN fallback — peers behind symmetric NAT may not connect
+- ✅ End-to-end encrypted: AES-256-GCM over ECDH-P256 → HKDF-SHA256, content never leaves the peers
+- ✅ Authenticated key exchange (ZRTP-style commit-reveal) + a 6-emoji safety code to detect MitM
+- ✅ Forward secrecy: the session DH-ratchets every ~10 min and destroys old keys
+- ✅ Zero-knowledge login (SRP-6a) — the password never reaches the server or Cloudflare
+- ✅ Self-hosted STUN/TURN (coturn) with ephemeral credentials — no third-party (Google) STUN
+- ✅ "Max anonymity" relay-only mode hides peer IPs from each other
+- ✅ Reachable as a Tor v3 onion service (Cloudflare-free, no DNS leak)
+- ✅ Invite-only registration, per-account login lockout, strict same-origin + CSP
+- ✅ No third-party analytics, no message storage, PII-free server logs
+
+See the in-app **Security & Privacy** page (`/about.html`) for the full, honest
+threat model — including what Dead Drop does **not** protect against.
+
+## Testing
+
+```bash
+go test ./...                      # server (incl. SRP JS↔Go interop vectors)
+node test/crypto.selftest.mjs      # handshake + ratchet + forward secrecy
+node test/srp.selftest.mjs         # SRP client↔server
+node test/srp.e2e.mjs              # live SRP against a running server
+```
+
+## Deployment
+
+Production setup (systemd, nginx, coturn, Tor, invites) is documented in
+[`DEPLOY.md`](DEPLOY.md).
 
 ## Future Work
 
-- [ ] Multi-peer mesh rooms
-- [ ] File transfer with self-destruct
-- [ ] Onion-style multi-hop relay
-- [ ] Custom STUN/TURN servers
-- [ ] Screenshot detection (best-effort)
-- [ ] Burn confirmation animation effects
-- [ ] Mobile-optimized UI
+- [ ] Multi-peer mesh group rooms
+- [ ] Duress / decoy password
+- [ ] QR code for room joining
