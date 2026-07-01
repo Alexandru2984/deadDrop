@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"deaddrop/internal/middleware"
 	"deaddrop/internal/srp"
 )
 
@@ -186,11 +187,16 @@ func (cs *challengeStore) fakeSaltAndVerifier(kind, username string) (string, *s
 	return hex.EncodeToString(salt), ch
 }
 
-/* ── per-account login lockout ── */
+/* ── login lockout, keyed by username+IP ──
+ * Keying by username alone would let anyone lock a victim's account with a few
+ * deliberately wrong proofs. Including the client IP means an attacker only locks
+ * *their own* view of the account; the per-IP rate limiter throttles anything
+ * distributed. */
 
 type lockEntry struct {
-	fails int
-	until time.Time
+	fails    int
+	until    time.Time
+	lastSeen time.Time
 }
 
 type lockout struct {
@@ -198,12 +204,18 @@ type lockout struct {
 	m  map[string]*lockEntry
 }
 
-func newLockout() *lockout { return &lockout{m: make(map[string]*lockEntry)} }
+func newLockout() *lockout {
+	l := &lockout{m: make(map[string]*lockEntry)}
+	go l.reap()
+	return l
+}
 
-func (l *lockout) allowed(username string) (bool, time.Duration) {
+func lockKey(username, ip string) string { return username + "|" + ip }
+
+func (l *lockout) allowed(username, ip string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e := l.m[username]
+	e := l.m[lockKey(username, ip)]
 	if e == nil {
 		return true, 0
 	}
@@ -213,25 +225,41 @@ func (l *lockout) allowed(username string) (bool, time.Duration) {
 	return true, 0
 }
 
-func (l *lockout) fail(username string) {
+func (l *lockout) fail(username, ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e := l.m[username]
+	key := lockKey(username, ip)
+	e := l.m[key]
 	if e == nil {
 		e = &lockEntry{}
-		l.m[username] = e
+		l.m[key] = e
 	}
 	e.fails++
+	e.lastSeen = time.Now()
 	if e.fails >= lockoutThreshold {
 		e.until = time.Now().Add(lockoutWindow)
 		e.fails = 0
 	}
 }
 
-func (l *lockout) reset(username string) {
+func (l *lockout) reset(username, ip string) {
 	l.mu.Lock()
-	delete(l.m, username)
+	delete(l.m, lockKey(username, ip))
 	l.mu.Unlock()
+}
+
+// reap drops entries idle past the lockout window so the map cannot grow unbounded.
+func (l *lockout) reap() {
+	for range time.NewTicker(10 * time.Minute).C {
+		cutoff := time.Now().Add(-lockoutWindow)
+		l.mu.Lock()
+		for k, e := range l.m {
+			if e.lastSeen.Before(cutoff) && time.Now().After(e.until) {
+				delete(l.m, k)
+			}
+		}
+		l.mu.Unlock()
+	}
 }
 
 /* ── invite codes (file-backed, single-use) ── */
@@ -386,7 +414,7 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if ok, wait := h.lockout.allowed(body.Username); !ok {
+	if ok, wait := h.lockout.allowed(body.Username, middleware.ExtractIP(r)); !ok {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())))
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
@@ -473,7 +501,8 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	if allowed, _ := h.lockout.allowed(p.username); !allowed {
+	ip := middleware.ExtractIP(r)
+	if allowed, _ := h.lockout.allowed(p.username, ip); !allowed {
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
 	}
@@ -483,20 +512,20 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 	// Try the real proof first, then the duress proof. Exactly one can match,
 	// depending on which password the client used.
 	if M2, _, verr := p.ch.Verify(p.A, M1); verr == nil && p.real {
-		h.lockout.reset(p.username)
+		h.lockout.reset(p.username, ip)
 		h.setCookieSession(w, r, p.username, false)
 		jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "duress": false})
 		return
 	}
 	if len(M1d) > 0 && p.realDuress {
 		if M2, _, verr := p.chDuress.Verify(p.A, M1d); verr == nil {
-			h.lockout.reset(p.username)
+			h.lockout.reset(p.username, ip)
 			h.setCookieSession(w, r, p.username, true)
 			jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "duress": true})
 			return
 		}
 	}
-	h.lockout.fail(p.username)
+	h.lockout.fail(p.username, ip)
 	jsonErr(w, "invalid credentials", http.StatusUnauthorized)
 }
 

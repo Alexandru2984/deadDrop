@@ -311,3 +311,23 @@ func TestAtomicSave(t *testing.T) {
 		t.Fatal("user 'bob' not found in users.json")
 	}
 }
+
+func TestLockoutIsPerIP(t *testing.T) {
+	l := newLockout()
+	// One IP hammers the account past the threshold…
+	for i := 0; i < 5; i++ {
+		l.fail("victim", "203.0.113.9")
+	}
+	if ok, _ := l.allowed("victim", "203.0.113.9"); ok {
+		t.Fatal("attacker IP should be locked out after threshold failures")
+	}
+	// …but the legitimate user on a different IP is unaffected.
+	if ok, _ := l.allowed("victim", "198.51.100.7"); !ok {
+		t.Fatal("a different IP must not be locked out (account-lockout DoS)")
+	}
+	// A success clears only that IP's slate.
+	l.reset("victim", "203.0.113.9")
+	if ok, _ := l.allowed("victim", "203.0.113.9"); !ok {
+		t.Fatal("reset should clear the lockout for that username+IP")
+	}
+}
