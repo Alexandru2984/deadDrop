@@ -30,11 +30,19 @@ func main() {
 		return
 	}
 
+	// When PORT is set explicitly (production: nginx proxies to a fixed port),
+	// bind exactly that port and fail loudly if it's taken — silently drifting to
+	// PORT+1 would leave the reverse proxy pointing at nothing. Port hunting is a
+	// dev-only convenience for when PORT is unset.
 	port := 8088
+	portPinned := false
 	if p := os.Getenv("PORT"); p != "" {
-		if v, err := strconv.Atoi(p); err == nil {
-			port = v
+		v, err := strconv.Atoi(p)
+		if err != nil {
+			log.Fatalf("invalid PORT %q: %v", p, err)
 		}
+		port = v
+		portPinned = true
 	}
 
 	// Bind to loopback by default so the Go server is only reachable through the
@@ -46,8 +54,10 @@ func main() {
 		host = h
 	}
 
-	// Find an available port without killing existing processes
-	port = findAvailablePort(host, port)
+	// Find an available port without killing existing processes (dev only)
+	if !portPinned {
+		port = findAvailablePort(host, port)
+	}
 
 	// Auth (username + password only, no email or identifying data)
 	authH, err := auth.NewHandler("data")
