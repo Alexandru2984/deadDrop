@@ -20,16 +20,16 @@ func SecurityHeaders(next http.Handler) http.Handler {
 			"camera=(self), microphone=(self), display-capture=(), geolocation=(), "+
 				"browsing-topics=(), interest-cohort=(), payment=(), usb=(), "+
 				"accelerometer=(), gyroscope=(), magnetometer=()")
-		// Privacy-first CSP: no external origins, no inline scripts. The whole app
-		// is same-origin ES modules. 'unsafe-inline' stays only for style attributes
-		// injected via innerHTML (progress bars etc.). blob:/data: cover file
-		// previews and the inline SVG favicon.
+		// Privacy-first CSP: no external origins, no inline scripts OR styles. The
+		// whole app is same-origin ES modules + stylesheets; dynamic styling goes
+		// through the CSSOM (element.style.x = …), which CSP does not block.
+		// blob:/data: cover file previews and the inline SVG favicon.
 		h.Set("Content-Security-Policy",
 			"default-src 'self'; "+
 				"base-uri 'none'; "+
 				"object-src 'none'; "+
 				"script-src 'self'; "+
-				"style-src 'self' 'unsafe-inline'; "+
+				"style-src 'self'; "+
 				"img-src 'self' blob: data:; "+
 				"media-src 'self' blob:; "+
 				"font-src 'self'; "+

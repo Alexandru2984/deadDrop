@@ -132,6 +132,9 @@ class DeadDrop {
       backToChat:    $('#back-to-chat'),
       endCall:       $('#end-call'),
     };
+    // Hidden until the data channel is up. Done here (CSSOM) rather than with an
+    // inline style attribute so the CSP needs no style-src 'unsafe-inline'.
+    this.el.callBtn.style.display = 'none';
   }
 
   _bindEvents() {
@@ -1120,7 +1123,7 @@ class DeadDrop {
     el.innerHTML = `
       <div class="file-receiving">
         <span>📦 Receiving file…</span>
-        <div class="progress-bar"><div class="progress-fill" style="width: 0%"></div></div>
+        <div class="progress-bar"><div class="progress-fill"></div></div>
         <span class="progress-text">0 / ${total}</span>
       </div>
     `;

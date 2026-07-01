@@ -9,22 +9,8 @@
   <meta name="robots" content="noindex, nofollow" />
   <title>💀 Dead Drop — Security &amp; Privacy</title>
   <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/about.css" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
-  <style>
-    .doc { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; overflow-y: auto; height: 100dvh; }
-    .doc h1 { color: var(--accent); font-size: clamp(22px, 5vw, 30px); letter-spacing: 4px; margin-bottom: 4px; }
-    .doc h2 { color: var(--text); font-size: 17px; margin: 28px 0 10px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-    .doc p, .doc li { color: var(--text); font-size: 14px; line-height: 1.7; }
-    .doc ul { margin: 8px 0 8px 20px; }
-    .doc li { margin: 4px 0; }
-    .doc .lead { color: var(--dim); margin-bottom: 8px; }
-    .doc a { color: var(--accent); }
-    .doc code, .doc .onion { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; font-size: 12px; word-break: break-all; }
-    .doc .onion { display: inline-block; color: var(--accent); padding: 8px 10px; margin-top: 6px; }
-    .yes { color: var(--accent); } .no { color: var(--danger); }
-    .back { display: inline-block; margin-bottom: 16px; color: var(--dim); text-decoration: none; }
-    .pill { display:inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--dim); margin-left: 6px; }
-  </style>
 </head>
 <body>
   <main class="doc">
@@ -58,7 +44,7 @@
     <h2>Access over Tor <span class="pill">no Cloudflare · no DNS</span></h2>
     <p>Reach the app without touching Cloudflare or leaking a DNS lookup:</p>
     <span class="onion">http://bhfutxa5e7tvpw4y4zhm2bc7o3kvbdgug34i6bahjr2eb5ifpfobuvid.onion</span>
-    <p style="margin-top:8px"><em>Limitation:</em> Tor carries TCP only, so the peer-to-peer channel (UDP) may not establish over the onion. The onion is best for privately loading the app and signing in; the live P2P chat still needs a normal connection.</p>
+    <p class="note"><em>Limitation:</em> Tor carries TCP only, so the peer-to-peer channel (UDP) may not establish over the onion. The onion is best for privately loading the app and signing in; the live P2P chat still needs a normal connection.</p>
 
     <h2>Duress / decoy password</h2>
     <p>In account settings (⚙️) you can set an optional <strong>duress password</strong>. Entering it logs you into a normal-looking decoy session instead of your real one. Because Dead Drop stores nothing between sessions, the practical value is mainly that you can hand over a <em>working</em> password under coercion without revealing your real one — the verifier check is done so the server can’t tell, from the request, whether a duress password even exists. It is not a substitute for the panic button (💣) or for simply not opening the app under duress.</p>

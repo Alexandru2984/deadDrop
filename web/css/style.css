@@ -787,6 +787,7 @@ select { cursor: pointer; width: auto; }
 }
 
 .progress-fill {
+  width: 0%; /* grows via JS as the transfer progresses */
   height: 100%;
   background: var(--accent);
   border-radius: 2px;

@@ -109,8 +109,11 @@ func TestSecurityHeaders(t *testing.T) {
 	if strings.Contains(csp, "http://") || strings.Contains(csp, "https://") {
 		t.Errorf("CSP should not reference external origins: %q", csp)
 	}
-	if strings.Contains(csp, "script-src 'self' 'unsafe-inline'") {
-		t.Errorf("CSP must not allow inline scripts: %q", csp)
+	if strings.Contains(csp, "'unsafe-inline'") {
+		t.Errorf("CSP must not allow inline scripts or styles: %q", csp)
+	}
+	if !strings.Contains(csp, "style-src 'self';") {
+		t.Errorf("CSP should restrict styles to same-origin stylesheets: %q", csp)
 	}
 }
 
