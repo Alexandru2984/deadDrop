@@ -47,7 +47,7 @@ third-party services. No trace left behind.
 cd /path/to/deaddrop
 go build -o deaddrop ./cmd/server/
 
-# Run (defaults to port 8088, auto-finds available port)
+# Run (defaults to port 8088; hunts for a free port only when PORT is unset)
 ./deaddrop
 
 # Or specify a port
@@ -115,11 +115,15 @@ deaddrop/
 - ✅ End-to-end encrypted: AES-256-GCM over ECDH-P256 → HKDF-SHA256, content never leaves the peers
 - ✅ Authenticated key exchange (ZRTP-style commit-reveal) + a 6-emoji safety code to detect MitM
 - ✅ Forward secrecy: the session DH-ratchets every ~10 min and destroys old keys
-- ✅ Zero-knowledge login (SRP-6a) — the password never reaches the server or Cloudflare
+- ✅ Zero-knowledge login (SRP-6a) — the password never reaches the server or Cloudflare,
+  and is stretched with PBKDF2-SHA256 (600k iterations) so even a stolen verifier
+  database resists offline cracking
 - ✅ Self-hosted STUN/TURN (coturn) with ephemeral credentials — no third-party (Google) STUN
 - ✅ "Max anonymity" relay-only mode hides peer IPs from each other
 - ✅ Reachable as a Tor v3 onion service (Cloudflare-free, no DNS leak)
-- ✅ Invite-only registration, per-account login lockout, strict same-origin + CSP
+- ✅ Invite-only registration, login lockout keyed by account+IP (no lockout DoS),
+  strict same-origin + CSP without any 'unsafe-inline'
+- ✅ Optional duress (decoy) password; nothing in the API or UI betrays a decoy session
 - ✅ No third-party analytics, no message storage, PII-free server logs
 
 See the in-app **Security & Privacy** page (`/about.html`) for the full, honest
