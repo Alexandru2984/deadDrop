@@ -71,6 +71,40 @@ async function messaging(a, b) {
   ok(tampered, 'tampered ciphertext is rejected');
 }
 
+async function sealing(a, b) {
+  console.log('sealed envelopes + length padding');
+  const ctBytes = (env) => Buffer.from(env.ciphertext, 'base64').length;
+
+  // Roundtrip of an arbitrary control message.
+  const env = await a.seal({ type: 'typing' });
+  const inner = await b.open(env.ciphertext, env.iv, env.epoch);
+  ok(inner?.type === 'typing', 'sealed envelope round-trips a control message');
+
+  // Replay of a sealed envelope must be rejected.
+  let replayed = false;
+  try { await b.open(env.ciphertext, env.iv, env.epoch); } catch { replayed = true; }
+  ok(replayed, 'replayed sealed envelope is rejected');
+
+  // Padding: wildly different payloads inside one bucket → identical ciphertext
+  // length, and every length sits exactly on bucket + 16 (the GCM tag).
+  const short = await a.seal({ type: 'chat', text: 'hi' });
+  const longer = await a.seal({ type: 'chat', text: 'x'.repeat(120) });
+  ok(ctBytes(short) === ctBytes(longer),
+     `short and longer messages are the same size on the wire (${ctBytes(short)}B)`);
+  ok(ctBytes(short) === 256 + 16, 'small envelopes land exactly on the 256B bucket');
+  ok(ctBytes(env) === ctBytes(short), 'typing notices are indistinguishable from short chats');
+
+  // Non-ASCII content is measured in bytes, not chars — still exactly on-bucket.
+  const emoji = await a.seal({ type: 'chat', text: '💀🔥'.repeat(30) });
+  const okBucket = [256, 512, 1024].some((bkt) => ctBytes(emoji) === bkt + 16);
+  ok(okBucket, 'multi-byte content still lands exactly on a bucket');
+
+  // A bigger payload steps up to the next bucket.
+  const big = await a.seal({ type: 'chat', text: 'y'.repeat(600) });
+  ok(ctBytes(big) === 1024 + 16, 'larger messages move up a bucket (1024B)');
+  await b.open(big.ciphertext, big.iv, big.epoch); // keep nonce sets coherent
+}
+
 async function binary(a, b) {
   console.log('binary / files');
   const data = crypto.getRandomValues(new Uint8Array(5000)).buffer;
@@ -168,6 +202,7 @@ function bufToB64Fake(len = 65) {
   try {
     const { a, b } = await honestHandshake();
     await messaging(a, b);
+    await sealing(a, b);
     await binary(a, b);
     await rekeying(a, b);
     await commitmentRejection();

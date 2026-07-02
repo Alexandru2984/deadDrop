@@ -25,6 +25,13 @@ import { ml_kem768 } from './vendor/noble/ml-kem.js';
 const RETAINED_EPOCHS = 3; // keep current + 2 previous keys for in-flight messages
 const SAS_LENGTH = 6;      // 6 symbols from a 64-emoji alphabet = 2^36 combinations
 
+// Padding buckets for sealed envelopes: every ciphertext length lands on one of
+// these sizes (bytes of plaintext), so an observer of the encrypted channel—
+// DTLS-MitM relay included—learns only the bucket, not the exact message length,
+// and typing notices are indistinguishable from short chat messages.
+const PAD_BUCKETS = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
+const PAD_STEP_ABOVE_MAX = 16384; // beyond the largest bucket, round up to this
+
 const SAS_EMOJI = [
   '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼',
   '🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔',
@@ -204,6 +211,37 @@ export class CryptoLayer {
     return envelope.text;
   }
 
+  /* ── Sealed envelopes (all app-level channel traffic) ──
+   * seal() wraps an arbitrary JS object in an encrypted, replay-protected,
+   * length-padded envelope. Used by the peer layer for EVERY post-handshake
+   * message (chat, typing, read receipts, deletes, call signaling, file
+   * chunks), so a compromised relay sees only uniform ciphertext blobs. */
+
+  async seal(obj) {
+    const key = this._sendKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)));
+    const ts = Date.now();
+    // Measure with an empty pad, then re-serialize with ASCII filler so the
+    // plaintext byte length lands exactly on the bucket (non-ASCII content is
+    // measured in encoded bytes, and each 'x' adds exactly one byte).
+    const bareBytes = enc.encode(JSON.stringify({ msg: obj, nonce, ts, pad: '' })).byteLength;
+    const envelope = JSON.stringify({ msg: obj, nonce, ts, pad: 'x'.repeat(padBucket(bareBytes) - bareBytes) });
+    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(envelope));
+    return { ciphertext: bufToB64(ciphertext), iv: bufToB64(iv), epoch: this.sendEpoch };
+  }
+
+  async open(ciphertextB64, ivB64, epoch) {
+    const key = this._recvKey(epoch);
+    const plainBuf = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: b64ToBuf(ivB64) }, key, b64ToBuf(ciphertextB64),
+    );
+    const envelope = JSON.parse(dec.decode(plainBuf));
+    if (!Array.isArray(envelope.nonce) || envelope.nonce.length !== 8) throw new Error('Invalid nonce');
+    this._checkReplay(this.seenNonces, envelope.nonce.join(','));
+    return envelope.msg;
+  }
+
   /* ── Binary (files) ── */
 
   async encryptBinary(data) {
@@ -308,6 +346,14 @@ export class CryptoLayer {
       base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
     );
   }
+}
+
+/** Smallest padding bucket that fits `n` plaintext bytes. */
+function padBucket(n) {
+  for (const b of PAD_BUCKETS) {
+    if (n <= b) return b;
+  }
+  return Math.ceil(n / PAD_STEP_ABOVE_MAX) * PAD_STEP_ABOVE_MAX;
 }
 
 export function compareBytes(a, b) {

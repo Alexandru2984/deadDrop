@@ -37,6 +37,8 @@ export class PeerConnection {
     this.isInitiator = false;  // the data-channel creator drives rekeys
     this.handshake = null;
     this._rekeyTimer = null;
+    this._sendQ = Promise.resolve(); // keeps sealed sends in order
+    this._recvQ = Promise.resolve(); // keeps opened messages in order
   }
 
   /* ── Initiator (caller) ── */
@@ -96,12 +98,26 @@ export class PeerConnection {
     }
   }
 
-  /** Send a plain JS object over the data channel (caller encrypts first). */
+  /**
+   * Send an app-level JS object over the data channel. EVERY message is sealed
+   * into an encrypted, replay-protected, length-padded envelope — typing
+   * notices, read receipts, deletes and call signaling included — so even a
+   * DTLS-terminating man-in-the-middle sees only uniform ciphertext blobs.
+   * Sends are queued to preserve ordering across async encryption.
+   */
   send(obj) {
     if (!this.dc || this.dc.readyState !== 'open') {
       throw new Error('Data channel not open');
     }
-    this.dc.send(JSON.stringify(obj));
+    this._sendQ = this._sendQ
+      .then(async () => {
+        const { ciphertext, iv, epoch } = await this.crypto.seal(obj);
+        if (this.dc && this.dc.readyState === 'open') {
+          this.dc.send(JSON.stringify({ type: 'enc', c: ciphertext, iv, e: epoch }));
+        }
+      })
+      .catch((err) => console.warn('[peer] sealed send failed', err));
+    return this._sendQ;
   }
 
   /* ── Media (audio / video calls) ── */
@@ -244,12 +260,23 @@ export class PeerConnection {
       if (msg.type === 'rekey-offer')  { await this._onRekeyOffer(msg);  return; }
       if (msg.type === 'rekey-answer') { await this._onRekeyAnswer(msg); return; }
 
-      // Everything else only makes sense once the session is encrypted.
+      // App traffic arrives ONLY as sealed envelopes; anything else after the
+      // handshake is either an old client or an injection attempt — drop it.
+      if (msg.type !== 'enc') {
+        console.warn('[peer] dropping unsealed app message');
+        return;
+      }
       if (!this.crypto.established) {
         console.warn('[peer] dropping pre-handshake app message');
         return;
       }
-      this.onMessage(msg);
+      this._recvQ = this._recvQ
+        .then(async () => {
+          const inner = await this.crypto.open(msg.c, msg.iv, msg.e);
+          if (inner && typeof inner.type === 'string') this.onMessage(inner);
+        })
+        .catch((err) => console.warn('[peer] failed to open sealed message', err));
+      await this._recvQ;
     };
 
     ch.onclose = () => {
