@@ -20,8 +20,9 @@
 
     <h2>How a conversation is protected</h2>
     <ul>
-      <li><strong>End-to-end encryption.</strong> Messages, files and calls travel directly between the two browsers over a WebRTC data channel. They are encrypted with <strong>AES-256-GCM</strong> using a key agreed by <strong>ECDH (P-256)</strong> → <strong>HKDF-SHA256</strong>. The server only relays connection setup — it never sees keys or content.</li>
-      <li><strong>Authenticated handshake.</strong> A ZRTP-style commit-reveal step stops a relay from secretly sitting in the middle and grinding keys.</li>
+      <li><strong>End-to-end encryption, post-quantum hybrid.</strong> Messages, files and calls travel directly between the two browsers over a WebRTC data channel. They are encrypted with <strong>AES-256-GCM</strong> using a key agreed by <strong>ECDH (P-256) + ML-KEM-768 (FIPS 203)</strong> → <strong>HKDF-SHA256</strong> — an attacker recording traffic today cannot decrypt it even with a future quantum computer, because breaking the session requires breaking <em>both</em> primitives. The server only relays connection setup — it never sees keys or content.</li>
+      <li><strong>Authenticated handshake.</strong> A ZRTP-style commit-reveal step (with explicit key confirmation) stops a relay from secretly sitting in the middle and grinding keys.</li>
+      <li><strong>Uniform, padded traffic.</strong> Every message on the channel — typing notices, read receipts, deletions, call signaling, file chunks — is sealed in an encrypted envelope padded to fixed size buckets, so even someone who could break the transport sees only same-sized ciphertext blobs, not what kind of message you sent or how long it was.</li>
       <li><strong>Forward secrecy.</strong> The session re-keys with fresh ECDH every ~10 minutes and destroys old keys, so a device seized later cannot decrypt earlier messages.</li>
       <li><strong>Zero-knowledge login (SRP-6a).</strong> Your password is turned into a verifier <em>in your browser</em>. It never reaches the server — or Cloudflare. Before that, it is stretched with <strong>PBKDF2-SHA256 (600,000 iterations)</strong>, so even if the server's verifier store leaked, offline password cracking would be hundreds of thousands of times slower.</li>
       <li><strong>Self-destruct.</strong> Messages can carry a TTL and/or burn-after-reading; deletion is bilateral and nothing is stored on the server.</li>
@@ -29,6 +30,7 @@
 
     <h2>⚠️ Verify your safety code</h2>
     <p>When a chat becomes encrypted, both sides see a <strong>6-emoji safety code</strong>. Read it aloud to your peer (in person or on a call you trust). If the codes match, no one is intercepting. <strong>If they differ, stop — the line is compromised.</strong> This is the one step only <em>you</em> can do.</p>
+    <p>For a stronger check, tap <strong>📷 QR</strong> next to the code: scanning your peer's screen compares the <strong>full 128-bit</strong> verification token automatically — a man-in-the-middle has no realistic chance of surviving that comparison.</p>
 
     <h2>What the server can and cannot see</h2>
     <ul>

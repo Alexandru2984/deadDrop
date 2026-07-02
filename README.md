@@ -16,8 +16,8 @@ third-party services. No trace left behind.
      │            WebRTC Data Channel (direct P2P)              │
      │◄────────────────────────────────────────────────────────►│
      │                                                          │
-     │  1. ECDH key exchange (P-256)                            │
-     │  2. AES-256-GCM encrypted messages                      │
+     │  1. Hybrid key exchange: ECDH P-256 + ML-KEM-768 (PQ)    │
+     │  2. AES-256-GCM sealed, length-padded envelopes          │
      │  3. TTL + burn-after-reading self-destruct               │
      └──────────────────────────────────────────────────────────┘
 ```
@@ -68,8 +68,12 @@ PORT=9000 ./deaddrop
 ## Features
 
 ### Encryption
-- **ECDH P-256** ephemeral key exchange (new keys per connection)
+- **Hybrid post-quantum key exchange**: ephemeral **ECDH P-256 + ML-KEM-768**
+  (FIPS 203) — breaking a recorded session requires breaking both primitives
 - **AES-256-GCM** symmetric encryption for all messages
+- **Everything is sealed**: typing notices, read receipts, deletes, call
+  signaling and file chunks travel in encrypted envelopes **padded to size
+  buckets**, so an observer can't tell a typing notice from a short message
 - Keys exchanged over WebRTC data channel (signaling server never sees them)
 - Nonce-based replay attack protection
 - All key material destroyed on disconnect
@@ -112,9 +116,14 @@ deaddrop/
 
 ## Security Notes
 
-- ✅ End-to-end encrypted: AES-256-GCM over ECDH-P256 → HKDF-SHA256, content never leaves the peers
-- ✅ Authenticated key exchange (ZRTP-style commit-reveal) + a 6-emoji safety code to detect MitM
-- ✅ Forward secrecy: the session DH-ratchets every ~10 min and destroys old keys
+- ✅ End-to-end encrypted: AES-256-GCM over a hybrid **ECDH-P256 + ML-KEM-768**
+  exchange → HKDF-SHA256 — post-quantum "harvest now, decrypt later" resistant
+- ✅ Authenticated key exchange (ZRTP-style commit-reveal) + key confirmation +
+  a 6-emoji safety code — verifiable by a **full 128-bit QR scan** — to detect MitM
+- ✅ Forward secrecy: the session DH-ratchets every ~10 min (PQ root mixed into
+  every epoch) and destroys old keys
+- ✅ Traffic-analysis resistance on the channel: all control traffic is encrypted
+  and padded to fixed buckets
 - ✅ Zero-knowledge login (SRP-6a) — the password never reaches the server or Cloudflare,
   and is stretched with PBKDF2-SHA256 (600k iterations) so even a stolen verifier
   database resists offline cracking
@@ -133,8 +142,9 @@ threat model — including what Dead Drop does **not** protect against.
 
 ```bash
 go test ./...                      # server (incl. SRP JS↔Go interop vectors)
-node test/crypto.selftest.mjs      # handshake + ratchet + forward secrecy
-node test/srp.selftest.mjs         # SRP client↔server
+node test/crypto.selftest.mjs      # hybrid handshake + sealing + ratchet
+node test/mlkem.selftest.mjs       # vendored ML-KEM-768 sanity
+node test/srp.selftest.mjs         # SRP client↔server (legacy + PBKDF2 kdf)
 node test/srp.e2e.mjs              # live SRP against a running server
 ```
 
