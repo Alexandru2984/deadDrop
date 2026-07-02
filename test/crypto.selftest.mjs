@@ -47,6 +47,9 @@ async function honestHandshake() {
   ok(a._rootSecret?.length === 32 && b._rootSecret?.length === 32
      && a._rootSecret.every((v, i) => v === b._rootSecret[i]),
      'both peers derived the same 32-byte PQ root secret');
+  // QR verification token: full 128-bit value, identical on both sides.
+  ok(/^[0-9a-f]{32}$/.test(a.computeSASToken()) && a.computeSASToken() === b.computeSASToken(),
+     'both peers derive the same 128-bit QR verification token');
   return { a, b };
 }
 

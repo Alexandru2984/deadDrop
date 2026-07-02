@@ -104,12 +104,30 @@
       <div class="verify-row">
         <span class="verify-label" data-i18n="verify.label">🔐 Safety code</span>
         <span id="verify-sas" class="verify-sas" aria-live="polite"></span>
+        <button id="verify-qr-btn" class="btn btn-sm" data-i18n="verify.qr" title="Verify with a QR scan">📷 QR</button>
         <button id="verify-btn" class="btn btn-sm verify-btn" data-i18n="verify.btn">Mark verified</button>
       </div>
       <p class="verify-hint" data-i18n="verify.hint">
         Read this aloud to your peer (call/in person). If your codes match, no one is
         intercepting. If they differ, stop — the line is compromised.
       </p>
+    </div>
+
+    <!-- QR safety-code verification overlay -->
+    <div id="qr-verify" class="qr-verify hidden" role="dialog" aria-modal="true">
+      <div class="qr-verify-box">
+        <h3 data-i18n="qr.title">📷 QR verification</h3>
+        <p class="qr-verify-hint" data-i18n="qr.hint">
+          Point your camera at your peer's screen (and let them scan yours).
+          The codes are compared automatically — a match proves no one is in the middle.
+        </p>
+        <div class="qr-verify-panels">
+          <img id="qr-verify-img" alt="Your verification QR code" />
+          <video id="qr-verify-video" muted playsinline></video>
+        </div>
+        <p id="qr-verify-status" class="qr-verify-status" aria-live="polite"></p>
+        <button id="qr-verify-close" class="btn btn-sm" data-i18n="qr.close">Close</button>
+      </div>
     </div>
 
     <!-- Incoming call notification -->

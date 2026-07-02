@@ -117,6 +117,12 @@ class DeadDrop {
       verifyBar:   $('#verify-bar'),
       verifySas:   $('#verify-sas'),
       verifyBtn:   $('#verify-btn'),
+      verifyQrBtn:    $('#verify-qr-btn'),
+      qrVerify:       $('#qr-verify'),
+      qrVerifyImg:    $('#qr-verify-img'),
+      qrVerifyVideo:  $('#qr-verify-video'),
+      qrVerifyStatus: $('#qr-verify-status'),
+      qrVerifyClose:  $('#qr-verify-close'),
       // Call
       callBtn:       $('#call-btn'),
       incomingCall:  $('#incoming-call'),
@@ -151,6 +157,8 @@ class DeadDrop {
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
     this.el.verifyBtn.addEventListener('click', () => this._markVerified());
+    this.el.verifyQrBtn.addEventListener('click', () => this._openQrVerify());
+    this.el.qrVerifyClose.addEventListener('click', () => this._closeQrVerify());
     this.el.relayToggle.addEventListener('change', (e) => { this._relayOnly = e.target.checked; });
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
@@ -626,6 +634,7 @@ class DeadDrop {
         this.encrypted = false;
         this._setStatus('disconnected', '❌ Peer disconnected');
         this._hideVerify();
+        this._closeQrVerify();
         this._hideTyping();
         this.el.callBtn.style.display = 'none';
         this._endCallCleanup();
@@ -642,6 +651,85 @@ class DeadDrop {
   _markVerified() {
     this.el.verifyBar.classList.add('verified');
     this.el.verifyBtn.textContent = t('verify.verified');
+  }
+
+  /* ── QR safety-code verification ──
+   * The QR encodes the full 128-bit verification token (the visual SAS shows
+   * only 2^36 of it), so a scan compares the entire handshake secret: a MitM
+   * that survived the emoji comparison odds cannot survive this one. */
+
+  async _openQrVerify() {
+    let token;
+    try { token = 'dd-sas:' + this.crypto.computeSASToken(); } catch { return; }
+    const qr = this._qrDataURL(token);
+    if (qr) this.el.qrVerifyImg.src = qr;
+    this.el.qrVerifyStatus.textContent = t('qr.scanning');
+    this.el.qrVerifyStatus.classList.remove('match', 'mismatch');
+    this.el.qrVerify.classList.remove('hidden');
+    await this._startQrScan(token);
+  }
+
+  async _startQrScan(expected) {
+    try {
+      // The 250KB decoder is only ever loaded (same-origin) when scanning starts.
+      await import('./vendor/jsqr.js');
+      this._qrStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }, audio: false,
+      });
+    } catch {
+      this.el.qrVerifyStatus.textContent = t('qr.cameraFail');
+      return;
+    }
+    const video = this.el.qrVerifyVideo;
+    video.srcObject = this._qrStream;
+    await video.play().catch(() => {});
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const tick = () => {
+      if (!this._qrStream) return; // scan was stopped
+      if (video.readyState >= 2 && video.videoWidth) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const hit = self.jsQR(frame.data, frame.width, frame.height, { inversionAttempts: 'dontInvert' });
+        if (hit && typeof hit.data === 'string' && hit.data.startsWith('dd-sas:')) {
+          this._onQrScanned(hit.data === expected);
+          return;
+        }
+      }
+      this._qrRaf = requestAnimationFrame(tick);
+    };
+    this._qrRaf = requestAnimationFrame(tick);
+  }
+
+  _onQrScanned(match) {
+    this._stopQrScan();
+    if (match) {
+      this.el.qrVerifyStatus.textContent = t('qr.match');
+      this.el.qrVerifyStatus.classList.add('match');
+      this._markVerified();
+    } else {
+      this.el.qrVerifyStatus.textContent = t('qr.mismatch');
+      this.el.qrVerifyStatus.classList.add('mismatch');
+      this.el.verifyBar.classList.remove('verified');
+      this.el.verifyBar.classList.add('insecure');
+      this._renderSystem(t('qr.mismatch'));
+    }
+  }
+
+  _stopQrScan() {
+    if (this._qrRaf) { cancelAnimationFrame(this._qrRaf); this._qrRaf = null; }
+    if (this._qrStream) {
+      for (const track of this._qrStream.getTracks()) track.stop();
+      this._qrStream = null;
+    }
+    this.el.qrVerifyVideo.srcObject = null;
+  }
+
+  _closeQrVerify() {
+    this._stopQrScan();
+    this.el.qrVerify.classList.add('hidden');
   }
 
   _hideVerify() {
@@ -1199,6 +1287,7 @@ class DeadDrop {
   }
 
   _cleanup() {
+    this._closeQrVerify();
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
     this.peer?.close();

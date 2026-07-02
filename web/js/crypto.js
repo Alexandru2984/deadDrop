@@ -133,6 +133,18 @@ export class CryptoLayer {
     return sas;
   }
 
+  /**
+   * Full 128-bit verification token for QR comparison. The visual SAS shows
+   * 2^36 of the secret for human comparison; scanning a QR can compare all
+   * 128 bits, making a survived MitM cryptographically negligible.
+   */
+  computeSASToken() {
+    if (!this._sasSecret) throw new Error('No session established');
+    let hex = '';
+    for (const byte of this._sasSecret) hex += byte.toString(16).padStart(2, '0');
+    return hex;
+  }
+
   get established() {
     return this.sendEpoch >= 0 && this.epochs.has(this.sendEpoch);
   }
