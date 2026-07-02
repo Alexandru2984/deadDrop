@@ -106,6 +106,13 @@ async function sealing(a, b) {
   const big = await a.seal({ type: 'chat', text: 'y'.repeat(600) });
   ok(ctBytes(big) === 1024 + 16, 'larger messages move up a bucket (1024B)');
   await b.open(big.ciphertext, big.iv, big.epoch); // keep nonce sets coherent
+
+  // Cover traffic: a decoy packet must be wire-indistinguishable from a real
+  // control message (same bucket) and open back to exactly {type:'cover'}.
+  const cover = await a.seal({ type: 'cover' });
+  ok(ctBytes(cover) === ctBytes(short), 'cover packets are the same size as real messages');
+  const coverInner = await b.open(cover.ciphertext, cover.iv, cover.epoch);
+  ok(coverInner?.type === 'cover', 'cover packet opens to {type:"cover"} (peer will drop it)');
 }
 
 async function binary(a, b) {

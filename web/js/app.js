@@ -33,6 +33,8 @@ class DeadDrop {
     this.encrypted = false; // true when ≥1 pairwise session is encrypted
     this.iceConfig = { iceServers: [] };
     this._relayOnly = false;
+    this._coverEnabled = false; // decoy traffic to mask when real chatting happens
+    this._coverTimer = null;
 
     // Call state (calls stay 1:1 — only available when exactly one peer is in the room)
     this.callState = 'idle'; // idle | requesting | incoming | connecting | active
@@ -101,6 +103,7 @@ class DeadDrop {
       joinBtn:     $('#join-room'),
       roomInput:   $('#room-code-input'),
       relayToggle: $('#relay-toggle'),
+      coverToggle: $('#cover-toggle'),
       // Chat
       chatWrap:    $('#chat-wrap'),
       roomInfo:    $('#room-info'),
@@ -160,6 +163,10 @@ class DeadDrop {
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
     this.el.qrVerifyClose.addEventListener('click', () => this._closeQrVerify());
     this.el.relayToggle.addEventListener('change', (e) => { this._relayOnly = e.target.checked; });
+    this.el.coverToggle.addEventListener('change', (e) => {
+      this._coverEnabled = e.target.checked;
+      if (this._coverEnabled) this._startCoverTraffic(); else this._stopCoverTraffic();
+    });
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
     this.el.msgInput.addEventListener('keydown', (e) => {
@@ -651,6 +658,9 @@ class DeadDrop {
     // Calls stay strictly 1:1: only offered when exactly one (encrypted) peer is present.
     const callable = enc.length === 1 && this.peers.size === 1;
     this.el.callBtn.style.display = (callable || this.callState !== 'idle') ? '' : 'none';
+    // Cover traffic runs whenever it's enabled and there's someone to cover for.
+    if (this._coverEnabled && enc.length > 0 && !this._coverTimer) this._startCoverTraffic();
+    else if (enc.length === 0) this._stopCoverTraffic();
     this._renderVerifyBar();
   }
 
@@ -933,6 +943,12 @@ class DeadDrop {
     const s = this.peers.get(peerId);
     if (!s) return;
     switch (msg.type) {
+      case 'cover':
+        // Decoy packet from the peer's cover-traffic generator — sealed and
+        // padded exactly like a real message, so it's indistinguishable on the
+        // wire. Silently discarded; never shown, never acknowledged.
+        break;
+
       case 'typing':
         this._showTyping(s.label);
         break;
@@ -1427,8 +1443,35 @@ class DeadDrop {
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
   }
 
+  /* ── Cover traffic (decoy packets to mask real activity) ──
+   * When enabled, each encrypted session emits sealed `cover` messages at
+   * randomized intervals. They are padded to the same size bucket as real
+   * control messages, so a network observer (or the TURN relay in "max
+   * anonymity" mode) sees a steady stream of identical ciphertext blobs and
+   * cannot tell when — or whether — you are actually chatting. The peer drops
+   * them on arrival; they never surface in the UI. */
+
+  _startCoverTraffic() {
+    this._stopCoverTraffic();
+    if (!this._coverEnabled) return;
+    const tick = () => {
+      if (!this._coverEnabled) { this._coverTimer = null; return; }
+      for (const s of this._encryptedSessions()) {
+        try { s.conn.send({ type: 'cover' }); } catch { /* channel not ready */ }
+      }
+      // Randomized 4–16 s cadence so there's no fixed heartbeat fingerprint.
+      this._coverTimer = setTimeout(tick, 4000 + Math.random() * 12000);
+    };
+    this._coverTimer = setTimeout(tick, 2000 + Math.random() * 4000);
+  }
+
+  _stopCoverTraffic() {
+    if (this._coverTimer) { clearTimeout(this._coverTimer); this._coverTimer = null; }
+  }
+
   _cleanup() {
     this._closeQrVerify();
+    this._stopCoverTraffic();
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
     // Tear down every pairwise session; clear the map first so the close

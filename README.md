@@ -101,6 +101,10 @@ PORT=9000 ./deaddrop
 - No message persistence (in-memory only)
 - No logs of message content
 - Minimal metadata (room code + peer ID, both ephemeral)
+- **Cover traffic** (opt-in 🕶️): each session emits constant decoy packets,
+  padded to the same size as real messages, so a network observer — or the
+  TURN relay in "max anonymity" mode — can't tell when, or whether, you're
+  actually chatting
 
 ## Project Structure
 
