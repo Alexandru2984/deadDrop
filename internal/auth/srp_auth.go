@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +48,28 @@ func (s *store) exists(username string) bool {
 
 func validSalt(h string) bool { b, err := hex.DecodeString(h); return err == nil && len(b) == 16 }
 
-func (s *store) registerSRP(username, saltHex, verifierHex string) error {
+// defaultKdf is what fresh clients use and what anti-enumeration dummies
+// advertise; it must stay in sync with DEFAULT_KDF in web/js/srp.js.
+const defaultKdf = "pbkdf2:600000"
+
+var kdfRe = regexp.MustCompile(`^pbkdf2:(\d{1,9})$`)
+
+// validKdf accepts the empty string (legacy, no stretch) or a pbkdf2 label with a
+// sane iteration count. The server never executes the KDF — bounds only stop a
+// poisoned label from freezing some future client for minutes at login.
+func validKdf(kdf string) bool {
+	if kdf == "" {
+		return true
+	}
+	m := kdfRe.FindStringSubmatch(kdf)
+	if m == nil {
+		return false
+	}
+	n, err := strconv.Atoi(m[1])
+	return err == nil && n >= 10_000 && n <= 5_000_000
+}
+
+func (s *store) registerSRP(username, saltHex, verifierHex, kdf string) error {
 	if !usernameRe.MatchString(username) {
 		return errors.New("username: 3–20 chars, letters/numbers/underscores")
 	}
@@ -56,30 +79,41 @@ func (s *store) registerSRP(username, saltHex, verifierHex string) error {
 	if _, err := srp.DecodeVerifier(verifierHex); err != nil {
 		return errors.New("invalid verifier")
 	}
+	if !validKdf(kdf) {
+		return errors.New("invalid kdf")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.users[username]; exists {
 		return errors.New("username already taken")
 	}
-	s.users[username] = user{Salt: saltHex, Verifier: verifierHex}
+	s.users[username] = user{Salt: saltHex, Verifier: verifierHex, Kdf: kdf}
 	return s.save()
 }
 
 // setVerifier installs a new SRP salt+verifier for an existing account (used for
-// legacy→SRP upgrade and password change). Clears any legacy bcrypt hash.
-func (s *store) setVerifier(username, saltHex, verifierHex string) error {
+// legacy→SRP upgrade and password change). Clears any legacy bcrypt hash but
+// keeps the duress credential.
+func (s *store) setVerifier(username, saltHex, verifierHex, kdf string) error {
 	if !validSalt(saltHex) {
 		return errors.New("invalid salt")
 	}
 	if _, err := srp.DecodeVerifier(verifierHex); err != nil {
 		return errors.New("invalid verifier")
 	}
+	if !validKdf(kdf) {
+		return errors.New("invalid kdf")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.users[username]; !ok {
+	u, ok := s.users[username]
+	if !ok {
 		return errors.New("no such account")
 	}
-	s.users[username] = user{Salt: saltHex, Verifier: verifierHex}
+	s.users[username] = user{
+		Salt: saltHex, Verifier: verifierHex, Kdf: kdf,
+		DuressSalt: u.DuressSalt, DuressVerifier: u.DuressVerifier, DuressKdf: u.DuressKdf,
+	}
 	return s.save()
 }
 
@@ -95,7 +129,7 @@ func (s *store) deleteUser(username string) error {
 
 // setDuress sets (or clears, when salt/verifier are empty) the duress credential
 // for an existing account.
-func (s *store) setDuress(username, saltHex, verifierHex string) error {
+func (s *store) setDuress(username, saltHex, verifierHex, kdf string) error {
 	clear := saltHex == "" && verifierHex == ""
 	if !clear {
 		if !validSalt(saltHex) {
@@ -104,6 +138,11 @@ func (s *store) setDuress(username, saltHex, verifierHex string) error {
 		if _, err := srp.DecodeVerifier(verifierHex); err != nil {
 			return errors.New("invalid verifier")
 		}
+		if !validKdf(kdf) {
+			return errors.New("invalid kdf")
+		}
+	} else {
+		kdf = ""
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,7 +150,7 @@ func (s *store) setDuress(username, saltHex, verifierHex string) error {
 	if !ok {
 		return errors.New("no such account")
 	}
-	u.DuressSalt, u.DuressVerifier = saltHex, verifierHex
+	u.DuressSalt, u.DuressVerifier, u.DuressKdf = saltHex, verifierHex, kdf
 	s.users[username] = u
 	return s.save()
 }
@@ -366,6 +405,7 @@ type srpRegisterReq struct {
 	Username string `json:"username"`
 	Salt     string `json:"salt"`
 	Verifier string `json:"verifier"`
+	Kdf      string `json:"kdf"`
 	Invite   string `json:"invite"`
 }
 
@@ -390,7 +430,7 @@ func (h *Handler) SRPRegister(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid or used invite code", http.StatusForbidden)
 		return
 	}
-	if err := h.store.registerSRP(body.Username, body.Salt, body.Verifier); err != nil {
+	if err := h.store.registerSRP(body.Username, body.Salt, body.Verifier, body.Kdf); err != nil {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -433,8 +473,11 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build the real challenge (real verifier, or an anti-enumeration dummy).
+	// Dummies advertise the current default KDF — the same thing a fresh real
+	// account would — so the response shape and timing stay indistinguishable.
 	var ch *srp.Challenge
 	var saltHex string
+	kdf := defaultKdf
 	real := false
 	if ok {
 		v, derr := srp.DecodeVerifier(u.Verifier)
@@ -443,7 +486,7 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ch, _ = srp.NewChallenge(v)
-		saltHex, real = u.Salt, true
+		saltHex, kdf, real = u.Salt, u.Kdf, true
 	} else {
 		saltHex, ch = h.challenges.fakeSaltAndVerifier("real", body.Username)
 	}
@@ -453,11 +496,12 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	// never changes, an observer cannot tell whether a duress password is configured.
 	var chD *srp.Challenge
 	var saltD string
+	kdfD := defaultKdf
 	realDuress := false
 	if ok && u.hasDuress() {
 		if vd, derr := srp.DecodeVerifier(u.DuressVerifier); derr == nil {
 			chD, _ = srp.NewChallenge(vd)
-			saltD, realDuress = u.DuressSalt, true
+			saltD, kdfD, realDuress = u.DuressSalt, u.DuressKdf, true
 		}
 	}
 	if chD == nil {
@@ -474,8 +518,8 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	})
 	jsonOK(w, map[string]any{
 		"token": token,
-		"salt":  saltHex, "B": ch.Bpub.Text(16),
-		"salt2": saltD, "B2": chD.Bpub.Text(16),
+		"salt":  saltHex, "B": ch.Bpub.Text(16), "kdf": kdf,
+		"salt2": saltD, "B2": chD.Bpub.Text(16), "kdf2": kdfD,
 	})
 }
 
@@ -554,20 +598,21 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Salt     string `json:"salt"`
 		Verifier string `json:"verifier"`
+		Kdf      string `json:"kdf"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	if duress {
-		if err := h.store.setDuress(username, body.Salt, body.Verifier); err != nil {
+		if err := h.store.setDuress(username, body.Salt, body.Verifier, body.Kdf); err != nil {
 			jsonErr(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
-	if err := h.store.setVerifier(username, body.Salt, body.Verifier); err != nil {
+	if err := h.store.setVerifier(username, body.Salt, body.Verifier, body.Kdf); err != nil {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -596,6 +641,7 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Salt     string `json:"salt"`
 		Verifier string `json:"verifier"`
+		Kdf      string `json:"kdf"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
@@ -612,10 +658,14 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "invalid verifier", http.StatusBadRequest)
 			return
 		}
+		if !validKdf(body.Kdf) {
+			jsonErr(w, "invalid kdf", http.StatusBadRequest)
+			return
+		}
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
-	if err := h.store.setDuress(username, body.Salt, body.Verifier); err != nil {
+	if err := h.store.setDuress(username, body.Salt, body.Verifier, body.Kdf); err != nil {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}

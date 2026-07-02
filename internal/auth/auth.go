@@ -29,11 +29,17 @@ type user struct {
 	Hash     string `json:"hash,omitempty"`     // legacy bcrypt over SHA-256(password)
 	Salt     string `json:"salt,omitempty"`     // SRP salt (hex)
 	Verifier string `json:"verifier,omitempty"` // SRP verifier v = g^x mod N (hex)
+	// Kdf names the client-side password stretch applied before the SRP x
+	// derivation (e.g. "pbkdf2:600000"). Empty = pre-stretch account (bare RFC 5054
+	// SHA-256); those upgrade transparently on their next login. The server never
+	// runs the KDF — it only stores the label and echoes it in the login challenge.
+	Kdf string `json:"kdf,omitempty"`
 	// Optional duress credential: logging in with it succeeds but flags the session
 	// as duress (decoy), so a coerced user can surrender a working password without
 	// revealing the real one.
 	DuressSalt     string `json:"duressSalt,omitempty"`
 	DuressVerifier string `json:"duressVerifier,omitempty"`
+	DuressKdf      string `json:"duressKdf,omitempty"`
 }
 
 func (u user) isSRP() bool      { return u.Verifier != "" }

@@ -331,3 +331,27 @@ func TestLockoutIsPerIP(t *testing.T) {
 		t.Fatal("reset should clear the lockout for that username+IP")
 	}
 }
+
+func TestValidKdf(t *testing.T) {
+	valid := []string{"", "pbkdf2:600000", "pbkdf2:10000", "pbkdf2:5000000"}
+	for _, k := range valid {
+		if !validKdf(k) {
+			t.Errorf("validKdf(%q) = false, want true", k)
+		}
+	}
+	invalid := []string{
+		"pbkdf2:9999",      // below the floor — no real stretch
+		"pbkdf2:5000001",   // above the cap — could freeze a client at login
+		"pbkdf2:",          // no count
+		"pbkdf2:1e6",       // not a plain integer
+		"argon2id:3",       // unknown algorithm
+		"PBKDF2:600000",    // case matters; must match the client exactly
+		" pbkdf2:600000",   // no padding
+		"pbkdf2:600000000", // 9 digits but over the cap
+	}
+	for _, k := range invalid {
+		if validKdf(k) {
+			t.Errorf("validKdf(%q) = true, want false", k)
+		}
+	}
+}

@@ -238,14 +238,16 @@ class DeadDrop {
       if (ch.data.legacy) { await this._legacyLogin(username, password); return; }
       if (!ch.ok) { this._showAuthError(ch.data.error || 'Login failed'); return; }
 
-      const { M1 } = await client.finish(ch.data.salt, ch.data.B);
+      // The challenge advertises each credential's password-stretch KDF
+      // ('' = legacy account from before the PBKDF2 hardening).
+      const { M1 } = await client.finish(ch.data.salt, ch.data.B, ch.data.kdf);
       // Second proof against the duress challenge, reusing the same ephemeral `a`.
       // Exactly one of the two proofs matches server-side (real vs duress password).
       let clientD = null, M1d = '';
       if (ch.data.salt2 && ch.data.B2) {
         clientD = new ClientLogin(username, password, client.a);
         clientD.start();
-        M1d = (await clientD.finish(ch.data.salt2, ch.data.B2)).M1;
+        M1d = (await clientD.finish(ch.data.salt2, ch.data.B2, ch.data.kdf2)).M1;
       }
       const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d });
       if (!auth.ok) { this._showAuthError(auth.data.error || 'Invalid credentials'); return; }
@@ -259,6 +261,16 @@ class DeadDrop {
       }
       this.username = auth.data.username;
       this._restricted = restricted;
+      // Transparent hardening upgrade: if the credential that just logged in
+      // predates the PBKDF2 stretch, re-derive it stretched and store the new
+      // verifier. The server routes this to the right slot (real vs duress).
+      const usedKdf = restricted ? ch.data.kdf2 : ch.data.kdf;
+      if (!usedKdf) {
+        try {
+          const up = await srpRegister(username, password);
+          await this._postJSON('/api/account/verifier', up);
+        } catch { /* best-effort; login already succeeded */ }
+      }
       this._afterAuth();
     } catch {
       this._showAuthError('Connection failed');
@@ -273,8 +285,8 @@ class DeadDrop {
     const res = await this._postJSON('/api/login', { username, password });
     if (!res.ok) { this._showAuthError(res.data.error || 'Invalid credentials'); return; }
     try {
-      const { salt, verifier } = await srpRegister(username, password);
-      await this._postJSON('/api/account/verifier', { salt, verifier });
+      const { salt, verifier, kdf } = await srpRegister(username, password);
+      await this._postJSON('/api/account/verifier', { salt, verifier, kdf });
     } catch { /* upgrade is best-effort; legacy login already succeeded */ }
     this.username = res.data.username;
     this._restricted = false;
@@ -293,8 +305,8 @@ class DeadDrop {
     this._hideAuthError();
     this._setAuthBusy(true);
     try {
-      const { salt, verifier } = await srpRegister(username, password);
-      const res = await this._postJSON('/api/srp/register', { username, salt, verifier, invite });
+      const { salt, verifier, kdf } = await srpRegister(username, password);
+      const res = await this._postJSON('/api/srp/register', { username, salt, verifier, kdf, invite });
       if (res.ok) {
         this.username = res.data.username;
         this._afterAuth();
@@ -323,8 +335,8 @@ class DeadDrop {
       this.el.duressPass.focus();
       return;
     }
-    const { salt, verifier } = await srpRegister(this.username, pw);
-    const res = await this._postJSON('/api/account/duress', { salt, verifier });
+    const { salt, verifier, kdf } = await srpRegister(this.username, pw);
+    const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf });
     this.el.duressPass.value = '';
     this.el.setDuressBtn.textContent = res.ok ? t('duress.saved') : (res.data.error || t('duress.set'));
     setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);

@@ -28,12 +28,41 @@ async function kParam() {
 
 /* ── public API ── */
 
-/** Build a registration verifier. Returns hex salt + verifier. */
-export async function register(username, password) {
+/**
+ * Default password-hardening KDF applied BEFORE the SRP x derivation.
+ *
+ * RFC 5054 derives x with two bare SHA-256 calls, so a leaked verifier database
+ * can be brute-forced at GPU hash speed. Stretching the password client-side with
+ * PBKDF2-SHA256 (WebCrypto-native, no dependencies) makes each offline guess cost
+ * 600k hash iterations instead of two. The kdf string is stored per credential and
+ * echoed by the login challenge, so old (unstretched) accounts keep working and
+ * upgrade transparently on their next login.
+ */
+export const DEFAULT_KDF = 'pbkdf2:600000';
+
+/** Stretch the password per `kdf` ('' = legacy pass-through). */
+async function stretch(username, password, saltBytes, kdf) {
+  if (!kdf) return password;
+  const m = /^pbkdf2:(\d+)$/.exec(kdf);
+  if (!m) throw new Error('SRP: unsupported KDF ' + kdf);
+  const enc = new TextEncoder();
+  const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
+  // Bind the stretch to the account and the SRP salt so identical passwords on
+  // different accounts (or after a salt rotation) never collide.
+  const salt = concat(enc.encode(`deaddrop/srp/kdf/v1:${username}:`), saltBytes);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: Number(m[1]) }, base, 256,
+  );
+  return bytesToHex(new Uint8Array(bits));
+}
+
+/** Build a registration verifier. Returns hex salt + verifier + the kdf used. */
+export async function register(username, password, kdf = DEFAULT_KDF) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const x = await computeX(salt, username, password);
+  const stretched = await stretch(username, password, salt, kdf);
+  const x = await computeX(salt, username, stretched);
   const v = modpow(g, x, N);
-  return { salt: bytesToHex(salt), verifier: bigToHex(v) };
+  return { salt: bytesToHex(salt), verifier: bigToHex(v), kdf };
 }
 
 /** A login attempt. start() → finish(salt,B) → verifyServer(M2). */
@@ -52,13 +81,14 @@ export class ClientLogin {
     return { A: bigToHex(this.A) };
   }
 
-  /** Given the server's salt and B, produce the client proof M1. */
-  async finish(saltHex, Bhex) {
+  /** Given the server's salt, B and advertised kdf, produce the client proof M1. */
+  async finish(saltHex, Bhex, kdf = '') {
     const B = hexToBig(Bhex);
     if (B % N === 0n) throw new Error('SRP: server sent B ≡ 0');
     const salt = hexToBytes(saltHex);
     const k = await kParam();
-    const x = await computeX(salt, this.username, this.password);
+    const stretched = await stretch(this.username, this.password, salt, kdf);
+    const x = await computeX(salt, this.username, stretched);
     const u = bytesToBig(await sha256(concat(pad(this.A), pad(B))));
     if (u === 0n) throw new Error('SRP: u ≡ 0');
 

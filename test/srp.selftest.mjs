@@ -8,7 +8,7 @@
  * proves the browser client and the Go server speak the identical protocol.
  */
 
-import { register, ClientLogin, _srp } from '../web/js/srp.js';
+import { register, ClientLogin, DEFAULT_KDF, _srp } from '../web/js/srp.js';
 
 const { N, g, kParam, computeX, modpow, pad, bytesToBig, bigToHex, hexToBig, bytesToHex, sha256, concat } = _srp;
 
@@ -37,18 +37,19 @@ function hexToBytesLocal(h) {
   return u8;
 }
 
-async function randomFlow() {
-  console.log('SRP random client↔server flow');
+async function randomFlow(kdf, label) {
+  console.log(`SRP random client↔server flow (${label})`);
   const username = 'alice', password = 'correct horse battery staple';
-  const { salt, verifier } = await register(username, password);
+  const { salt, verifier, kdf: usedKdf } = await register(username, password, kdf);
+  ok(usedKdf === kdf, 'register reports the kdf it used');
   const v = hexToBig(verifier);
 
-  // Login (honest).
+  // Login (honest) — the client stretches per the advertised kdf.
   const client = new ClientLogin(username, password);
   const { A } = client.start();
   const b = bytesToBig(crypto.getRandomValues(new Uint8Array(32)));
   const B = await serverB(b, v);
-  const { M1 } = await client.finish(salt, bigToHex(B));
+  const { M1 } = await client.finish(salt, bigToHex(B), kdf);
   const srv = await serverVerify(A, B, b, v, M1);
   ok(srv !== null, 'server accepts correct client proof M1');
   ok(srv && client.verifyServer(srv.M2), 'client accepts server proof M2 (mutual auth)');
@@ -58,9 +59,33 @@ async function randomFlow() {
   const bad = new ClientLogin(username, 'wrong password');
   bad.start();
   const Bb = await serverB(b, v);
-  const { M1: badM1 } = await bad.finish(salt, bigToHex(Bb));
+  const { M1: badM1 } = await bad.finish(salt, bigToHex(Bb), kdf);
   const badSrv = await serverVerify(bigToHex(bad.A), Bb, b, v, badM1);
   ok(badSrv === null, 'server rejects wrong-password proof');
+
+  return { salt, verifier };
+}
+
+async function kdfHardening() {
+  console.log('PBKDF2 password stretch');
+  const username = 'alice', password = 'correct horse battery staple';
+  // Same password + same salt must yield DIFFERENT proofs with vs without the
+  // stretch — evidence the KDF actually feeds the x derivation.
+  const { salt } = await register(username, password, '');
+  const b = bytesToBig(crypto.getRandomValues(new Uint8Array(32)));
+  const B = await serverB(b, 3n); // arbitrary group element; only x differs below
+  const legacy = new ClientLogin(username, password);
+  legacy.start();
+  const stretched = new ClientLogin(username, password);
+  stretched.start();
+  const m1a = (await legacy.finish(salt, bigToHex(B), '')).M1;
+  const m1b = (await stretched.finish(salt, bigToHex(B), DEFAULT_KDF)).M1;
+  ok(m1a !== m1b, 'stretched and legacy derivations disagree (kdf is in effect)');
+
+  // Unknown KDF labels must be refused, never silently skipped.
+  let threw = false;
+  try { await register(username, password, 'argon2id:1'); } catch { threw = true; }
+  ok(threw, 'unsupported kdf label is rejected');
 }
 
 async function printVectors() {
@@ -90,7 +115,9 @@ async function printVectors() {
 }
 
 (async () => {
-  await randomFlow();
+  await randomFlow('', 'legacy, no stretch');
+  await randomFlow(DEFAULT_KDF, DEFAULT_KDF);
+  await kdfHardening();
   if (process.argv.includes('--vectors')) await printVectors();
   console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
   process.exit(failures === 0 ? 0 : 1);
