@@ -18,11 +18,12 @@ function ok(cond, msg) {
   if (cond) { console.log('  ✓', msg); } else { console.error('  ✗', msg); failures++; }
 }
 
-// Deliver every message A sends to B.handle (and vice versa), in order, until quiet.
-async function pump(outA, outB, hsA, hsB) {
+// Deliver every message A sends to B.handle (and vice versa), in order, until
+// quiet. `mangle` (optional) can tamper messages in flight, like a MitM relay.
+async function pump(outA, outB, hsA, hsB, mangle = (m) => m) {
   for (let guard = 0; guard < 50 && (outA.length || outB.length); guard++) {
-    while (outA.length) await hsB.handle(outA.shift());
-    while (outB.length) await hsA.handle(outB.shift());
+    while (outA.length) await hsB.handle(mangle(outA.shift()));
+    while (outB.length) await hsA.handle(mangle(outB.shift()));
   }
 }
 
@@ -42,6 +43,10 @@ async function honestHandshake() {
   const graphemes = [...new Intl.Segmenter().segment(sasA)].length;
   ok(graphemes === 6, `SAS is 6 symbols (got ${graphemes})`);
   ok(a.established && b.established, 'both sessions established');
+  // Hybrid PQ: both sides must hold the same 32-byte post-quantum root secret.
+  ok(a._rootSecret?.length === 32 && b._rootSecret?.length === 32
+     && a._rootSecret.every((v, i) => v === b._rootSecret[i]),
+     'both peers derived the same 32-byte PQ root secret');
   return { a, b };
 }
 
@@ -115,12 +120,39 @@ async function commitmentRejection() {
   const hsB = new Handshake(b, m => outB.push(m), { onEstablished: () => {}, onError: e => errB = e });
   await hsA.start();
   await hsB.start();
-  // Feed B a forged commit, then a reveal whose key does not match the commit.
+  // Feed B a forged commit, then a reveal whose keys do not match the commit.
   outB.length = 0; // discard B's outgoing for this targeted test
   await hsB.handle(outA.shift());          // legit commit from A → B reveals
-  const forgedReveal = { type: 'kex-reveal', publicKey: bufToB64Fake(), nonce: bufToB64Fake(16) };
+  const forgedReveal = {
+    type: 'kex-reveal',
+    publicKey: bufToB64Fake(65),
+    kemPublicKey: bufToB64Fake(1184),
+    nonce: bufToB64Fake(16),
+  };
   await hsB.handle(forgedReveal);
   ok(errB === 'commitment mismatch — possible MitM', 'reveal not matching commitment is rejected as MitM');
+}
+
+async function kemCtTampering() {
+  console.log('KEM ciphertext tampering');
+  const a = new CryptoLayer(), b = new CryptoLayer();
+  const outA = [], outB = [];
+  let sasA = null, sasB = null, errA = null, errB = null;
+  const hsA = new Handshake(a, m => outA.push(m), { onEstablished: s => sasA = s, onError: e => errA = e });
+  const hsB = new Handshake(b, m => outB.push(m), { onEstablished: s => sasB = s, onError: e => errB = e });
+  await hsA.start();
+  await hsB.start();
+  // Flip one bit of the KEM ciphertext in flight. ML-KEM's implicit rejection
+  // yields a silently different secret — the confirmation step must catch it.
+  await pump(outA, outB, hsA, hsB, (m) => {
+    if (m.type !== 'kex-encaps') return m;
+    const ct = new Uint8Array(Buffer.from(m.ct, 'base64'));
+    ct[7] ^= 0x01;
+    return { type: 'kex-encaps', ct: Buffer.from(ct).toString('base64') };
+  });
+  ok(!sasA && !sasB, 'no SAS is shown on a tampered KEM ciphertext');
+  ok([errA, errB].includes('key confirmation failed — possible MitM'),
+     'tampered KEM ciphertext is rejected at key confirmation');
 }
 
 function bufToB64Fake(len = 65) {
@@ -139,6 +171,7 @@ function bufToB64Fake(len = 65) {
     await binary(a, b);
     await rekeying(a, b);
     await commitmentRejection();
+    await kemCtTampering();
   } catch (e) {
     console.error('FATAL', e);
     failures++;

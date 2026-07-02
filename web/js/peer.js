@@ -235,7 +235,7 @@ export class PeerConnection {
       if (!msg || typeof msg.type !== 'string') return;
 
       // Key-exchange and rekey traffic is handled here, never forwarded to the app.
-      if (msg.type === 'kex-commit' || msg.type === 'kex-reveal') {
+      if (msg.type.startsWith('kex-')) {
         if (this.handshake) {
           try { await this.handshake.handle(msg); } catch (err) { console.warn('[peer] kex error', err); }
         }

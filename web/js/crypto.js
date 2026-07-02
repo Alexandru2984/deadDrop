@@ -1,22 +1,26 @@
 /**
- * Dead Drop — Encryption Layer (v2)
+ * Dead Drop — Encryption Layer (v3)
  *
- * Ephemeral ECDH (P-256) → HKDF-SHA256 → AES-256-GCM.
+ * Hybrid post-quantum key agreement: ephemeral ECDH (P-256) + ML-KEM-768
+ * (FIPS 203) → HKDF-SHA256 → AES-256-GCM.
  *
- * Improvements over v1:
- *  - HKDF key separation with a transcript-bound salt (both public keys), instead
- *    of feeding the raw ECDH secret straight into AES-GCM.
- *  - The Short Authentication String (SAS) is derived from the same transcript via
- *    a dedicated HKDF label, and is 6 symbols (2^36) instead of 4 (2^24).
- *  - Symmetric "epochs": a fresh ECDH ratchet can be run mid-session (rekey) for
- *    forward secrecy. Each ciphertext carries its epoch so the peer decrypts with
- *    the right key; old epoch keys are destroyed after a short retention window.
+ * Improvements over v2:
+ *  - The session secret mixes a classical ECDH share with an ML-KEM-768 share, so
+ *    recorded traffic stays confidential even against a future quantum computer
+ *    ("harvest now, decrypt later"). Breaking the session requires breaking BOTH.
+ *  - A 32-byte post-quantum root secret from the initial handshake is mixed into
+ *    every DH ratchet, so rekeyed epochs inherit the PQ resistance too.
  *
- * All operations use the Web Crypto API — no external dependencies. Keys are never
+ * Carried over from v2: transcript-bound HKDF salts, 6-symbol SAS (2^36),
+ * symmetric rekey epochs with a short retention window.
+ *
+ * ECDH/HKDF/AES use the Web Crypto API; ML-KEM-768 is the vendored, audited
+ * noble implementation (same-origin ESM, no third parties). Keys are never
  * persisted; everything is regenerated per connection and wiped on destroy().
  */
 
 import { bufToB64, b64ToBuf } from './util.js';
+import { ml_kem768 } from './vendor/noble/ml-kem.js';
 
 const RETAINED_EPOCHS = 3; // keep current + 2 previous keys for in-flight messages
 const SAS_LENGTH = 6;      // 6 symbols from a 64-emoji alphabet = 2^36 combinations
@@ -38,11 +42,15 @@ const dec = new TextDecoder();
 export class CryptoLayer {
   constructor() {
     this.keyPair = null;             // current ephemeral ECDH pair (handshake / rekey)
-    this._myPubRaw = null;           // raw bytes of our current public key
+    this._myPubRaw = null;           // raw bytes of our current ECDH public key
+    this._kemKeys = null;            // ephemeral ML-KEM-768 keypair (handshake only)
+    this._kemPubRaw = null;          // raw bytes of our KEM public key
+    this._rootSecret = null;         // 32B PQ root mixed into every rekey epoch
     this.epochs = new Map();         // epoch number → AES-GCM CryptoKey
     this.sendEpoch = -1;             // epoch we encrypt under
     this._pendingRekey = null;       // { epoch, keyPair, myPubRaw } while a rekey is in flight
     this._sasSecret = null;          // bytes for the SAS (initial handshake only)
+    this._confirmSecret = null;      // bytes for the key-confirmation tags
     this.seenNonces = new Set();     // replay protection (text)
     this.seenBinaryNonces = new Set();
     this._maxNonces = 10000;
@@ -57,20 +65,55 @@ export class CryptoLayer {
     return this._myPubRaw;
   }
 
-  /**
-   * Establish the initial session key (epoch 0) from the peer's raw public key.
-   * The HKDF salt binds to both public keys (sorted, so both sides agree), so the
-   * derived key and SAS are bound to the exact handshake transcript.
-   */
-  async deriveSession(peerPubRaw) {
-    const secret = await this._ecdh(this.keyPair.privateKey, peerPubRaw);
-    const salt = await this._transcriptSalt(this._myPubRaw, peerPubRaw);
+  /** Generate the ephemeral ML-KEM-768 keypair; returns the encapsulation key bytes. */
+  generateKemKeys() {
+    this._kemKeys = ml_kem768.keygen();
+    this._kemPubRaw = this._kemKeys.publicKey;
+    return this._kemPubRaw;
+  }
 
-    const key = await this._hkdfAesKey(secret, salt, 'deaddrop/v2/aead/epoch/0');
+  /** Encapsulate to the peer's KEM public key → { cipherText, sharedSecret }. */
+  kemEncapsulate(peerKemPubRaw) {
+    return ml_kem768.encapsulate(peerKemPubRaw);
+  }
+
+  /** Decapsulate a ciphertext with our KEM secret key → sharedSecret bytes. */
+  kemDecapsulate(cipherText) {
+    if (!this._kemKeys) throw new Error('No KEM keypair');
+    return ml_kem768.decapsulate(cipherText, this._kemKeys.secretKey);
+  }
+
+  /**
+   * Establish the initial session key (epoch 0) from the hybrid transcript:
+   * the peer's ECDH public key, the ML-KEM shared secret, and the KEM transcript
+   * bytes (decapsulator's public key ‖ ciphertext). The HKDF salt binds to the
+   * sorted ECDH keys AND the KEM transcript, so the derived key, the SAS and the
+   * confirmation tags are all bound to the exact handshake that took place.
+   */
+  async deriveSession(peerPubRaw, kemShared, kemTranscript) {
+    const ecdhSecret = new Uint8Array(await this._ecdh(this.keyPair.privateKey, peerPubRaw));
+    const ikm = new Uint8Array(ecdhSecret.length + kemShared.length);
+    ikm.set(ecdhSecret, 0);
+    ikm.set(kemShared, ecdhSecret.length);
+    const salt = await this._transcriptSalt(this._myPubRaw, peerPubRaw, kemTranscript);
+
+    const key = await this._hkdfAesKey(ikm, salt, 'deaddrop/v3/aead/epoch/0');
     this.epochs.set(0, key);
     this.sendEpoch = 0;
 
-    this._sasSecret = await this._hkdfBytes(secret, salt, 'deaddrop/v2/sas', 16);
+    this._sasSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v3/sas', 16);
+    this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v3/confirm', 32);
+    // The PQ root: mixed into every future rekey so post-quantum resistance
+    // survives the ratchet, while fresh ECDH still provides forward secrecy.
+    this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v3/root', 32);
+    ecdhSecret.fill(0);
+    ikm.fill(0);
+  }
+
+  /** Key-confirmation tag for one direction ('e' = encapsulator, 'd' = decapsulator). */
+  async confirmTag(role) {
+    if (!this._confirmSecret) throw new Error('No session established');
+    return this._hkdfBytes(this._confirmSecret, new Uint8Array(32), `deaddrop/v3/confirm/${role}`, 16);
   }
 
   /** 6-symbol SAS string both peers compute identically — compare out-of-band to detect MitM. */
@@ -126,8 +169,11 @@ export class CryptoLayer {
 
   async _installRatchetKey(privateKey, myPubRaw, peerPubRaw, epoch) {
     const secret = await this._ecdh(privateKey, peerPubRaw);
-    const salt = await this._transcriptSalt(myPubRaw, peerPubRaw);
-    const key = await this._hkdfAesKey(secret, salt, `deaddrop/v2/aead/epoch/${epoch}`);
+    // Mixing the PQ root into the salt makes every ratcheted epoch as
+    // quantum-resistant as the initial hybrid handshake; the fresh ECDH share
+    // still provides forward secrecy against classical compromise.
+    const salt = await this._transcriptSalt(myPubRaw, peerPubRaw, this._rootSecret);
+    const key = await this._hkdfAesKey(secret, salt, `deaddrop/v3/aead/epoch/${epoch}`);
     this.epochs.set(epoch, key);
     this.sendEpoch = epoch;
     // Drop keys that have fallen out of the retention window.
@@ -184,10 +230,21 @@ export class CryptoLayer {
   destroy() {
     this.keyPair = null;
     this._myPubRaw = null;
+    if (this._kemKeys) {
+      this._kemKeys.secretKey.fill(0);
+      this._kemKeys.publicKey.fill(0);
+      this._kemKeys = null;
+    }
+    this._kemPubRaw = null;
+    for (const b of [this._rootSecret, this._sasSecret, this._confirmSecret]) {
+      if (b) b.fill(0);
+    }
+    this._rootSecret = null;
+    this._sasSecret = null;
+    this._confirmSecret = null;
     this.epochs.clear();
     this.sendEpoch = -1;
     this._pendingRekey = null;
-    this._sasSecret = null;
     this.seenNonces.clear();
     this.seenBinaryNonces.clear();
   }
@@ -221,14 +278,18 @@ export class CryptoLayer {
     return crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256);
   }
 
-  async _transcriptSalt(pubA, pubB) {
+  async _transcriptSalt(pubA, pubB, extra) {
     const a = new Uint8Array(pubA);
     const b = new Uint8Array(pubB);
     // Order-independent: sort the two public keys so both peers compute one salt.
+    // `extra` (KEM transcript on handshake, PQ root on rekey) is identical on
+    // both sides already, so it is appended as-is.
     const [first, second] = compareBytes(a, b) <= 0 ? [a, b] : [b, a];
-    const buf = new Uint8Array(first.length + second.length);
+    const extraLen = extra ? extra.length : 0;
+    const buf = new Uint8Array(first.length + second.length + extraLen);
     buf.set(first, 0);
     buf.set(second, first.length);
+    if (extra) buf.set(extra, first.length + second.length);
     return crypto.subtle.digest('SHA-256', buf);
   }
 
@@ -249,7 +310,7 @@ export class CryptoLayer {
   }
 }
 
-function compareBytes(a, b) {
+export function compareBytes(a, b) {
   const n = Math.min(a.length, b.length);
   for (let i = 0; i < n; i++) {
     if (a[i] !== b[i]) return a[i] - b[i];
