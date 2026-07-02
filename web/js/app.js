@@ -215,7 +215,7 @@ class DeadDrop {
       if (res.ok) {
         const data = await res.json();
         this.username = data.username;
-        this._duress = !!data.duress;
+        this._restricted = !(data.features || []).includes('settings');
         this._showPage('landing');
       } else {
         this._showPage('auth');
@@ -249,14 +249,16 @@ class DeadDrop {
       }
       const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d });
       if (!auth.ok) { this._showAuthError(auth.data.error || 'Invalid credentials'); return; }
-      // Authenticate the SERVER too — against whichever proof matched.
-      const verifier = auth.data.duress && clientD ? clientD : client;
+      // Authenticate the SERVER too — against whichever proof matched. A session
+      // without the "settings" capability means the second (duress) proof won.
+      const restricted = !(auth.data.features || []).includes('settings');
+      const verifier = restricted && clientD ? clientD : client;
       if (!verifier.verifyServer(auth.data.M2)) {
         this._showAuthError('Server authentication failed — do not trust this connection.');
         return;
       }
       this.username = auth.data.username;
-      this._duress = !!auth.data.duress;
+      this._restricted = restricted;
       this._afterAuth();
     } catch {
       this._showAuthError('Connection failed');
@@ -275,7 +277,7 @@ class DeadDrop {
       await this._postJSON('/api/account/verifier', { salt, verifier });
     } catch { /* upgrade is best-effort; legacy login already succeeded */ }
     this.username = res.data.username;
-    this._duress = false;
+    this._restricted = false;
     this._afterAuth();
   }
 
@@ -385,8 +387,9 @@ class DeadDrop {
       case 'landing':
         this.el.landing.classList.remove('hidden');
         this.el.userDisplay.textContent = this.username;
-        // Decoy: a duress session hides account settings so the coercer can't poke at them.
-        this.el.settingsBtn.style.display = this._duress ? 'none' : '';
+        // Decoy: a restricted (duress) session hides account settings so the
+        // coercer can't poke at them.
+        this.el.settingsBtn.style.display = this._restricted ? 'none' : '';
         if (this._pendingJoin) {
           this.el.roomInput.value = this._pendingJoin;
           this._pendingJoin = null;

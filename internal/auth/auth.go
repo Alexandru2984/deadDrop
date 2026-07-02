@@ -327,7 +327,18 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "session expired", http.StatusUnauthorized)
 		return
 	}
-	jsonOK(w, map[string]any{"username": username, "duress": duress})
+	jsonOK(w, map[string]any{"username": username, "features": sessionFeatures(duress)})
+}
+
+// sessionFeatures encodes the session kind as a bland capability list instead of a
+// literal duress flag: someone reading API responses over the user's shoulder (or
+// in DevTools) sees a permissions array, not "duress":true announcing the decoy.
+// A real session carries "settings"; a decoy session simply doesn't.
+func sessionFeatures(duress bool) []string {
+	if duress {
+		return []string{}
+	}
+	return []string{"settings"}
 }
 
 // RequireAuth rejects unauthenticated requests before they reach the next handler.

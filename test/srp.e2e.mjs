@@ -23,10 +23,19 @@ function cookieFrom(res, jar) {
   if (sc) jar.cookie = sc.split(';')[0];
   return jar;
 }
+// The whole run exceeds the per-IP auth rate limit (that limit has its own Go
+// unit tests). The server trusts X-Forwarded-For from loopback, so each request
+// presents a fresh client IP to keep this test about SRP, not throttling.
+let ipCounter = 0;
+const nextIP = () => `198.51.100.${ipCounter++ % 250}`;
 async function post(path, body, jar) {
   const res = await fetch(BASE + path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(jar?.cookie ? { Cookie: jar.cookie } : {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Forwarded-For': nextIP(),
+      ...(jar?.cookie ? { Cookie: jar.cookie } : {}),
+    },
     body: JSON.stringify(body),
   });
   let json = null; try { json = await res.json(); } catch {}
@@ -34,7 +43,9 @@ async function post(path, body, jar) {
   return { status: res.status, json };
 }
 async function get(path, jar) {
-  const res = await fetch(BASE + path, { headers: jar?.cookie ? { Cookie: jar.cookie } : {} });
+  const res = await fetch(BASE + path, {
+    headers: { 'X-Forwarded-For': nextIP(), ...(jar?.cookie ? { Cookie: jar.cookie } : {}) },
+  });
   let json = null; try { json = await res.json(); } catch {}
   return { status: res.status, json };
 }
@@ -52,10 +63,12 @@ async function srpLogin(username, password, jar) {
     M1d = (await clientD.finish(ch.json.salt2, ch.json.B2)).M1;
   }
   const auth = await post('/api/srp/authenticate', { token: ch.json.token, M1, M1d }, jar);
-  const dur = !!auth.json?.duress;
-  const verifier = dur && clientD ? clientD : client;
+  // The decoy signal is deliberately opaque: a restricted feature list (no
+  // "settings") means the duress proof matched, never a literal duress flag.
+  const restricted = auth.status === 200 && !(auth.json?.features || []).includes('settings');
+  const verifier = restricted && clientD ? clientD : client;
   return {
-    status: auth.status, json: auth.json, duress: dur,
+    status: auth.status, json: auth.json, restricted,
     serverOK: auth.json?.M2 ? verifier.verifyServer(auth.json.M2) : false,
   };
 }
@@ -79,18 +92,40 @@ async function srpLogin(username, password, jar) {
   const me = await get('/api/me', jar2);
   ok(me.status === 200 && me.json.username === USER, 'session works (/api/me)');
 
-  ok(login.duress === false, 'real login is not flagged as duress');
+  ok(login.restricted === false, 'real login gets the full feature list');
+  ok(!('duress' in (login.json || {})), 'authenticate response never says "duress"');
+  ok(!('duress' in (me.json || {})), '/api/me response never says "duress"');
 
   // 3. Duress password (decoy).
   const DURESS = 'duress-decoy-pass-99';
   const dreg = await register(USER, DURESS);
   const setD = await post('/api/account/duress', { salt: dreg.salt, verifier: dreg.verifier }, jar2);
   ok(setD.status === 200, 'set duress password (computed client-side)');
-  const dlogin = await srpLogin(USER, DURESS, {});
-  ok(dlogin.status === 200 && dlogin.duress === true, 'duress password logs in, flagged as duress');
+  const djar = {};
+  const dlogin = await srpLogin(USER, DURESS, djar);
+  ok(dlogin.status === 200 && dlogin.restricted === true, 'duress password logs into a restricted (decoy) session');
   ok(dlogin.serverOK === true, 'server proof verifies on duress login');
+  ok(!('duress' in (dlogin.json || {})), 'decoy response carries no telltale duress field');
   const rlogin = await srpLogin(USER, PASS, {});
-  ok(rlogin.status === 200 && rlogin.duress === false, 'real password still logs in as real');
+  ok(rlogin.status === 200 && rlogin.restricted === false, 'real password still logs in as real');
+
+  // 3b. Decoy-session hardening.
+  //  - "Change password" from the decoy must update the DURESS credential only.
+  const NEWDURESS = 'coercer-changed-pass-1';
+  const nreg = await register(USER, NEWDURESS);
+  const chg = await post('/api/account/verifier', { salt: nreg.salt, verifier: nreg.verifier }, djar);
+  ok(chg.status === 200, 'password change from decoy session is accepted');
+  const rlogin2 = await srpLogin(USER, PASS, {});
+  ok(rlogin2.status === 200 && rlogin2.restricted === false, 'real password unaffected by decoy password change');
+  const dlogin2 = await srpLogin(USER, NEWDURESS, {});
+  ok(dlogin2.status === 200 && dlogin2.restricted === true, 'decoy password change updated the duress credential');
+  //  - Setting a duress password from the decoy must fake success (no 403 tell)
+  //    without touching anything.
+  const xreg = await register(USER, 'probe-from-decoy-1234');
+  const probe = await post('/api/account/duress', { salt: xreg.salt, verifier: xreg.verifier }, djar);
+  ok(probe.status === 200, 'duress-set from decoy answers 200 (no detectable 403)');
+  const dlogin3 = await srpLogin(USER, NEWDURESS, {});
+  ok(dlogin3.status === 200 && dlogin3.restricted === true, 'duress-set from decoy was a no-op');
 
   // 4. A third (neither) password must fail.
   const bad = await srpLogin(USER, 'totally-wrong-password', {});

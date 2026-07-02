@@ -514,14 +514,14 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 	if M2, _, verr := p.ch.Verify(p.A, M1); verr == nil && p.real {
 		h.lockout.reset(p.username, ip)
 		h.setCookieSession(w, r, p.username, false)
-		jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "duress": false})
+		jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "features": sessionFeatures(false)})
 		return
 	}
 	if len(M1d) > 0 && p.realDuress {
 		if M2, _, verr := p.chDuress.Verify(p.A, M1d); verr == nil {
 			h.lockout.reset(p.username, ip)
 			h.setCookieSession(w, r, p.username, true)
-			jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "duress": true})
+			jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "features": sessionFeatures(true)})
 			return
 		}
 	}
@@ -530,14 +530,23 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetVerifier installs a new salt+verifier for the logged-in user (legacy upgrade
-// or password change). Auth-gated by the caller.
+// or password change). In a duress (decoy) session it updates the DURESS
+// credential instead: "change password" behaves exactly as a coercer would expect
+// (the password they know keeps working, with its new value), while the real
+// verifier — derived from a password the decoy user never typed — stays untouched
+// and the real owner is never locked out.
 func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	username := h.currentUser(r)
-	if username == "" {
+	c, err := r.Cookie("dd_session")
+	if err != nil {
+		jsonErr(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+	username, duress, ok := h.sess.getMeta(c.Value)
+	if !ok {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
@@ -548,6 +557,14 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if duress {
+		if err := h.store.setDuress(username, body.Salt, body.Verifier); err != nil {
+			jsonErr(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
 	if err := h.store.setVerifier(username, body.Salt, body.Verifier); err != nil {
@@ -575,10 +592,6 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	if duress {
-		jsonErr(w, "forbidden", http.StatusForbidden) // a decoy session can't touch duress settings
-		return
-	}
 	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body struct {
 		Salt     string `json:"salt"`
@@ -586,6 +599,20 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if duress {
+		// A decoy session must not modify duress settings — but answering 403 would
+		// announce "this is the decoy". Validate and report success without writing.
+		if !validSalt(body.Salt) {
+			jsonErr(w, "invalid salt", http.StatusBadRequest)
+			return
+		}
+		if _, err := srp.DecodeVerifier(body.Verifier); err != nil {
+			jsonErr(w, "invalid verifier", http.StatusBadRequest)
+			return
+		}
+		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
 	if err := h.store.setDuress(username, body.Salt, body.Verifier); err != nil {
