@@ -23,16 +23,20 @@ class DeadDrop {
     this.peerId = null;
     this.roomCode = null;
     this.ws = null;
-    this.crypto = new CryptoLayer();
-    this.peer = null;
+    // Mesh: one pairwise session per remote peer — its own WebRTC connection AND
+    // its own CryptoLayer (hybrid handshake, SAS, epochs). There is no group key;
+    // every message is encrypted separately for each peer.
+    this.peers = new Map(); // peerId → { conn, crypto, encrypted, sas, verified, label, color }
+    this._fileSenders = new Map(); // inbound transfer id → sender peerId
     this.msgMgr = null;
     this.fileMgr = new FileTransferManager();
-    this.encrypted = false;
+    this.encrypted = false; // true when ≥1 pairwise session is encrypted
     this.iceConfig = { iceServers: [] };
     this._relayOnly = false;
 
-    // Call state
+    // Call state (calls stay 1:1 — only available when exactly one peer is in the room)
     this.callState = 'idle'; // idle | requesting | incoming | connecting | active
+    this._callPeerId = null;
     this.localStream = null;
     this.remoteStream = null;
     this._callVideo = false;
@@ -115,9 +119,7 @@ class DeadDrop {
       typingIndicator: $('#typing-indicator'),
       privacyScreen:   $('#privacy-screen'),
       verifyBar:   $('#verify-bar'),
-      verifySas:   $('#verify-sas'),
-      verifyBtn:   $('#verify-btn'),
-      verifyQrBtn:    $('#verify-qr-btn'),
+      verifyRows:  $('#verify-rows'),
       qrVerify:       $('#qr-verify'),
       qrVerifyImg:    $('#qr-verify-img'),
       qrVerifyVideo:  $('#qr-verify-video'),
@@ -156,8 +158,6 @@ class DeadDrop {
     this.el.createBtn.addEventListener('click', () => this.createRoom());
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
-    this.el.verifyBtn.addEventListener('click', () => this._markVerified());
-    this.el.verifyQrBtn.addEventListener('click', () => this._openQrVerify());
     this.el.qrVerifyClose.addEventListener('click', () => this._closeQrVerify());
     this.el.relayToggle.addEventListener('change', (e) => { this._relayOnly = e.target.checked; });
     // Chat
@@ -211,7 +211,9 @@ class DeadDrop {
 
   _initMsgManager() {
     this.msgMgr = new MessageManager((id) => {
-      if (this.peer?.connected) this.peer.send({ type: 'delete', id });
+      for (const s of this._encryptedSessions()) {
+        try { s.conn.send({ type: 'delete', id }); } catch { /* channel closed */ }
+      }
     });
   }
 
@@ -548,50 +550,108 @@ class DeadDrop {
   _onSignal(msg) {
     switch (msg.type) {
       case 'peer-joined':
-        this._setStatus('connecting', '🔗 Peer found — connecting P2P…');
-        // Deterministic initiator: lower peerId creates the offer
+        if (!this.peers.has(msg.peerId)) {
+          this._setStatus('connecting', '🔗 Peer found — connecting P2P…');
+        }
+        // Deterministic initiator per pair: the lower peerId creates the offer.
         if (this.peerId < msg.peerId) {
-          this._createPeerConn();
-          this.peer.createOffer(msg.peerId);
+          this._ensureSession(msg.peerId).conn.createOffer(msg.peerId);
         }
         break;
 
       case 'peer-left':
-        this._setStatus('disconnected', t('st.peerLeft'));
-        this.peer?.close();
-        this.peer = null;
-        this.encrypted = false;
-        this.crypto.destroy();
+        this._dropSession(msg.peerId, t('st.peerLeft'));
         break;
 
       case 'error':
         this._setStatus('disconnected', `❌ ${msg.peerId || 'Unknown error'}`);
         break;
 
-      case 'offer':
-        this._createPeerConn();
-        try { this.peer.handleOffer(msg.from, JSON.parse(msg.payload)); } catch {}
+      case 'offer': {
+        const s = this._ensureSession(msg.from);
+        try { s.conn.handleOffer(msg.from, JSON.parse(msg.payload)); } catch {}
         break;
+      }
 
       case 'answer':
-        try { this.peer?.handleAnswer(JSON.parse(msg.payload)); } catch {}
+        try { this.peers.get(msg.from)?.conn.handleAnswer(JSON.parse(msg.payload)); } catch {}
         break;
 
       case 'ice-candidate':
-        try { this.peer?.handleIceCandidate(JSON.parse(msg.payload)); } catch {}
+        try { this.peers.get(msg.from)?.conn.handleIceCandidate(JSON.parse(msg.payload)); } catch {}
         break;
     }
   }
 
-  _createPeerConn() {
-    this.peer = new PeerConnection(
+  /* ── Pairwise session registry (mesh) ── */
+
+  _ensureSession(peerId) {
+    let s = this.peers.get(peerId);
+    if (s) return s;
+    const cryptoLayer = new CryptoLayer();
+    const conn = new PeerConnection(
       { send: (o) => this.ws.send(JSON.stringify(o)) },
-      this.crypto,
-      (msg) => this._onPeerMessage(msg),
-      (state, sas) => this._onConnState(state, sas),
+      cryptoLayer,
+      (m) => this._onPeerMessage(peerId, m),
+      (state, sas) => this._onConnState(peerId, state, sas),
       { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly },
     );
-    this.peer.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
+    conn.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
+    s = {
+      conn,
+      crypto: cryptoLayer,
+      encrypted: false,
+      sas: null,
+      verified: false,
+      label: 'Peer ' + peerId.slice(0, 4).toUpperCase(),
+      color: this._peerColor(peerId),
+    };
+    this.peers.set(peerId, s);
+    return s;
+  }
+
+  /** Remove one pairwise session (peer left / channel closed / handshake failed). */
+  _dropSession(peerId, sysMsg) {
+    const s = this.peers.get(peerId);
+    if (!s) return;
+    this.peers.delete(peerId); // delete first — close() re-enters _onConnState
+    if (this._callPeerId === peerId) this._endCallCleanup();
+    try { s.conn.close(); } catch { /* already closed */ }
+    s.crypto.destroy();
+    if (sysMsg) this._renderSystem(`${sysMsg} (${s.label})`);
+    this._refreshRoomState();
+  }
+
+  _encryptedSessions() {
+    return [...this.peers.values()].filter((s) => s.encrypted);
+  }
+
+  /** Deterministic per-peer color for sender labels. */
+  _peerColor(peerId) {
+    let h = 0;
+    for (const c of peerId) h = (h * 31 + c.charCodeAt(0)) % 360;
+    return `hsl(${h}, 65%, 62%)`;
+  }
+
+  /** Recompute the aggregate room state: status bar, call button, verify bar. */
+  _refreshRoomState() {
+    const enc = this._encryptedSessions();
+    this.encrypted = enc.length > 0;
+    if (enc.length > 0) {
+      const extra = this.peers.size > enc.length ? ' ⏳' : '';
+      this._setStatus('encrypted',
+        (enc.length === 1 ? t('st.encrypted') : t('st.encryptedN').replace('{n}', String(enc.length))) + extra);
+    } else if (this.peers.size > 0) {
+      this._setStatus('connecting', '🔗 P2P connected — exchanging keys…');
+    } else {
+      this.encrypted = false;
+      this._setStatus('waiting', t('st.waiting'));
+      this._hideTyping();
+    }
+    // Calls stay strictly 1:1: only offered when exactly one (encrypted) peer is present.
+    const callable = enc.length === 1 && this.peers.size === 1;
+    this.el.callBtn.style.display = (callable || this.callState !== 'idle') ? '' : 'none';
+    this._renderVerifyBar();
   }
 
   /** Fetch self-hosted STUN/TURN ICE servers (with an ephemeral credential). */
@@ -607,50 +667,80 @@ class DeadDrop {
 
   /* ── P2P connection state ── */
 
-  _onConnState(state, sas) {
+  _onConnState(peerId, state, sas) {
+    const s = this.peers.get(peerId);
     switch (state) {
       case 'connected':
-        this._setStatus('connected', '🔗 P2P connected — exchanging keys…');
+        if (!this.encrypted) this._setStatus('connected', '🔗 P2P connected — exchanging keys…');
         break;
       case 'encrypted':
-        this.encrypted = true;
-        this._setStatus('encrypted', t('st.encrypted'));
-        if (sas) this._showVerify(sas);
+        if (!s) return;
+        s.encrypted = true;
+        s.sas = sas;
+        s.verified = false;
+        this._renderSystem(`🔒 ${s.label} ${t('sys.joined')}`);
+        this._refreshRoomState();
         this.el.msgInput.focus();
-        this.el.callBtn.style.display = '';
         break;
       case 'insecure':
-        // Commit-reveal handshake (or rekey) failed — the channel may be tampered with.
-        this.encrypted = false;
-        this._setStatus('disconnected', '⛔ Insecure — handshake failed');
-        this.el.verifyBar.classList.remove('hidden', 'verified');
+        // Commit-reveal handshake (or rekey) with THIS peer failed. Drop only that
+        // pair — other verified sessions in the room are unaffected.
+        this._renderSystem(`⛔ ${t('sys.insecure').replace('{peer}', s?.label ?? 'peer')}`);
+        this.el.verifyBar.classList.remove('hidden');
         this.el.verifyBar.classList.add('insecure');
-        this.el.verifySas.textContent = '⚠️ MITM?';
-        this._renderSystem('⛔ Secure handshake failed — someone may be intercepting the connection. The session was closed. Do not trust this channel.');
-        this.el.callBtn.style.display = 'none';
-        this._endCallCleanup();
+        setTimeout(() => this.el.verifyBar.classList.remove('insecure'), 5000);
+        this._dropSession(peerId);
         break;
       case 'disconnected':
-        this.encrypted = false;
-        this._setStatus('disconnected', '❌ Peer disconnected');
-        this._hideVerify();
-        this._closeQrVerify();
-        this._hideTyping();
-        this.el.callBtn.style.display = 'none';
-        this._endCallCleanup();
+        this._dropSession(peerId, `👋 ${t('sys.left')}`);
         break;
     }
   }
 
-  _showVerify(sas) {
-    this.el.verifyBar.classList.remove('hidden', 'verified', 'insecure');
-    this.el.verifySas.textContent = sas;
-    this.el.verifyBtn.textContent = t('verify.btn');
+  /* ── Per-peer verification bar ──
+   * One row per encrypted pairwise session: label, its SAS, QR verify, and a
+   * manual verify button. The bar turns green once every peer is verified. */
+
+  _renderVerifyBar() {
+    const enc = this._encryptedSessions();
+    this.el.verifyRows.replaceChildren();
+    if (enc.length === 0) {
+      this.el.verifyBar.classList.add('hidden');
+      return;
+    }
+    this.el.verifyBar.classList.remove('hidden');
+    this.el.verifyBar.classList.toggle('verified', enc.every((s) => s.verified));
+    for (const [peerId, s] of this.peers) {
+      if (!s.encrypted) continue;
+      const row = document.createElement('div');
+      row.className = 'verify-row';
+      const label = document.createElement('span');
+      label.className = 'verify-label peer-tag';
+      label.textContent = s.label;
+      label.style.color = s.color;
+      const sas = document.createElement('span');
+      sas.className = 'verify-sas';
+      sas.setAttribute('aria-live', 'polite');
+      sas.textContent = s.sas ?? '';
+      const qrBtn = document.createElement('button');
+      qrBtn.className = 'btn btn-sm';
+      qrBtn.textContent = t('verify.qr');
+      qrBtn.addEventListener('click', () => this._openQrVerify(peerId));
+      const okBtn = document.createElement('button');
+      okBtn.className = 'btn btn-sm verify-btn';
+      okBtn.textContent = s.verified ? t('verify.verified') : t('verify.btn');
+      okBtn.disabled = s.verified;
+      okBtn.addEventListener('click', () => this._markVerified(peerId));
+      row.append(label, sas, qrBtn, okBtn);
+      this.el.verifyRows.appendChild(row);
+    }
   }
 
-  _markVerified() {
-    this.el.verifyBar.classList.add('verified');
-    this.el.verifyBtn.textContent = t('verify.verified');
+  _markVerified(peerId) {
+    const s = this.peers.get(peerId);
+    if (!s) return;
+    s.verified = true;
+    this._renderVerifyBar();
   }
 
   /* ── QR safety-code verification ──
@@ -658,12 +748,15 @@ class DeadDrop {
    * only 2^36 of it), so a scan compares the entire handshake secret: a MitM
    * that survived the emoji comparison odds cannot survive this one. */
 
-  async _openQrVerify() {
+  async _openQrVerify(peerId) {
+    const s = this.peers.get(peerId);
+    if (!s) return;
     let token;
-    try { token = 'dd-sas:' + this.crypto.computeSASToken(); } catch { return; }
+    try { token = 'dd-sas:' + s.crypto.computeSASToken(); } catch { return; }
+    this._qrPeerId = peerId;
     const qr = this._qrDataURL(token);
     if (qr) this.el.qrVerifyImg.src = qr;
-    this.el.qrVerifyStatus.textContent = t('qr.scanning');
+    this.el.qrVerifyStatus.textContent = `${s.label} — ${t('qr.scanning')}`;
     this.el.qrVerifyStatus.classList.remove('match', 'mismatch');
     this.el.qrVerify.classList.remove('hidden');
     await this._startQrScan(token);
@@ -708,7 +801,7 @@ class DeadDrop {
     if (match) {
       this.el.qrVerifyStatus.textContent = t('qr.match');
       this.el.qrVerifyStatus.classList.add('match');
-      this._markVerified();
+      this._markVerified(this._qrPeerId);
     } else {
       this.el.qrVerifyStatus.textContent = t('qr.mismatch');
       this.el.qrVerifyStatus.classList.add('mismatch');
@@ -730,11 +823,6 @@ class DeadDrop {
   _closeQrVerify() {
     this._stopQrScan();
     this.el.qrVerify.classList.add('hidden');
-  }
-
-  _hideVerify() {
-    this.el.verifyBar.classList.add('hidden');
-    this.el.verifyBar.classList.remove('verified', 'insecure');
   }
 
   /* ── File transfer ── */
@@ -759,11 +847,13 @@ class DeadDrop {
     const blobUrl = URL.createObjectURL(file);
     this._renderFileMsg(id, blobUrl, meta, true, ttl, burn);
 
-    try {
-      await this.fileMgr.send(file, id, this.crypto, this.peer, ttl, burn);
-    } catch (err) {
-      console.error('File send failed:', err);
-      this._renderSystem('File transfer failed');
+    // Fan out to every peer, each copy encrypted with that pair's own keys.
+    const results = await Promise.allSettled(
+      this._encryptedSessions().map((s) => this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn)),
+    );
+    if (results.some((r) => r.status === 'rejected')) {
+      console.error('File send failed:', results.find((r) => r.status === 'rejected')?.reason);
+      this._renderSystem('File transfer failed for at least one peer');
     }
   }
 
@@ -824,29 +914,38 @@ class DeadDrop {
     const ttl = this._normalizeTTL(this.el.ttlSelect.value);
     const id = crypto.randomUUID();
 
-    const { ciphertext, iv, epoch } = await this.crypto.encrypt(text);
-    this.peer.send({ type: 'chat', id, ciphertext, iv, epoch, ttl, burnAfterReading: burn });
+    // Pairwise E2E: encrypt separately for every peer with that pair's own keys.
+    for (const s of this._encryptedSessions()) {
+      try {
+        const { ciphertext, iv, epoch } = await s.crypto.encrypt(text);
+        s.conn.send({ type: 'chat', id, ciphertext, iv, epoch, ttl, burnAfterReading: burn });
+      } catch (err) {
+        console.warn('Send failed for one peer:', err);
+      }
+    }
 
     this._renderMsg(id, text, true, ttl, burn);
     this.el.msgInput.value = '';
   }
 
-  async _onPeerMessage(msg) {
+  async _onPeerMessage(peerId, msg) {
     if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
+    const s = this.peers.get(peerId);
+    if (!s) return;
     switch (msg.type) {
       case 'typing':
-        this._showTyping();
+        this._showTyping(s.label);
         break;
 
       case 'chat': {
         if (!this._validMessageID(msg.id) || !this._validEncryptedPayload(msg)) return;
         this._hideTyping();
         try {
-          const text = await this.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
+          const text = await s.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
-          this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading);
+          this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading, s);
           if (msg.burnAfterReading) {
-            this.peer.send({ type: 'read', id: msg.id });
+            s.conn.send({ type: 'read', id: msg.id }); // receipt goes to the sender only
           }
         } catch (err) {
           console.error('Decryption failed:', err.message);
@@ -866,6 +965,15 @@ class DeadDrop {
       case 'file':
       case 'file-chunk':
       case 'file-end': {
+        // Bind each inbound transfer to its sender: chunks for an id are only
+        // accepted from the peer that started it, and decryption uses that
+        // pair's keys.
+        if (msg.type === 'file') {
+          if (this._validMessageID(msg.id)) this._fileSenders.set(msg.id, peerId);
+        } else if (this._fileSenders.get(msg.id) !== peerId) {
+          console.warn('File message rejected: wrong sender');
+          break;
+        }
         let result;
         try {
           result = this.fileMgr.handleMessage(msg);
@@ -882,9 +990,11 @@ class DeadDrop {
             this._updateFileProgress(result.id, result.received, result.totalChunks);
             break;
           case 'complete':
-            await this._onFileComplete(result);
+            this._fileSenders.delete(result.id);
+            await this._onFileComplete(result, s);
             break;
           case 'error':
+            this._fileSenders.delete(result.id);
             this._renderSystem(`⚠️ File transfer failed: ${result.error}`);
             break;
         }
@@ -899,25 +1009,25 @@ class DeadDrop {
       case 'call-answer':
       case 'call-end':
       case 'call-mute':
-        this._handleCallSignal(msg);
+        this._handleCallSignal(peerId, msg);
         break;
     }
   }
 
-  async _onFileComplete(result) {
+  async _onFileComplete(result, s) {
     try {
       // Decrypt metadata
-      const metaJson = await this.crypto.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch);
+      const metaJson = await s.crypto.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch);
       const meta = this._sanitizeFileMeta(JSON.parse(metaJson));
       if (!meta) throw new Error('Invalid file metadata');
 
       // Decrypt file data
-      const fileData = await this.crypto.decryptBinary(result.ciphertext, result.fileIv, result.fileEpoch);
+      const fileData = await s.crypto.decryptBinary(result.ciphertext, result.fileIv, result.fileEpoch);
       const blob    = new Blob([fileData], { type: meta.fileType });
       const blobUrl = URL.createObjectURL(blob);
 
       // Replace progress placeholder with actual preview
-      this._renderFileComplete(result.id, blobUrl, meta, result.ttl, result.burnAfterReading);
+      this._renderFileComplete(result.id, blobUrl, meta, result.ttl, result.burnAfterReading, s);
     } catch (err) {
       console.error('File decryption failed:', err.message);
       this._renderSystem('Failed to decrypt file');
@@ -926,19 +1036,27 @@ class DeadDrop {
 
   /* ── Calls ── */
 
+  /** The session that owns the active (or requested) call. */
+  _callConn() {
+    return this.peers.get(this._callPeerId)?.conn ?? null;
+  }
+
   _onCallBtnClick() {
     if (this.callState === 'active') {
       this._toggleCallOverlay(true);
       return;
     }
-    if (this.callState !== 'idle' || !this.encrypted) return;
+    // Calls are strictly 1:1 — only when the room has exactly one encrypted peer.
+    const enc = this._encryptedSessions();
+    if (this.callState !== 'idle' || enc.length !== 1 || this.peers.size !== 1) return;
+    this._callPeerId = [...this.peers.keys()][0];
     this._startCall(true);
   }
 
   async _startCall(video) {
     this.callState = 'requesting';
     this._callVideo = video;
-    this.peer.send({ type: 'call-req', video });
+    this._callConn()?.send({ type: 'call-req', video });
     this._showCallStatus('📞 Calling…');
     this._toggleCallOverlay(true);
   }
@@ -951,7 +1069,7 @@ class DeadDrop {
       this.localStream = await this._getMedia(this._callVideo);
     } catch (err) {
       console.error('getUserMedia failed:', err);
-      this.peer.send({ type: 'call-reject', reason: 'media-error' });
+      this._callConn()?.send({ type: 'call-reject', reason: 'media-error' });
       this.callState = 'idle';
       this._renderSystem('Failed to access camera/microphone');
       return;
@@ -960,18 +1078,20 @@ class DeadDrop {
     this.el.localVideo.srcObject = this.localStream;
     this._toggleCallOverlay(true);
     this._showCallStatus('🔄 Connecting…');
-    this.peer.send({ type: 'call-accept' });
+    this._callConn()?.send({ type: 'call-accept' });
   }
 
   _rejectCall() {
     this.el.incomingCall.classList.add('hidden');
     this.callState = 'idle';
-    this.peer.send({ type: 'call-reject' });
+    this._callConn()?.send({ type: 'call-reject' });
   }
 
-  _handleCallSignal(msg) {
+  _handleCallSignal(peerId, msg) {
+    // Everything after call-req must come from the peer the call is with.
+    if (msg.type !== 'call-req' && peerId !== this._callPeerId) return;
     switch (msg.type) {
-      case 'call-req':    this._onCallReq(msg);    break;
+      case 'call-req':    this._onCallReq(peerId, msg); break;
       case 'call-accept': this._onCallAccept();     break;
       case 'call-reject': this._onCallReject();     break;
       case 'call-offer':  this._onCallOffer(msg);   break;
@@ -981,11 +1101,13 @@ class DeadDrop {
     }
   }
 
-  _onCallReq(msg) {
-    if (this.callState !== 'idle') {
-      this.peer.send({ type: 'call-reject', reason: 'busy' });
+  _onCallReq(peerId, msg) {
+    // Busy, or a group room (calls stay 1:1) — decline.
+    if (this.callState !== 'idle' || this.peers.size > 1) {
+      this.peers.get(peerId)?.conn.send({ type: 'call-reject', reason: 'busy' });
       return;
     }
+    this._callPeerId = peerId;
     this.callState = 'incoming';
     this._callVideo = msg.video;
     this.el.incomingCall.classList.remove('hidden');
@@ -999,7 +1121,7 @@ class DeadDrop {
       this.localStream = await this._getMedia(this._callVideo);
     } catch (err) {
       console.error('getUserMedia failed:', err);
-      this.peer.send({ type: 'call-end' });
+      this._callConn()?.send({ type: 'call-end' });
       this._endCallCleanup();
       this._renderSystem('Failed to access camera/microphone');
       return;
@@ -1009,8 +1131,8 @@ class DeadDrop {
     this._showCallStatus('🔄 Connecting media…');
 
     try {
-      const offer = await this.peer.startMedia(this.localStream);
-      this.peer.send({ type: 'call-offer', sdp: JSON.stringify(offer) });
+      const offer = await this._callConn().startMedia(this.localStream);
+      this._callConn()?.send({ type: 'call-offer', sdp: JSON.stringify(offer) });
     } catch (err) {
       console.error('Media offer failed:', err);
       this._endCall();
@@ -1025,8 +1147,8 @@ class DeadDrop {
   async _onCallOffer(msg) {
     try {
       const offer = JSON.parse(msg.sdp);
-      const answer = await this.peer.acceptMedia(offer, this.localStream);
-      this.peer.send({ type: 'call-answer', sdp: JSON.stringify(answer) });
+      const answer = await this._callConn().acceptMedia(offer, this.localStream);
+      this._callConn()?.send({ type: 'call-answer', sdp: JSON.stringify(answer) });
       this.callState = 'active';
       this._showCallStatus('');
       this._updateCallBtn(true);
@@ -1039,7 +1161,7 @@ class DeadDrop {
   async _onCallAnswer(msg) {
     try {
       const answer = JSON.parse(msg.sdp);
-      await this.peer.completeMedia(answer);
+      await this._callConn().completeMedia(answer);
       this.callState = 'active';
       this._showCallStatus('');
       this._updateCallBtn(true);
@@ -1062,13 +1184,14 @@ class DeadDrop {
 
   _endCall() {
     if (this.callState === 'idle') return;
-    this.peer?.send({ type: 'call-end' });
+    this._callConn()?.send({ type: 'call-end' });
     this._endCallCleanup();
   }
 
   _endCallCleanup() {
     this.callState = 'idle';
-    this.peer?.stopMedia();
+    this._callConn()?.stopMedia();
+    this._callPeerId = null;
     if (this.localStream) {
       for (const track of this.localStream.getTracks()) track.stop();
       this.localStream = null;
@@ -1081,6 +1204,7 @@ class DeadDrop {
     this.el.remotePlaceholder.classList.remove('hidden');
     this._updateCallBtn(false);
     this._resetMuteButtons();
+    this._refreshRoomState();
   }
 
   _onRemoteTrack(stream) {
@@ -1110,7 +1234,7 @@ class DeadDrop {
     track.enabled = !track.enabled;
     this.el.toggleMic.classList.toggle('muted', !track.enabled);
     this.el.toggleMic.textContent = track.enabled ? '🎤' : '🔇';
-    this.peer?.send({
+    this._callConn()?.send({
       type: 'call-mute',
       audio: track.enabled,
       video: this.localStream.getVideoTracks()[0]?.enabled ?? false,
@@ -1124,7 +1248,7 @@ class DeadDrop {
     track.enabled = !track.enabled;
     this.el.toggleCam.classList.toggle('muted', !track.enabled);
     this.el.toggleCam.textContent = track.enabled ? '📹' : '🚫';
-    this.peer?.send({
+    this._callConn()?.send({
       type: 'call-mute',
       audio: this.localStream.getAudioTracks()[0]?.enabled ?? true,
       video: track.enabled,
@@ -1150,7 +1274,7 @@ class DeadDrop {
     }
   }
 
-  _renderMsg(id, text, mine, ttl, burn) {
+  _renderMsg(id, text, mine, ttl, burn, sender = null) {
     ttl = this._normalizeTTL(ttl);
     burn = burn === true;
     const el = document.createElement('div');
@@ -1162,9 +1286,11 @@ class DeadDrop {
     if (ttl > 0) meta += `<span class="countdown">${ttl}s</span>`;
 
     el.innerHTML = `
+      ${this._senderTag(mine, sender)}
       <div class="msg-text">${this._esc(text)}</div>
       ${meta ? `<div class="msg-meta">${meta}</div>` : ''}
     `;
+    this._applySenderColor(el, sender);
 
     this.el.messages.appendChild(el);
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
@@ -1175,7 +1301,7 @@ class DeadDrop {
 
   /* ── UI helpers ── */
 
-  _renderFileMsg(id, blobUrl, meta, mine, ttl, burn) {
+  _renderFileMsg(id, blobUrl, meta, mine, ttl, burn, sender = null) {
     ttl = this._normalizeTTL(ttl);
     burn = burn === true;
     meta = this._sanitizeFileMeta(meta);
@@ -1202,6 +1328,7 @@ class DeadDrop {
     if (ttl > 0) badges += `<span class="countdown">${ttl}s</span>`;
 
     el.innerHTML = `
+      ${this._senderTag(mine, sender)}
       <div class="file-content">${preview}</div>
       <div class="file-details">
         <span class="file-name">${escaped}</span>
@@ -1210,6 +1337,7 @@ class DeadDrop {
       </div>
       ${badges ? `<div class="msg-meta">${badges}</div>` : ''}
     `;
+    this._applySenderColor(el, sender);
 
     this.el.messages.appendChild(el);
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
@@ -1245,11 +1373,24 @@ class DeadDrop {
     if (text) text.textContent = `${received} / ${total}`;
   }
 
-  _renderFileComplete(id, blobUrl, meta, ttl, burn) {
+  _renderFileComplete(id, blobUrl, meta, ttl, burn, sender = null) {
     if (!this._validMessageID(id)) return;
     const old = document.getElementById(`msg-${id}`);
     if (old) old.remove();
-    this._renderFileMsg(id, blobUrl, meta, false, ttl, burn);
+    this._renderFileMsg(id, blobUrl, meta, false, ttl, burn, sender);
+  }
+
+  /** Sender attribution tag — only on peers' messages, only in group rooms.
+   * The color is applied afterwards via _applySenderColor (CSSOM), because an
+   * inline style attribute would violate the strict CSP. */
+  _senderTag(mine, sender) {
+    if (mine || !sender || this.peers.size < 2) return '';
+    return `<div class="msg-sender">${this._esc(sender.label)}</div>`;
+  }
+
+  _applySenderColor(el, sender) {
+    const tag = el.querySelector('.msg-sender');
+    if (tag && sender) tag.style.color = sender.color;
   }
 
   _renderSystem(text) {
@@ -1290,10 +1431,16 @@ class DeadDrop {
     this._closeQrVerify();
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
-    this.peer?.close();
-    this.crypto?.destroy();
+    // Tear down every pairwise session; clear the map first so the close
+    // callbacks find nothing to re-process.
+    const sessions = [...this.peers.values()];
+    this.peers.clear();
+    this._fileSenders.clear();
+    for (const s of sessions) {
+      try { s.conn.close(); } catch { /* already closed */ }
+      s.crypto.destroy();
+    }
     this.ws?.close();
-    this.peer = null;
     this.encrypted = false;
   }
 
@@ -1321,14 +1468,20 @@ class DeadDrop {
   /* ── Typing indicator ── */
 
   _sendTyping() {
-    if (!this.encrypted || !this.peer?.connected) return;
+    if (!this.encrypted) return;
     const now = Date.now();
     if (this._lastTypingSent && now - this._lastTypingSent < 1500) return;
     this._lastTypingSent = now;
-    try { this.peer.send({ type: 'typing' }); } catch { /* channel closed */ }
+    for (const s of this._encryptedSessions()) {
+      try { s.conn.send({ type: 'typing' }); } catch { /* channel closed */ }
+    }
   }
 
-  _showTyping() {
+  _showTyping(label) {
+    const text = this.el.typingIndicator.querySelector('[data-i18n="typing"]');
+    if (text) {
+      text.textContent = this.peers.size > 1 && label ? `${label} — ${t('typing')}` : t('typing');
+    }
     this.el.typingIndicator.classList.remove('hidden');
     clearTimeout(this._typingHideTimer);
     this._typingHideTimer = setTimeout(() => this.el.typingIndicator.classList.add('hidden'), 3000);

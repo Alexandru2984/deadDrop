@@ -99,14 +99,10 @@
       </div>
     </header>
 
-    <!-- Safety-code verification (SAS) -->
+    <!-- Safety-code verification (SAS) — one row per peer in the room -->
     <div id="verify-bar" class="verify-bar hidden">
-      <div class="verify-row">
-        <span class="verify-label" data-i18n="verify.label">🔐 Safety code</span>
-        <span id="verify-sas" class="verify-sas" aria-live="polite"></span>
-        <button id="verify-qr-btn" class="btn btn-sm" data-i18n="verify.qr" title="Verify with a QR scan">📷 QR</button>
-        <button id="verify-btn" class="btn btn-sm verify-btn" data-i18n="verify.btn">Mark verified</button>
-      </div>
+      <span class="verify-label" data-i18n="verify.label">🔐 Safety code</span>
+      <div id="verify-rows"></div>
       <p class="verify-hint" data-i18n="verify.hint">
         Read this aloud to your peer (call/in person). If your codes match, no one is
         intercepting. If they differ, stop — the line is compromised.

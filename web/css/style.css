@@ -1087,3 +1087,19 @@ select { cursor: pointer; width: auto; }
 
 .qr-verify-status.match { color: var(--accent); }
 .qr-verify-status.mismatch { color: var(--danger); font-weight: 600; }
+
+/* ── Mesh group chat ── */
+
+.msg-sender {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  margin-bottom: 3px;
+  opacity: 0.9;
+}
+
+#verify-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0;
+}
