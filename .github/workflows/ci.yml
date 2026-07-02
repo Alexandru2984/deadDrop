@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Go server: static analysis, build, and the full unit/integration suite
+  # (includes the SRP JS↔Go cross-implementation vectors).
+  go:
+    name: Go build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./...
+
+  # Browser crypto, run under Node with no server or stored state — hermetic.
+  web-crypto:
+    name: Web crypto self-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Hybrid handshake + sealing + ratchet
+        run: node test/crypto.selftest.mjs
+      - name: Vendored ML-KEM-768
+        run: node test/mlkem.selftest.mjs
+      - name: SRP client↔server (legacy + PBKDF2 kdf)
+        run: node test/srp.selftest.mjs
+
+  # Live zero-knowledge login flow: the real web/js/srp.js against a running server.
+  e2e:
+    name: Live SRP e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build server
+        run: go build -o deaddrop ./cmd/server/
+
+      # Seed one bcrypt (non-SRP) account so the legacy→SRP upgrade path is
+      # covered. The server's challenge handler only checks that the account
+      # exists and has no verifier, so the hash value is irrelevant here.
+      - name: Seed a legacy account
+        run: |
+          mkdir -p data
+          printf '{"Micu":{"hash":"legacy-seed-not-checked-by-challenge"}}' > data/users.json
+
+      - name: Start server
+        run: |
+          PORT=8100 HOST=127.0.0.1 ./deaddrop > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 40); do
+            if curl -sf http://127.0.0.1:8100/api/config >/dev/null; then
+              echo "server up"; exit 0
+            fi
+            sleep 0.25
+          done
+          echo "server did not become ready"; cat server.log; exit 1
+
+      - name: Mint an invite code
+        id: invite
+        run: echo "code=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Run live SRP e2e
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.invite.outputs.code }}
+          DD_LEGACY_USER: Micu
+        run: node test/srp.e2e.mjs
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat server.log || true
+
+      - name: Stop server
+        if: always()
+        run: kill "$(cat server.pid)" 2>/dev/null || true

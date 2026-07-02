@@ -135,9 +135,16 @@ async function srpLogin(username, password, jar) {
   const bad = await srpLogin(USER, 'totally-wrong-password', {});
   ok(bad.status === 401, 'wrong password rejected (401)');
 
-  // 4. Legacy account detection.
-  const legacy = await srpLogin('Micu', 'whatever', {});
-  ok(legacy.legacy === true, 'legacy bcrypt account flagged for fallback');
+  // 4. Legacy account detection. Needs a pre-existing bcrypt (non-SRP) account;
+  //    name it via DD_LEGACY_USER (CI seeds one). Skipped when unset so the suite
+  //    never silently depends on whatever happens to sit in a dev's data/.
+  const legacyUser = process.env.DD_LEGACY_USER;
+  if (legacyUser) {
+    const legacy = await srpLogin(legacyUser, 'whatever', {});
+    ok(legacy.legacy === true, 'legacy bcrypt account flagged for fallback');
+  } else {
+    console.log('  · skipped legacy-account check (set DD_LEGACY_USER to enable)');
+  }
 
   // 4b. Anti-enumeration: an unknown username gets a challenge that looks exactly
   //     like a fresh account's, including the default kdf.
