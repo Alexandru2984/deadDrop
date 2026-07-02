@@ -313,6 +313,16 @@ func OpenRegistration() bool { return os.Getenv("OPEN_REGISTRATION") == "1" }
 
 func newInvites(dir string) *invites { return &invites{path: filepath.Join(dir, "invites.json")} }
 
+// inviteRe accepts codes shaped like the ones newInviteCode mints (uppercased):
+// a "DD-" prefix followed by dash-separated groups of the safe alphabet/digits.
+var inviteRe = regexp.MustCompile(`^DD-[0-9A-Z-]{4,40}$`)
+
+// validInviteCode reports whether s (once trimmed/uppercased) is a plausible
+// invite code — used to keep junk out of an import.
+func validInviteCode(s string) bool {
+	return inviteRe.MatchString(strings.ToUpper(strings.TrimSpace(s)))
+}
+
 // GenerateInviteForDir creates and stores a new invite code in dataDir. For the
 // `deaddrop invite` CLI subcommand. The running server reads invites fresh on each
 // registration, so a code minted here is immediately usable.
@@ -321,6 +331,53 @@ func GenerateInviteForDir(dataDir string) (string, error) {
 		return "", err
 	}
 	return newInvites(dataDir).Generate()
+}
+
+// GenerateInvitesForDir mints n invite codes at once and returns them (bulk form
+// of GenerateInviteForDir). n must be >= 1.
+func GenerateInvitesForDir(dataDir string, n int) ([]string, error) {
+	if n < 1 {
+		return nil, errors.New("count must be at least 1")
+	}
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return nil, err
+	}
+	return newInvites(dataDir).generateN(n)
+}
+
+// ListInvitesForDir returns the current unused invite codes in dataDir.
+func ListInvitesForDir(dataDir string) ([]string, error) {
+	return newInvites(dataDir).list()
+}
+
+// ImportInvitesForDir merges codes (already parsed) into dataDir's invite store,
+// skipping malformed ones and duplicates. Returns how many were newly added.
+func ImportInvitesForDir(dataDir string, codes []string) (added, skipped int, err error) {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
+		return 0, 0, err
+	}
+	return newInvites(dataDir).importCodes(codes)
+}
+
+// ParseInviteCodes reads invite codes from raw input in either form: a JSON
+// array (["DD-…", …], as produced by export) or plain whitespace/newline
+// separated tokens. Malformed tokens are dropped.
+func ParseInviteCodes(raw []byte) []string {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" {
+		return nil
+	}
+	var out []string
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			out = arr
+		}
+	}
+	if out == nil {
+		out = strings.Fields(trimmed)
+	}
+	return out
 }
 
 func (iv *invites) load() ([]string, error) {
@@ -383,6 +440,73 @@ func (iv *invites) Generate() (string, error) {
 		return "", err
 	}
 	return code, nil
+}
+
+// list returns the current unused codes (a copy is fine; caller only reads).
+func (iv *invites) list() ([]string, error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	return iv.load()
+}
+
+// generateN mints n fresh codes in a single load/save, avoiding collisions with
+// codes already stored or minted in this batch.
+func (iv *invites) generateN(n int) ([]string, error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	codes, err := iv.load()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		seen[strings.ToUpper(c)] = true
+	}
+	minted := make([]string, 0, n)
+	for len(minted) < n {
+		code := newInviteCode()
+		if seen[strings.ToUpper(code)] {
+			continue // astronomically unlikely, but never emit a dup
+		}
+		seen[strings.ToUpper(code)] = true
+		codes = append(codes, code)
+		minted = append(minted, code)
+	}
+	if err := iv.save(codes); err != nil {
+		return nil, err
+	}
+	return minted, nil
+}
+
+// importCodes merges the given codes into the store, skipping anything malformed
+// or already present (case-insensitively). Returns counts of added and skipped.
+func (iv *invites) importCodes(in []string) (added, skipped int, err error) {
+	iv.mu.Lock()
+	defer iv.mu.Unlock()
+	codes, err := iv.load()
+	if err != nil {
+		return 0, 0, err
+	}
+	seen := make(map[string]bool, len(codes))
+	for _, c := range codes {
+		seen[strings.ToUpper(strings.TrimSpace(c))] = true
+	}
+	for _, raw := range in {
+		code := strings.ToUpper(strings.TrimSpace(raw))
+		if !validInviteCode(code) || seen[code] {
+			skipped++
+			continue
+		}
+		seen[code] = true
+		codes = append(codes, code)
+		added++
+	}
+	if added > 0 {
+		if err := iv.save(codes); err != nil {
+			return 0, 0, err
+		}
+	}
+	return added, skipped, nil
 }
 
 func newInviteCode() string {

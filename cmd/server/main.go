@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -19,15 +21,104 @@ import (
 	"deaddrop/internal/turn"
 )
 
-func main() {
-	// CLI: `deaddrop invite` mints a single-use invite code and exits.
-	if len(os.Args) > 1 && os.Args[1] == "invite" {
-		code, err := auth.GenerateInviteForDir("data")
+// inviteDataDir is where invite codes (and other state) live, relative to the
+// working directory — the same "data" dir the server uses.
+const inviteDataDir = "data"
+
+// runInviteCLI handles the `invite` / `invites` subcommands and exits. Codes go
+// to stdout (pipe-friendly); human status goes to stderr.
+//
+//	deaddrop invite               mint one code
+//	deaddrop invite N             mint N codes
+//	deaddrop invites [list]       list unused codes (+ count on stderr)
+//	deaddrop invites export [f]   dump codes as JSON to file f (or stdout)
+//	deaddrop invites import <f|-> merge codes from file f (or stdin), dedup
+func runInviteCLI(args []string) {
+	sub := ""
+	if len(args) > 1 {
+		sub = args[1]
+	}
+
+	if args[0] == "invite" {
+		n := 1
+		if sub != "" {
+			v, err := strconv.Atoi(sub)
+			if err != nil || v < 1 {
+				log.Fatalf("invite: expected a positive count, got %q", sub)
+			}
+			n = v
+		}
+		codes, err := auth.GenerateInvitesForDir(inviteDataDir, n)
 		if err != nil {
 			log.Fatalf("invite: %v", err)
 		}
-		fmt.Println(code)
+		for _, c := range codes {
+			fmt.Println(c)
+		}
 		return
+	}
+
+	switch sub {
+	case "", "list":
+		codes, err := auth.ListInvitesForDir(inviteDataDir)
+		if err != nil {
+			log.Fatalf("invites list: %v", err)
+		}
+		for _, c := range codes {
+			fmt.Println(c)
+		}
+		fmt.Fprintf(os.Stderr, "%d unused invite code(s)\n", len(codes))
+
+	case "export":
+		codes, err := auth.ListInvitesForDir(inviteDataDir)
+		if err != nil {
+			log.Fatalf("invites export: %v", err)
+		}
+		data, _ := json.MarshalIndent(codes, "", "  ")
+		if len(args) > 2 && args[2] != "-" {
+			if err := os.WriteFile(args[2], data, 0600); err != nil {
+				log.Fatalf("invites export: %v", err)
+			}
+			fmt.Fprintf(os.Stderr, "exported %d code(s) to %s\n", len(codes), args[2])
+		} else {
+			fmt.Println(string(data))
+		}
+
+	case "import":
+		if len(args) < 3 {
+			log.Fatalf("usage: deaddrop invites import <file|->")
+		}
+		var (
+			raw []byte
+			err error
+		)
+		if args[2] == "-" {
+			raw, err = io.ReadAll(os.Stdin)
+		} else {
+			raw, err = os.ReadFile(args[2])
+		}
+		if err != nil {
+			log.Fatalf("invites import: %v", err)
+		}
+		added, skipped, err := auth.ImportInvitesForDir(inviteDataDir, auth.ParseInviteCodes(raw))
+		if err != nil {
+			log.Fatalf("invites import: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "imported %d new code(s), skipped %d (malformed or duplicate)\n", added, skipped)
+
+	default:
+		log.Fatalf("unknown invites subcommand %q (use: list, export, import)", sub)
+	}
+}
+
+func main() {
+	// CLI subcommands (invite management) run and exit; anything else starts the server.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "invite", "invites":
+			runInviteCLI(os.Args[1:])
+			return
+		}
 	}
 
 	// When PORT is set explicitly (production: nginx proxies to a fixed port),

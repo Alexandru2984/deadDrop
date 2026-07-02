@@ -93,20 +93,31 @@ turnutils_uclient -y -u "$U" -w "$P" -p 3478 -n 2 <PUBLIC_IP>   # expect 0 lost 
 Login uses SRP-6a: the password is turned into a verifier in the browser and never
 reaches the server (or Cloudflare). Registration requires a single-use invite code.
 
-Mint an invite from the CLI:
+Mint invites from the CLI (codes go to stdout, status to stderr, so they pipe cleanly):
 
 ```bash
-cd /home/micu/deaddrop && ./deaddrop invite      # prints e.g. DD-FXAV-XKH6-JC22
+cd /home/micu/deaddrop
+./deaddrop invite                 # mint one   → DD-FXAV-XKH6-JC22
+./deaddrop invite 10              # mint ten at once
+./deaddrop invites list           # show all unused codes (+ count on stderr)
+./deaddrop invites export backup.json   # back them up as JSON (or `export -` to stdout)
+./deaddrop invites import backup.json   # merge a backup (dedup; `-` reads stdin)
 ```
 
-…or via the admin endpoint (set `ADMIN_TOKEN` in `/etc/deaddrop.env`):
+`import` accepts either the JSON array that `export` writes or plain
+newline-separated codes; malformed tokens and duplicates are skipped and reported.
+This lets you pre-generate a batch offline and restore or migrate the invite pool.
+
+…or mint one via the admin endpoint (set `ADMIN_TOKEN` in `/etc/deaddrop.env`):
 
 ```bash
 curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://dead.micutu.com/api/admin/invite
 ```
 
 Invites live in `data/invites.json` (single-use, consumed on registration). With an
-empty list, registration is effectively closed.
+empty list, registration is effectively closed. The running server re-reads the file
+on each registration, so codes minted/imported by the CLI are usable immediately —
+no restart needed.
 
 Pre-SRP (bcrypt) accounts still log in via the legacy path and are transparently
 upgraded to SRP on first login (the verifier is computed locally; the password is
