@@ -61,9 +61,10 @@ PORT=9000 ./deaddrop
    ./deaddrop
    ```
 2. Open **two browser tabs** at the URL shown (e.g., `http://localhost:8088`)
-3. In tab 1: click **Create Room** → copy the 6-character room code
-4. In tab 2: paste the code → click **Join**
-5. Once the status shows 🔒 **End-to-end encrypted**, start chatting
+3. In tab 1: click **Create Room** → copy the room code
+4. In other tabs (up to 5 more): paste the code → click **Join**
+5. Once the status shows 🔒 **End-to-end encrypted**, start chatting. In a group,
+   verify each peer's safety code row separately.
 
 ## Features
 
@@ -78,10 +79,20 @@ PORT=9000 ./deaddrop
 - Nonce-based replay attack protection
 - All key material destroyed on disconnect
 
+### Group chat (mesh)
+- Rooms hold **up to 6 people**. There is **no group key** — the room is a full
+  mesh of **pairwise** end-to-end sessions, each with its own hybrid handshake,
+  safety code and ratchet. A member only ever holds key material for their own
+  pairs, and every message is encrypted separately for each recipient.
+- The safety-code bar shows **one row per peer** — verify each independently
+  (emoji or QR). Peers are identified by an ephemeral ID label, not a username
+  (the signaling server never learns who is who).
+- Voice/video **calls stay 1:1** — offered only in a two-person room.
+
 ### Self-Destruct
 - **TTL timer**: messages auto-delete after 10s / 30s / 1min / 5min
 - **Burn after reading**: message destroyed 2s after the peer reads it
-- Deletion is **bilateral** — both peers' copies are destroyed
+- Deletion is **bilateral** — every peer's copy is destroyed
 - Burn animation on destruction
 
 ### Privacy
@@ -155,4 +166,4 @@ Production setup (systemd, nginx, coturn, Tor, invites) is documented in
 
 ## Future Work
 
-- [ ] Multi-peer mesh group rooms
+- [ ] Larger rooms (the N² mesh keeps them small today)
