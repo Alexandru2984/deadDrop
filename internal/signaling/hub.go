@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	// Dead Drop is strictly 1:1 — the client manages a single peer connection, so a
-	// third participant would silently corrupt the session. Cap rooms at two until
-	// mesh group chat lands. (Bump this when multi-peer support is added.)
-	MaxPeersPerRoom = 2
+	// Mesh group rooms: every pair of peers gets its own WebRTC channel and its
+	// own end-to-end session, so bandwidth (and file fan-out) grows with N² —
+	// keep rooms small. The server still only relays opaque signaling.
+	MaxPeersPerRoom = 6
 	MaxRooms        = 1000
 )
 
