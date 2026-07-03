@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex, nofollow, noarchive" />
+  <title>💀 Dead Drop — Verify the code</title>
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-EnoAUV4iMm4Sa1zDhh9LJaS3jiTd+m+s/HRohx/8uSs=" />
+  <link rel="stylesheet" href="css/about.css" integrity="sha256-s44wlTEoyGwmjfrlJkclwBz3V3acd0fWfUXUzD8qooY=" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
+</head>
+<body>
+  <main class="doc">
+    <a class="back" href="/">← Back to Dead Drop</a>
+    <h1>VERIFY THE CODE</h1>
+    <p class="lead">Dead Drop is a website, so your browser downloads the encryption code from this
+      server on every visit. This page lets you check that what you received matches the published,
+      open-source code — and is honest about the limits of doing so from inside the page itself.</p>
+
+    <h2>1. Does the served code match its manifest?</h2>
+    <p>Every file this server sent is hashed in your browser and compared to
+      <code>/SHA256SUMS</code>, the manifest committed to the public repository.</p>
+    <div class="verify-actions">
+      <button id="run" class="btn btn-sm">Re-run check</button>
+      <span id="summary" class="verify-summary" aria-live="polite"></span>
+    </div>
+    <div id="results" class="verify-list"></div>
+
+    <h2>2. Does that manifest match the open-source repository?</h2>
+    <p>Step 1 only proves the files agree with the manifest <em>this same server</em> handed you —
+      a malicious server could serve a tampered bundle <em>and</em> a matching manifest <em>and</em> a
+      doctored version of this very page. The check that a compromised server cannot fake is comparing
+      the manifest against an <strong>independent</strong> copy — the public GitHub repo.</p>
+    <p>This server's manifest fingerprint (SHA-256 of <code>/SHA256SUMS</code>):</p>
+    <div class="onion" id="fingerprint">…</div>
+    <p class="note">Compare it with the canonical one from GitHub. From a terminal:</p>
+    <pre class="verify-cmd" id="cmd"></pre>
+    <p><a id="gh-link" href="#" rel="noopener">View the canonical SHA256SUMS on GitHub →</a></p>
+
+    <h2>3. The honest ceiling</h2>
+    <ul>
+      <li><strong>Reduce who you trust:</strong> load Dead Drop over its
+        <a href="/about.html">Tor onion address</a> to cut Cloudflare out of the delivery path — then
+        only the operator serves the code, not a TLS-terminating middlebox.</li>
+      <li><strong>A website can't fully win this.</strong> If your adversary is the operator (or anyone
+        who can coerce them), no in-page check is enough — the page is served by the same party.
+        The real fix is code that is installed once and updated through a signed, reviewed channel:
+        a browser extension that pins these hashes, or a native client. That is deliberately out of
+        scope for a pure website, and stated here rather than hidden.</li>
+    </ul>
+
+    <a class="back" href="/">← Back to Dead Drop</a>
+  </main>
+  <script type="module" src="js/verify.js" integrity="sha256-wB7Cml6CBjVw+BIxRihvlq0KbaIIvzk7QIBUztRSGgg="></script>
+</body>
+</html>

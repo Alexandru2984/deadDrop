@@ -149,9 +149,35 @@ deaddrop/
   strict same-origin + CSP without any 'unsafe-inline'
 - ✅ Optional duress (decoy) password; nothing in the API or UI betrays a decoy session
 - ✅ No third-party analytics, no message storage, PII-free server logs
+- ✅ Verifiable delivery: every served file is hashed into `web/SHA256SUMS`
+  (committed to this repo); the `/verify.html` page re-checks the bundle in the
+  browser and against GitHub
+
+> **Honest limitation.** Dead Drop is a *website*, so your browser re-downloads
+> the encryption code from the server on every visit. A compromised or coerced
+> server could serve backdoored JavaScript — the fundamental ceiling of any
+> browser-based E2EE. The verification below shrinks that trust but cannot
+> eliminate it; for the strongest guarantees, load over the Tor onion and use a
+> pinned extension / native client. This is stated plainly rather than hidden.
 
 See the in-app **Security & Privacy** page (`/about.html`) for the full, honest
 threat model — including what Dead Drop does **not** protect against.
+
+### Verifying the code
+
+```bash
+# Regenerate the integrity manifest (run before every deploy):
+node scripts/gen-integrity.mjs
+
+# Confirm the live server serves exactly the open-source bundle:
+diff <(curl -s https://dead.micutu.com/SHA256SUMS) \
+     <(curl -s https://raw.githubusercontent.com/Alexandru2984/deadDrop/main/web/SHA256SUMS) \
+  && echo "MATCHES the repo"
+```
+
+Or just open **`/verify.html`** in the browser — it hashes every asset it
+received and compares against the served manifest, then shows how to check that
+manifest against GitHub (a source the server can't forge).
 
 ## Testing
 

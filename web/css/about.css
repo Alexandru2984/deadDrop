@@ -15,3 +15,22 @@
 .yes { color: var(--accent); } .no { color: var(--danger); }
 .back { display: inline-block; margin-bottom: 16px; color: var(--dim); text-decoration: none; }
 .pill { display:inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--dim); margin-left: 6px; }
+
+/* ── Code-verification page (/verify.html) ── */
+.verify-actions { display: flex; align-items: center; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+.verify-summary { font-size: 13px; color: var(--dim); }
+.verify-summary.verify-ok { color: var(--accent); }
+.verify-summary.verify-bad { color: var(--danger); font-weight: 600; }
+.verify-list { margin: 8px 0 4px; display: flex; flex-direction: column; gap: 2px; }
+.verify-row { display: flex; align-items: baseline; gap: 8px; font-size: 12px; padding: 2px 0; }
+.verify-mark { width: 1em; flex-shrink: 0; }
+.verify-row.verify-ok .verify-mark { color: var(--accent); }
+.verify-row.verify-bad .verify-mark { color: var(--danger); }
+.verify-row.verify-pending .verify-mark { color: var(--dim); }
+.verify-path { color: var(--text); font-family: var(--font); word-break: break-all; }
+.verify-detail { color: var(--danger); font-weight: 600; }
+.verify-cmd {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  padding: 10px 12px; font-size: 12px; color: var(--text); overflow-x: auto;
+  white-space: pre; line-height: 1.5; margin: 6px 0;
+}
