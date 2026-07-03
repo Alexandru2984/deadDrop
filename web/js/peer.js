@@ -11,6 +11,7 @@ import { Handshake } from './handshake.js';
 
 const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
 const REKEY_INTERVAL_MS = 10 * 60 * 1000; // DH ratchet every 10 min for forward secrecy
+const HANDSHAKE_TIMEOUT_MS = 30 * 1000;   // fail an unfinished handshake instead of hanging forever
 
 export class PeerConnection {
   /**
@@ -46,6 +47,7 @@ export class PeerConnection {
     // signaling delivered, the media path is NOT trusted and calls are blocked.
     this.mediaVerified = false;
     this._fpTimer = null;
+    this._handshakeTimer = null;
   }
 
   /* ── Initiator (caller) ── */
@@ -177,6 +179,7 @@ export class PeerConnection {
   close() {
     this._clearRekey();
     clearTimeout(this._fpTimer);
+    clearTimeout(this._handshakeTimer);
     this.handshake = null;
     this.stopMedia();
     if (this.dc) this.dc.close();
@@ -237,6 +240,14 @@ export class PeerConnection {
           this.close();
         },
       });
+      // Don't let a peer (or relay) that opens the channel but stalls the key
+      // exchange leave us stuck "exchanging keys" forever — fail it after a bound.
+      this._handshakeTimer = setTimeout(() => {
+        if (!this.crypto.established) {
+          console.warn('[peer] handshake did not complete in time — closing');
+          this.close();
+        }
+      }, HANDSHAKE_TIMEOUT_MS);
       try {
         await this.handshake.start();
       } catch (err) {
@@ -302,6 +313,7 @@ export class PeerConnection {
   }
 
   _onEstablished(sas) {
+    clearTimeout(this._handshakeTimer);
     this.onStateChange('encrypted', sas);
     if (this.isInitiator) this._scheduleRekey();
     // Now that the data channel is SAS-authenticated, bind the DTLS/media path to
