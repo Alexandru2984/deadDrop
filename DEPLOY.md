@@ -18,12 +18,31 @@ EnvironmentFile=-/etc/deaddrop.env    # TURN secret etc. (mode 600, root)
 Restart=always
 ```
 
-Rebuild & restart:
+Rebuild & restart (or just run `scripts/deploy.sh`, which also refreshes the
+integrity manifest first):
 
 ```bash
 go build -trimpath -ldflags="-s -w" -o deaddrop ./cmd/server/
 sudo systemctl restart deaddrop
 ```
+
+### Code-integrity watcher (`deaddrop-integrity.service`)
+
+Because the server serves `web/` straight off disk, editing a file that an SRI
+hash points at (e.g. `js/app.js`) without regenerating the manifest would leave a
+stale `integrity="…"` in the HTML — and the browser would then block that file
+(blank page). `scripts/deaddrop-integrity.service` runs a tiny watcher
+(`scripts/watch-integrity.mjs`) that re-runs `gen-integrity.mjs` on any change
+under `web/`, so a stale hash can never sit live.
+
+```bash
+sudo cp scripts/deaddrop-integrity.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now deaddrop-integrity.service
+```
+
+`scripts/deploy.sh` and CI (`gen-integrity.mjs --check`) cover the deploy path;
+this watcher covers live edits.
 
 ## 2. Secrets — `/etc/deaddrop.env` (mode 600, root)
 

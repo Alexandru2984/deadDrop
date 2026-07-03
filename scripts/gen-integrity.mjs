@@ -17,12 +17,21 @@
  * committed hashes can never drift from the code they describe.
  */
 
-import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync, writeFileSync, renameSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 const WEB = 'web';
 const SUMS = join(WEB, 'SHA256SUMS');
+
+// Write via a temp file + atomic rename so a concurrent regen (the file-watcher
+// service) or a browser fetch can never observe a half-written file — a torn
+// SRI hash or manifest would otherwise block the live site.
+function atomicWrite(path, data) {
+  const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
+  writeFileSync(tmp, data);
+  renameSync(tmp, path);
+}
 
 // Entry-point subresources that also get an SRI integrity="" attribute stamped
 // into the HTML that references them. (ES-module imports beyond these entries
@@ -71,7 +80,7 @@ function injectSRI(check) {
     }
     if (updated !== content) {
       changed = true;
-      if (!check) writeFileSync(htmlPath, updated);
+      if (!check) atomicWrite(htmlPath, updated);
     }
   }
   return changed;
@@ -79,7 +88,7 @@ function injectSRI(check) {
 
 function buildSums() {
   const files = walk(WEB)
-    .filter((f) => f !== SUMS)
+    .filter((f) => f !== SUMS && !f.endsWith('.tmp'))
     .map((f) => relative(WEB, f).split(sep).join('/'))
     .sort();
   return files.map((rel) => `${sha256hex(readFileSync(join(WEB, rel)))}  ${rel}`).join('\n') + '\n';
@@ -102,7 +111,7 @@ if (check) {
   }
   console.log('integrity: up to date ✓');
 } else {
-  if (sumsChanged) writeFileSync(SUMS, sums);
+  if (sumsChanged) atomicWrite(SUMS, sums);
   const n = sums.trim().split('\n').length;
   console.log(`integrity: wrote web/SHA256SUMS (${n} files)${sriChanged ? ' + updated SRI' : ''}`);
 }
