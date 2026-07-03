@@ -186,6 +186,7 @@ go test ./...                      # server (incl. SRP JS↔Go interop vectors)
 node test/crypto.selftest.mjs      # hybrid handshake + sealing + ratchet
 node test/mlkem.selftest.mjs       # vendored ML-KEM-768 sanity
 node test/srp.selftest.mjs         # SRP client↔server (legacy + PBKDF2 kdf)
+node test/fingerprint.selftest.mjs # DTLS media-path fingerprint check
 node test/srp.e2e.mjs              # live SRP against a running server
 ```
 

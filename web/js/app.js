@@ -655,8 +655,10 @@ class DeadDrop {
       this._setStatus('waiting', t('st.waiting'));
       this._hideTyping();
     }
-    // Calls stay strictly 1:1: only offered when exactly one (encrypted) peer is present.
-    const callable = enc.length === 1 && this.peers.size === 1;
+    // Calls stay strictly 1:1 AND require the media path to be bound to the
+    // verified SAS channel (mediaVerified) — otherwise a signaling MitM could
+    // intercept the call even though messages are safe.
+    const callable = enc.length === 1 && this.peers.size === 1 && enc[0].conn.mediaVerified;
     this.el.callBtn.style.display = (callable || this.callState !== 'idle') ? '' : 'none';
     // Cover traffic runs whenever it's enabled and there's someone to cover for.
     if (this._coverEnabled && enc.length > 0 && !this._coverTimer) this._startCoverTraffic();
@@ -691,6 +693,11 @@ class DeadDrop {
         this._renderSystem(`🔒 ${s.label} ${t('sys.joined')}`);
         this._refreshRoomState();
         this.el.msgInput.focus();
+        break;
+      case 'media-verified':
+        // The DTLS/media path is now bound to the verified SAS channel — calls
+        // are safe to offer. (Messaging already worked once 'encrypted' fired.)
+        this._refreshRoomState();
         break;
       case 'insecure':
         // Commit-reveal handshake (or rekey) with THIS peer failed. Drop only that
@@ -1062,9 +1069,11 @@ class DeadDrop {
       this._toggleCallOverlay(true);
       return;
     }
-    // Calls are strictly 1:1 — only when the room has exactly one encrypted peer.
+    // Calls are strictly 1:1 — only when the room has exactly one encrypted peer
+    // whose media path is bound to the verified SAS channel.
     const enc = this._encryptedSessions();
     if (this.callState !== 'idle' || enc.length !== 1 || this.peers.size !== 1) return;
+    if (!enc[0].conn.mediaVerified) return;
     this._callPeerId = [...this.peers.keys()][0];
     this._startCall(true);
   }
@@ -1118,8 +1127,9 @@ class DeadDrop {
   }
 
   _onCallReq(peerId, msg) {
-    // Busy, or a group room (calls stay 1:1) — decline.
-    if (this.callState !== 'idle' || this.peers.size > 1) {
+    // Busy, a group room (calls stay 1:1), or a media path not bound to the
+    // verified SAS channel — decline rather than risk an intercepted call.
+    if (this.callState !== 'idle' || this.peers.size > 1 || !this.peers.get(peerId)?.conn.mediaVerified) {
       this.peers.get(peerId)?.conn.send({ type: 'call-reject', reason: 'busy' });
       return;
     }

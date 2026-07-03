@@ -38,6 +38,8 @@ jobs:
         run: node test/mlkem.selftest.mjs
       - name: SRP client↔server (legacy + PBKDF2 kdf)
         run: node test/srp.selftest.mjs
+      - name: DTLS fingerprint media-path check
+        run: node test/fingerprint.selftest.mjs
       - name: Integrity manifest matches the served code
         run: node scripts/gen-integrity.mjs --check
 

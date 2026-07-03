@@ -39,6 +39,13 @@ export class PeerConnection {
     this._rekeyTimer = null;
     this._sendQ = Promise.resolve(); // keeps sealed sends in order
     this._recvQ = Promise.resolve(); // keeps opened messages in order
+    // Media path authenticity: call audio/video is protected by DTLS-SRTP, whose
+    // certificate is authenticated only by the fingerprint in the SDP — which is
+    // relayed by the (untrusted) signaling server. Until we confirm, over the
+    // SAS-verified data channel, that the peer's real DTLS cert matches what
+    // signaling delivered, the media path is NOT trusted and calls are blocked.
+    this.mediaVerified = false;
+    this._fpTimer = null;
   }
 
   /* ── Initiator (caller) ── */
@@ -169,6 +176,7 @@ export class PeerConnection {
 
   close() {
     this._clearRekey();
+    clearTimeout(this._fpTimer);
     this.handshake = null;
     this.stopMedia();
     if (this.dc) this.dc.close();
@@ -273,7 +281,10 @@ export class PeerConnection {
       this._recvQ = this._recvQ
         .then(async () => {
           const inner = await this.crypto.open(msg.c, msg.iv, msg.e);
-          if (inner && typeof inner.type === 'string') this.onMessage(inner);
+          if (!inner || typeof inner.type !== 'string') return;
+          // Transport-integrity control message stays in the peer layer.
+          if (inner.type === 'dtls-fp') { this._onPeerFingerprint(inner); return; }
+          this.onMessage(inner);
         })
         .catch((err) => console.warn('[peer] failed to open sealed message', err));
       await this._recvQ;
@@ -293,6 +304,58 @@ export class PeerConnection {
   _onEstablished(sas) {
     this.onStateChange('encrypted', sas);
     if (this.isInitiator) this._scheduleRekey();
+    // Now that the data channel is SAS-authenticated, bind the DTLS/media path to
+    // it: send our real local fingerprint over this trusted channel so the peer
+    // can check it against the fingerprint signaling handed them. Messages are
+    // already safe (encrypted with the SAS key); this closes the call/media gap.
+    this._verifyMediaPath();
+  }
+
+  /* ── Media-path (DTLS) authentication over the SAS-verified channel ── */
+
+  _verifyMediaPath() {
+    let mine;
+    try {
+      mine = extractFingerprints(this.pc?.localDescription?.sdp || '');
+    } catch {
+      mine = [];
+    }
+    if (mine.length === 0) return; // nothing to attest; calls stay disabled
+    this.send({ type: 'dtls-fp', fp: mine }).catch(() => {});
+    // If the peer never confirms (old client, or a MitM dropping the message),
+    // leave mediaVerified false — messaging still works, calls stay disabled.
+    clearTimeout(this._fpTimer);
+    this._fpTimer = setTimeout(() => {
+      if (!this.mediaVerified) console.warn('[peer] media path unverified — calls disabled');
+    }, 10000);
+  }
+
+  _onPeerFingerprint(msg) {
+    clearTimeout(this._fpTimer);
+    const theirs = Array.isArray(msg.fp) ? msg.fp.map(String) : [];
+    let expected = [];
+    try {
+      expected = extractFingerprints(this.pc?.remoteDescription?.sdp || '');
+    } catch { /* leave empty */ }
+    if (expected.length === 0 || theirs.length === 0) {
+      // Can't compare (unexpected) — don't tear down, but don't trust media either.
+      console.warn('[peer] could not compare DTLS fingerprints — calls disabled');
+      return;
+    }
+    const overlap = theirs.some((f) => expected.includes(f));
+    if (overlap) {
+      // The cert the peer actually holds matches what signaling delivered: no
+      // DTLS man-in-the-middle. Media (calls) is now bound to the verified SAS.
+      this.mediaVerified = true;
+      this.onStateChange('media-verified');
+    } else {
+      // The peer's real DTLS cert differs from the SDP signaling relayed — a
+      // man-in-the-middle is terminating the transport and could intercept a
+      // call. Messages stayed confidential, but abort loudly.
+      console.warn('[peer] DTLS fingerprint mismatch — media-path MITM');
+      this.onStateChange('insecure', 'DTLS fingerprint mismatch — media path may be intercepted');
+      this.close();
+    }
   }
 
   /* ── DH ratchet (forward secrecy) — only the initiator drives the schedule ── */
@@ -340,4 +403,19 @@ export class PeerConnection {
       this.close();
     }
   }
+}
+
+/**
+ * Pull the DTLS certificate fingerprint(s) out of an SDP blob. Every WebRTC SDP
+ * carries `a=fingerprint:<alg> <hex:hex:…>` for the DTLS handshake that secures
+ * both the data channel and any media. Returns a normalized, de-duplicated list.
+ */
+export function extractFingerprints(sdp) {
+  const out = [];
+  const re = /^a=fingerprint:(\S+)\s+([0-9A-Fa-f:]+)/gim;
+  let m;
+  while ((m = re.exec(sdp)) !== null) {
+    out.push((m[1] + ' ' + m[2]).toLowerCase());
+  }
+  return [...new Set(out)];
 }
