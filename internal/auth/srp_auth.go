@@ -23,6 +23,7 @@ import (
 
 	"deaddrop/internal/middleware"
 	"deaddrop/internal/srp"
+	"deaddrop/internal/strictjson"
 )
 
 const (
@@ -721,7 +722,7 @@ func (h *Handler) SRPRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body srpRegisterReq
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -776,7 +777,7 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body srpChallengeReq
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -886,7 +887,7 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body srpAuthReq
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -960,7 +961,7 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		Verifier string `json:"verifier"`
 		Kdf      string `json:"kdf"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -969,6 +970,7 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		h.sess.deleteUserKindExcept(username, true, c.Value)
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -976,6 +978,9 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// A primary password change is the account owner's revocation event: keep
+	// only this browser and close both primary and decoy sessions elsewhere.
+	h.sess.deleteUserExcept(username, c.Value)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -1003,7 +1008,7 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		Verifier string `json:"verifier"`
 		Kdf      string `json:"kdf"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -1021,6 +1026,7 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	h.sess.deleteUserKind(username, true)
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -1042,7 +1048,7 @@ func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if duress {
-		h.sess.delete(c.Value)
+		h.sess.deleteUserKind(username, true)
 	} else {
 		if err := h.store.deleteUser(username); err != nil {
 			jsonErr(w, err.Error(), http.StatusBadRequest)

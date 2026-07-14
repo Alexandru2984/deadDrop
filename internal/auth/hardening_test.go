@@ -51,6 +51,10 @@ func TestDeleteAccountDuressPreservesPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	secondDuressToken, err := h.sess.create("alice", true)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/account/delete", nil)
 	req.AddCookie(&http.Cookie{Name: "dd_session", Value: duressToken})
@@ -64,6 +68,9 @@ func TestDeleteAccountDuressPreservesPrimary(t *testing.T) {
 	}
 	if _, ok := h.sess.get(duressToken); ok {
 		t.Fatal("duress delete did not close the decoy session")
+	}
+	if _, ok := h.sess.get(secondDuressToken); ok {
+		t.Fatal("duress delete did not close every decoy session")
 	}
 	if _, ok := h.sess.get(primaryToken); !ok {
 		t.Fatal("duress delete invalidated a primary session")
@@ -88,6 +95,84 @@ func TestDeleteAccountDuressPreservesPrimary(t *testing.T) {
 	}
 	if _, ok := h.sess.get(secondToken); ok {
 		t.Fatal("primary delete did not invalidate all account sessions")
+	}
+}
+
+func TestCredentialChangesRevokeTheRightSessions(t *testing.T) {
+	h := newTestHandler(t)
+	salt, verifier := testSRPCredential("alice", "primary password")
+	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	duressSalt, duressVerifier := testSRPCredential("alice", "decoy password")
+	if err := h.store.setDuress("alice", duressSalt, duressVerifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	primaryKeep := createTestSession(t, h, "alice", false)
+	primaryOther := createTestSession(t, h, "alice", false)
+	duressOther := createTestSession(t, h, "alice", true)
+
+	newSalt, newVerifier := testSRPCredential("alice", "new primary password")
+	callVerifierUpdate(t, h, primaryKeep, newSalt, newVerifier)
+	assertSession(t, h, primaryKeep, true, "current primary session")
+	assertSession(t, h, primaryOther, false, "other primary session")
+	assertSession(t, h, duressOther, false, "existing duress session")
+
+	primaryOther = createTestSession(t, h, "alice", false)
+	duressKeep := createTestSession(t, h, "alice", true)
+	duressOther = createTestSession(t, h, "alice", true)
+	newDuressSalt, newDuressVerifier := testSRPCredential("alice", "new decoy password")
+	callVerifierUpdate(t, h, duressKeep, newDuressSalt, newDuressVerifier)
+	assertSession(t, h, duressKeep, true, "current duress session")
+	assertSession(t, h, duressOther, false, "other duress session")
+	assertSession(t, h, primaryKeep, true, "unrelated primary session")
+	assertSession(t, h, primaryOther, true, "second unrelated primary session")
+
+	duressOther = createTestSession(t, h, "alice", true)
+	thirdSalt, thirdVerifier := testSRPCredential("alice", "third decoy password")
+	body, _ := json.Marshal(map[string]string{
+		"salt": thirdSalt, "verifier": thirdVerifier, "kdf": defaultKdf,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/account/duress", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: primaryKeep})
+	w := httptest.NewRecorder()
+	h.SetDuress(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("SetDuress status=%d: %s", w.Code, w.Body.String())
+	}
+	assertSession(t, h, duressKeep, false, "old current duress session")
+	assertSession(t, h, duressOther, false, "old other duress session")
+	assertSession(t, h, primaryKeep, true, "primary session after duress change")
+}
+
+func callVerifierUpdate(t *testing.T, h *Handler, token, salt, verifier string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"salt": salt, "verifier": verifier, "kdf": defaultKdf,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/account/verifier", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: token})
+	w := httptest.NewRecorder()
+	h.SetVerifier(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("SetVerifier status=%d: %s", w.Code, w.Body.String())
+	}
+}
+
+func createTestSession(t *testing.T, h *Handler, username string, duress bool) string {
+	t.Helper()
+	token, err := h.sess.create(username, duress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+func assertSession(t *testing.T, h *Handler, token string, want bool, label string) {
+	t.Helper()
+	_, got := h.sess.get(token)
+	if got != want {
+		t.Fatalf("%s validity=%t, want %t", label, got, want)
 	}
 }
 

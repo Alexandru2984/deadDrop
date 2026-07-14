@@ -21,3 +21,8 @@ Exits non-zero on any failure. Requires Node 18+ (uses the WebCrypto API).
 `node test/lifecycle.selftest.mjs` checks peer-scoped message/file IDs, strict
 chunk validation, receiver allocation limits, cleanup on disconnect, ordered
 outbound delivery, and non-broadcast destruction of another peer's message.
+
+## ICE configuration self-test
+
+`node test/config.selftest.mjs` checks that only bounded STUN/TURN URL shapes
+and correctly shaped, short-lived coturn REST credentials reach WebRTC.

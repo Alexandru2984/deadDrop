@@ -34,12 +34,16 @@ jobs:
           node-version: '22'
       - name: Hybrid handshake + sealing + ratchet
         run: node test/crypto.selftest.mjs
+      - name: Bounded message and file lifecycle
+        run: node test/lifecycle.selftest.mjs
       - name: Vendored ML-KEM-768
         run: node test/mlkem.selftest.mjs
       - name: SRP client↔server (legacy + PBKDF2 kdf)
         run: node test/srp.selftest.mjs
       - name: DTLS fingerprint media-path check
         run: node test/fingerprint.selftest.mjs
+      - name: STUN/TURN response validation
+        run: node test/config.selftest.mjs
       - name: Integrity manifest matches the served code
         run: node scripts/gen-integrity.mjs --check
 

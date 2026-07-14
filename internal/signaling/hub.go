@@ -6,23 +6,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 )
 
 const (
 	// Mesh group rooms: every pair of peers gets its own WebRTC channel and its
 	// own end-to-end session, so bandwidth (and file fan-out) grows with N² —
 	// keep rooms small. The server still only relays opaque signaling.
-	MaxPeersPerRoom = 6
-	MaxRooms        = 1000
+	MaxPeersPerRoom            = 6
+	MaxRooms                   = 128
+	MaxConnections             = 256
+	MaxConnectionsPerPrincipal = 8
+	RoomCodeHexLen             = 24 // 96-bit ephemeral rendezvous capability
+	PeerIDHexLen               = 32 // 128-bit connection identifier
 )
 
 // Hub manages chat rooms and routes signaling messages between peers.
 // Uses channels instead of mutexes for idiomatic Go concurrency.
 type Hub struct {
-	rooms      map[string]*Room
-	register   chan *registerRequest
-	unregister chan *unregisterRequest
-	relay      chan *relayRequest
+	rooms          map[string]*Room
+	register       chan *registerRequest
+	unregister     chan *unregisterRequest
+	relay          chan *relayRequest
+	slots          chan struct{}
+	slotMu         sync.Mutex
+	principalSlots map[string]int
 }
 
 type Room struct {
@@ -47,15 +55,60 @@ type relayRequest struct {
 	from     *Peer
 	targetID string
 	data     []byte
+	response chan bool
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		rooms:      make(map[string]*Room),
-		register:   make(chan *registerRequest),
-		unregister: make(chan *unregisterRequest),
-		relay:      make(chan *relayRequest, 256),
+		rooms:          make(map[string]*Room),
+		register:       make(chan *registerRequest),
+		unregister:     make(chan *unregisterRequest),
+		relay:          make(chan *relayRequest),
+		slots:          make(chan struct{}, MaxConnections),
+		principalSlots: make(map[string]int),
 	}
+}
+
+func (h *Hub) reserveConnection(principal string) bool {
+	if principal != "" {
+		h.slotMu.Lock()
+		if h.principalSlots[principal] >= MaxConnectionsPerPrincipal {
+			h.slotMu.Unlock()
+			return false
+		}
+		h.principalSlots[principal]++
+		h.slotMu.Unlock()
+	}
+	select {
+	case h.slots <- struct{}{}:
+		return true
+	default:
+		if principal != "" {
+			h.releasePrincipal(principal)
+		}
+		return false
+	}
+}
+
+func (h *Hub) releaseConnection(principal string) {
+	select {
+	case <-h.slots:
+		if principal != "" {
+			h.releasePrincipal(principal)
+		}
+	default:
+		log.Printf("[hub] connection slot accounting underflow")
+	}
+}
+
+func (h *Hub) releasePrincipal(principal string) {
+	h.slotMu.Lock()
+	if count := h.principalSlots[principal]; count <= 1 {
+		delete(h.principalSlots, principal)
+	} else {
+		h.principalSlots[principal] = count - 1
+	}
+	h.slotMu.Unlock()
 }
 
 // Run is the Hub's main event loop — all room state mutations happen here,
@@ -64,40 +117,56 @@ func (h *Hub) Run() {
 	for {
 		select {
 		case req := <-h.register:
-			// If peer is already in a room, remove them first to prevent
-			// stale references (send-to-closed-channel panic on disconnect).
-			if req.peer.room != nil {
-				oldRoom := req.peer.room
-				delete(oldRoom.Peers, req.peer.ID)
-				if len(oldRoom.Peers) == 0 {
-					delete(h.rooms, oldRoom.Code)
-					log.Printf("[hub] room cleaned up")
-				} else {
-					leftMsg, _ := json.Marshal(SignalMessage{Type: "peer-left", PeerID: req.peer.ID})
-					for _, other := range oldRoom.Peers {
-						safeSend(other.send, leftMsg)
-					}
-				}
-				req.peer.room = nil
+			if req.peer == nil || !ValidateRoomCode(req.code) {
+				req.response <- nil
+				req.err <- fmt.Errorf("invalid room code")
+				continue
+			}
+
+			oldRoom := req.peer.room
+			if oldRoom != nil && oldRoom.Code == req.code && oldRoom.Peers[req.peer.ID] == req.peer {
+				// Duplicate joins are idempotent; they must not generate a fake
+				// peer-left/peer-joined cycle for every member of the room.
+				req.response <- oldRoom
+				req.err <- nil
+				continue
 			}
 
 			room, exists := h.rooms[req.code]
-			if !exists {
-				if len(h.rooms) >= MaxRooms {
+			if exists {
+				if existing := room.Peers[req.peer.ID]; existing != nil && existing != req.peer {
+					req.response <- nil
+					req.err <- fmt.Errorf("peer identifier collision")
+					continue
+				}
+				if len(room.Peers) >= MaxPeersPerRoom {
+					req.response <- nil
+					req.err <- fmt.Errorf("room is full")
+					continue
+				}
+			} else {
+				effectiveRooms := len(h.rooms)
+				if oldRoom != nil && len(oldRoom.Peers) == 1 && oldRoom.Peers[req.peer.ID] == req.peer {
+					effectiveRooms-- // moving will remove the peer's empty old room
+				}
+				if effectiveRooms >= MaxRooms {
 					req.response <- nil
 					req.err <- fmt.Errorf("server room limit reached")
 					continue
 				}
+			}
+
+			// Destination validation succeeded, so moving is atomic from the
+			// client's perspective: a failed join never ejects it from its old room.
+			if oldRoom != nil {
+				h.removeFromRoom(req.peer, true)
+			}
+			if !exists {
 				room = &Room{
 					Code:  req.code,
 					Peers: make(map[string]*Peer),
 				}
 				h.rooms[req.code] = room
-			}
-			if len(room.Peers) >= MaxPeersPerRoom {
-				req.response <- nil
-				req.err <- fmt.Errorf("room is full")
-				continue
 			}
 			room.Peers[req.peer.ID] = req.peer
 			req.peer.room = room
@@ -109,42 +178,66 @@ func (h *Hub) Run() {
 				if other.ID == req.peer.ID {
 					continue
 				}
-				safeSend(other.send, newPeerMsg)
+				if !safeSend(other.send, newPeerMsg) {
+					other.terminate()
+					continue
+				}
 				existingMsg, _ := json.Marshal(SignalMessage{Type: "peer-joined", PeerID: other.ID})
-				safeSend(req.peer.send, existingMsg)
+				if !safeSend(req.peer.send, existingMsg) {
+					req.peer.terminate()
+				}
 			}
 
 			req.response <- room
 			req.err <- nil
 
 		case req := <-h.unregister:
-			peer := req.peer
-			if peer.room != nil {
-				room := peer.room
-				// Notify other peers about the departure (safe — we're in the Hub goroutine)
-				leftMsg, _ := json.Marshal(SignalMessage{Type: "peer-left", PeerID: peer.ID})
-				for _, other := range room.Peers {
-					if other.ID != peer.ID {
-						safeSend(other.send, leftMsg)
-					}
-				}
-				delete(room.Peers, peer.ID)
-				if len(room.Peers) == 0 {
-					delete(h.rooms, room.Code)
-					log.Printf("[hub] room cleaned up")
-				}
-			}
+			h.removeFromRoom(req.peer, true)
 			close(req.done)
 
 		case req := <-h.relay:
-			// Relay signaling messages (offer/answer/ice) safely through the Hub
-			if req.from.room == nil {
-				continue
+			delivered := false
+			if req.from != nil {
+				room := req.from.room
+				if room != nil && req.targetID != req.from.ID && room.Peers[req.from.ID] == req.from {
+					if target, ok := room.Peers[req.targetID]; ok {
+						delivered = safeSend(target.send, req.data)
+						if !delivered {
+							// A producer must not be able to disconnect a healthy
+							// target merely by bursting enough relay messages to
+							// fill its queue. Its later peer-left event restores
+							// consistent room state for the target.
+							req.from.terminate()
+						}
+					}
+				}
 			}
-			if target, ok := req.from.room.Peers[req.targetID]; ok {
-				safeSend(target.send, req.data)
+			req.response <- delivered
+		}
+	}
+}
+
+// removeFromRoom is called only from Run, which owns all room membership state.
+func (h *Hub) removeFromRoom(peer *Peer, notify bool) {
+	if peer == nil || peer.room == nil {
+		return
+	}
+	room := peer.room
+	peer.room = nil // invalidate first so queued relays cannot use a stale room
+	if room.Peers[peer.ID] != peer {
+		return
+	}
+	delete(room.Peers, peer.ID)
+	if notify {
+		leftMsg, _ := json.Marshal(SignalMessage{Type: "peer-left", PeerID: peer.ID})
+		for _, other := range room.Peers {
+			if !safeSend(other.send, leftMsg) {
+				other.terminate()
 			}
 		}
+	}
+	if len(room.Peers) == 0 {
+		delete(h.rooms, room.Code)
 	}
 }
 
@@ -170,25 +263,23 @@ func (h *Hub) RemovePeer(peer *Peer) {
 
 // Relay routes a signaling message to a target peer within the sender's room.
 // Thread-safe via channel — avoids reading room.Peers from the readPump goroutine.
-func (h *Hub) Relay(from *Peer, targetID string, data []byte) {
-	select {
-	case h.relay <- &relayRequest{from: from, targetID: targetID, data: data}:
-	default:
-		log.Printf("[hub] relay queue full, dropping message")
-	}
+func (h *Hub) Relay(from *Peer, targetID string, data []byte) bool {
+	response := make(chan bool, 1)
+	h.relay <- &relayRequest{from: from, targetID: targetID, data: data, response: response}
+	return <-response
 }
 
 func GenerateRoomCode() (string, error) {
-	b := make([]byte, 6) // produces 12 hex characters (~281 trillion combinations)
+	b := make([]byte, RoomCodeHexLen/2)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
 }
 
-// ValidateRoomCode checks that a room code is 6-12 hex characters.
+// ValidateRoomCode accepts only server-generated 96-bit lowercase hex codes.
 func ValidateRoomCode(code string) bool {
-	if len(code) < 6 || len(code) > 12 {
+	if len(code) != RoomCodeHexLen {
 		return false
 	}
 	return isLowerHex(code)
@@ -196,7 +287,7 @@ func ValidateRoomCode(code string) bool {
 
 // ValidatePeerID checks server-generated peer identifiers.
 func ValidatePeerID(id string) bool {
-	if len(id) != 16 {
+	if len(id) != PeerIDHexLen {
 		return false
 	}
 	return isLowerHex(id)

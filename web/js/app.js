@@ -11,12 +11,17 @@ import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
 import { register as srpRegister, ClientLogin, DEFAULT_KDF } from './srp.js';
 import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
+import { sanitizeIceConfig } from './util.js';
 
-const ROOM_CODE_RE = /^[0-9a-f]{12}$/;
+const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const PEER_ID_RE = /^[0-9a-f]{16}$/;
+const PEER_ID_RE = /^[0-9a-f]{32}$/;
 const MAX_TEXT_LEN = 16 * 1024;
 const MAX_RENDERED_NODES = 600;
+const MAX_REMOTE_PEERS = 5;
+const SIGNAL_WINDOW_MS = 10 * 1000;
+const MAX_SIGNAL_MESSAGES_PER_WINDOW = 240;
+const MAX_SIGNAL_BYTES_PER_WINDOW = 1024 * 1024;
 const ALLOWED_TTLS = new Set([0, 10, 30, 60, 300]);
 const CURRENT_KDF_ITERATIONS = Number(DEFAULT_KDF.split(':')[1]);
 
@@ -39,9 +44,15 @@ class DeadDrop {
     this.fileMgr = new FileTransferManager();
     this.encrypted = false; // true when ≥1 pairwise session is encrypted and SAS-verified
     this.iceConfig = { iceServers: [] };
+    this._iceExpiresAt = 0;
     this._relayOnly = false;
     this._coverEnabled = false; // decoy traffic to mask when real chatting happens
     this._coverTimer = null;
+    this._signalWindowAt = Date.now();
+    this._signalMessages = 0;
+    this._signalBytes = 0;
+    this._signalQ = Promise.resolve();
+    this._signalGeneration = 0;
 
     // Call state (calls stay 1:1 — only available when exactly one peer is in the room)
     this.callState = 'idle'; // idle | requesting | incoming | connecting | active
@@ -75,7 +86,7 @@ class DeadDrop {
 
   // Parse a shared join link (#join=<code>) and remember the room to pre-fill.
   _readJoinHash() {
-    const m = location.hash.match(/^#join=([0-9a-f]{12})$/i);
+    const m = location.hash.match(/^#join=([0-9a-f]{24})$/i);
     if (m) {
       this._pendingJoin = m[1].toLowerCase();
       history.replaceState(null, '', location.pathname); // drop the code from the URL bar
@@ -452,7 +463,7 @@ class DeadDrop {
     try {
       const res = await fetch('/api/room', { method: 'POST' });
       const data = await res.json();
-      if (!data.code) {
+      if (!res.ok || typeof data.code !== 'string' || !ROOM_CODE_RE.test(data.code)) {
         this._renderSystem(data.error || 'Failed to create room');
         return;
       }
@@ -542,18 +553,32 @@ class DeadDrop {
 
   _connectSignaling() {
     return new Promise((resolve, reject) => {
+      if (this.ws && this.ws.readyState < WebSocket.CLOSING) {
+        reject(new Error('Signaling connection already active'));
+        return;
+      }
+      const generation = ++this._signalGeneration;
+      this._signalWindowAt = Date.now();
+      this._signalMessages = 0;
+      this._signalBytes = 0;
+      this._signalQ = Promise.resolve();
       let settled = false;
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(`${proto}//${location.host}/ws`);
       this.ws = socket;
       const timer = setTimeout(() => {
-        if (settled) return;
+        if (settled || generation !== this._signalGeneration || this.ws !== socket) return;
         settled = true;
         socket.close();
         reject(new Error('WebSocket welcome timeout'));
       }, 15000);
 
       socket.onmessage = (e) => {
+        if (generation !== this._signalGeneration || this.ws !== socket) return;
+        if (typeof e.data !== 'string' || !this._allowInboundSignal(e.data.length)) {
+          socket.close(1008, 'signaling rate limit exceeded');
+          return;
+        }
         let msg;
         try {
           msg = JSON.parse(e.data);
@@ -567,11 +592,18 @@ class DeadDrop {
           clearTimeout(timer);
           resolve();
         }
-        this._onSignal(msg).catch((err) => console.warn('[ws] signaling message failed', err));
+        if (!this.peerId && msg.type !== 'welcome') return;
+        this._signalQ = this._signalQ
+          .then(() => {
+            if (generation !== this._signalGeneration || this.ws !== socket) return undefined;
+            return this._onSignal(msg);
+          })
+          .catch((err) => console.warn('[ws] signaling message failed', err));
       };
 
       socket.onclose = () => {
         clearTimeout(timer);
+        if (generation !== this._signalGeneration || this.ws !== socket) return;
         this._setStatus('disconnected', '❌ Server disconnected');
         if (!settled) {
           settled = true;
@@ -580,6 +612,7 @@ class DeadDrop {
       };
       socket.onerror = () => {
         clearTimeout(timer);
+        if (generation !== this._signalGeneration || this.ws !== socket) return;
         // Could be auth failure — recheck
         this._checkAuth();
         if (!settled) {
@@ -594,11 +627,13 @@ class DeadDrop {
     switch (msg.type) {
       case 'peer-joined':
         if (!this._validPeerID(msg.peerId) || msg.peerId === this.peerId) return;
+        if (!this.peers.has(msg.peerId) && this.peers.size >= MAX_REMOTE_PEERS) return;
         if (!this.peers.has(msg.peerId)) {
           this._setStatus('connecting', '🔗 Peer found — connecting P2P…');
         }
         // Deterministic initiator per pair: the lower peerId creates the offer.
         if (this.peerId < msg.peerId) {
+          await this._loadIceServers();
           await this._ensureSession(msg.peerId).conn.createOffer(msg.peerId);
         }
         break;
@@ -609,11 +644,12 @@ class DeadDrop {
         break;
 
       case 'error':
-        this._setStatus('disconnected', `❌ ${msg.peerId || 'Unknown error'}`);
+        this._setStatus('disconnected', `❌ ${msg.error || msg.peerId || 'Unknown error'}`);
         break;
 
       case 'offer': {
         if (!this._validSignal(msg)) return;
+        await this._loadIceServers();
         const s = this._ensureSession(msg.from);
         await s.conn.handleOffer(msg.from, JSON.parse(msg.payload));
         break;
@@ -639,6 +675,9 @@ class DeadDrop {
     }
     let s = this.peers.get(peerId);
     if (s) return s;
+    if (this.peers.size >= MAX_REMOTE_PEERS) {
+      throw new Error('Room peer limit exceeded');
+    }
     const cryptoLayer = new CryptoLayer();
     const conn = new PeerConnection(
       { send: (o) => this.ws.send(JSON.stringify(o)) },
@@ -729,12 +768,17 @@ class DeadDrop {
 
   /** Fetch self-hosted STUN/TURN ICE servers (with an ephemeral credential). */
   async _loadIceServers() {
+    const now = Date.now();
+    if (this._iceExpiresAt - now > 5 * 60 * 1000) return;
+    if (this._iceExpiresAt <= now) this.iceConfig.iceServers = [];
     try {
       const res = await fetch('/api/turn');
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data.iceServers)) this.iceConfig.iceServers = data.iceServers;
-      }
+      if (!res.ok) return;
+      const raw = await res.text();
+      if (raw.length > 32 * 1024) throw new Error('ICE response too large');
+      const clean = sanitizeIceConfig(JSON.parse(raw));
+      this.iceConfig.iceServers = clean.iceServers;
+      this._iceExpiresAt = Date.now() + clean.ttl * 1000;
     } catch { /* keep host candidates only */ }
   }
 
@@ -1619,6 +1663,9 @@ class DeadDrop {
   }
 
   _cleanup() {
+    // Invalidate already-queued asynchronous signaling work before destroying
+    // its sessions, socket, and ICE credentials.
+    this._signalGeneration++;
     this._closeQrVerify();
     this._stopCoverTraffic();
     this._endCallCleanup();
@@ -1642,6 +1689,9 @@ class DeadDrop {
     }
     this.peerId = null;
     this.roomCode = null;
+    this._signalQ = Promise.resolve();
+    this.iceConfig = { iceServers: [] };
+    this._iceExpiresAt = 0;
     this.el.messages.replaceChildren();
     this.encrypted = false;
     for (const control of [this.el.msgInput, this.el.sendBtn, this.el.attachBtn, this.el.recordBtn]) {
@@ -1725,9 +1775,23 @@ class DeadDrop {
   _validSignal(msg) {
     return this._validPeerID(msg.from)
       && msg.from !== this.peerId
+      && msg.to === this.peerId
       && typeof msg.payload === 'string'
       && msg.payload.length > 0
       && msg.payload.length <= 64 * 1024;
+  }
+
+  _allowInboundSignal(size) {
+    const now = Date.now();
+    if (now - this._signalWindowAt >= SIGNAL_WINDOW_MS) {
+      this._signalWindowAt = now;
+      this._signalMessages = 0;
+      this._signalBytes = 0;
+    }
+    this._signalMessages++;
+    this._signalBytes += size;
+    return this._signalMessages <= MAX_SIGNAL_MESSAGES_PER_WINDOW
+      && this._signalBytes <= MAX_SIGNAL_BYTES_PER_WINDOW;
   }
 
   _messageKey(peerId, wireId) {

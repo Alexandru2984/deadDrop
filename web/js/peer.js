@@ -66,6 +66,7 @@ export class PeerConnection {
   /* ── Initiator (caller) ── */
 
   async createOffer(remotePeerId) {
+    if (this.pc || this._closed) throw new Error('Peer connection already initialized');
     this.remotePeerId = remotePeerId;
     this.isInitiator = true;
     this.pc = this._newRTCPeerConnection();
@@ -87,6 +88,7 @@ export class PeerConnection {
   /* ── Callee ── */
 
   async handleOffer(from, offer) {
+    if (this.pc || this._closed) throw new Error('Duplicate or late WebRTC offer');
     this.remotePeerId = from;
     this.isInitiator = false;
     this.pc = this._newRTCPeerConnection();

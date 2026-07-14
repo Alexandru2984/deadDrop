@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -129,8 +130,8 @@ func main() {
 	portPinned := false
 	if p := os.Getenv("PORT"); p != "" {
 		v, err := strconv.Atoi(p)
-		if err != nil {
-			log.Fatalf("invalid PORT %q: %v", p, err)
+		if err != nil || v < 1 || v > 65535 {
+			log.Fatalf("invalid PORT %q", p)
 		}
 		port = v
 		portPinned = true
@@ -143,6 +144,9 @@ func main() {
 	host := "127.0.0.1"
 	if h := strings.TrimSpace(os.Getenv("HOST")); h != "" {
 		host = h
+	}
+	if !isLoopbackHost(host) && os.Getenv("ALLOW_PUBLIC_BIND") != "1" {
+		log.Fatalf("refusing non-loopback HOST=%q without ALLOW_PUBLIC_BIND=1", host)
 	}
 
 	// Find an available port without killing existing processes (dev only)
@@ -157,7 +161,11 @@ func main() {
 	}
 
 	// Restrict WebSocket origins to prevent CSRF.
-	signaling.AllowedOrigins = allowedOrigins(port)
+	origins, err := allowedOrigins(port)
+	if err != nil {
+		log.Fatalf("invalid WebSocket origin configuration: %v", err)
+	}
+	signaling.AllowedOrigins = origins
 
 	hub := signaling.NewHub()
 	go hub.Run()
@@ -177,6 +185,10 @@ func main() {
 
 	// Public client config (no auth) — lets the UI know whether to require an invite.
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"openRegistration":%t}`, auth.OpenRegistration())
 	})
@@ -191,8 +203,14 @@ func main() {
 	mux.HandleFunc("/api/account/duress", authRL.Wrap(middleware.RequireSameOrigin(authH.SetDuress)))
 	mux.HandleFunc("/api/account/delete", authRL.Wrap(middleware.RequireSameOrigin(authH.DeleteAccount)))
 
-	// Admin: issue single-use invite codes (X-Admin-Token header).
-	mux.HandleFunc("/api/admin/invite", authRL.Wrap(middleware.RequireSameOrigin(authH.GenerateInvite)))
+	// The network admin endpoint is disabled by default; the local `deaddrop
+	// invite` CLI remains available without exposing an Internet attack surface.
+	if os.Getenv("ENABLE_ADMIN_API") == "1" {
+		if len(strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))) < 32 {
+			log.Fatal("ENABLE_ADMIN_API requires an ADMIN_TOKEN of at least 32 characters")
+		}
+		mux.HandleFunc("/api/admin/invite", authRL.Wrap(middleware.RequireSameOrigin(authH.GenerateInvite)))
+	}
 
 	// Room code generation (server-side for stronger entropy, rate limited)
 	mux.HandleFunc("/api/room", authRL.Wrap(middleware.RequireSameOrigin(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +230,9 @@ func main() {
 
 	// Ephemeral TURN/STUN credentials (auth required; never exposes the secret).
 	turnCfg := turn.FromEnv()
+	if err := turnCfg.Validate(); err != nil {
+		log.Fatalf("invalid TURN configuration: %v", err)
+	}
 	if turnCfg.Enabled() {
 		log.Printf("[turn] ephemeral TURN credentials enabled (%d url(s))", len(turnCfg.TurnURLs))
 	} else {
@@ -221,14 +242,18 @@ func main() {
 
 	// WebSocket signaling — requires valid session + rate limited
 	mux.HandleFunc("/ws", wsRL.Wrap(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
-		signaling.HandleWebSocket(hub, w, r)
+		principal, _ := authH.SessionPrincipal(r)
+		signaling.HandleWebSocket(hub, w, r, signaling.ConnectionAccess{
+			Principal: principal,
+			Valid:     func() bool { return authH.SessionValid(r) },
+		})
 	})))
 
 	// Static files (always served — auth enforced by JS + WebSocket guard)
 	fs := http.FileServer(http.Dir("web"))
 	mux.Handle("/", fs)
 
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := listenAddress(host, port)
 	fmt.Println("┌─────────────────────────────────────────┐")
 	fmt.Println("│           💀 DEAD DROP v0.2.0           │")
 	fmt.Println("├─────────────────────────────────────────┤")
@@ -247,6 +272,7 @@ func main() {
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
 	}
 
 	// Graceful shutdown: drain in-flight requests on SIGINT/SIGTERM instead of
@@ -268,35 +294,130 @@ func main() {
 	}
 }
 
-func allowedOrigins(port int) []string {
-	origins := []string{
-		"https://dead.micutu.com",
-		fmt.Sprintf("http://localhost:%d", port),
-		fmt.Sprintf("http://127.0.0.1:%d", port),
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(strings.TrimSpace(host), "localhost") {
+		return true
 	}
-	if raw := os.Getenv("ALLOWED_ORIGINS"); raw != "" {
-		origins = origins[:0]
-		for _, part := range strings.Split(raw, ",") {
-			if origin := strings.TrimSpace(part); origin != "" {
-				origins = append(origins, origin)
+	ip := net.ParseIP(unbracketHost(host))
+	return ip != nil && ip.IsLoopback()
+}
+
+func unbracketHost(host string) string {
+	host = strings.TrimSpace(host)
+	if len(host) >= 2 && host[0] == '[' && host[len(host)-1] == ']' {
+		return host[1 : len(host)-1]
+	}
+	return host
+}
+
+func listenAddress(host string, port int) string {
+	return net.JoinHostPort(unbracketHost(host), strconv.Itoa(port))
+}
+
+func allowedOrigins(port int) ([]string, error) {
+	candidates := []string{"https://dead.micutu.com"}
+	if os.Getenv("ALLOW_LOCAL_ORIGINS") == "1" {
+		candidates = append(candidates,
+			fmt.Sprintf("http://localhost:%d", port),
+			fmt.Sprintf("http://127.0.0.1:%d", port),
+		)
+	}
+	if raw := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS")); raw != "" {
+		candidates = strings.Split(raw, ",")
+	}
+	if len(candidates) == 0 || len(candidates) > 16 {
+		return nil, fmt.Errorf("expected between 1 and 16 origins")
+	}
+	origins := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		origin, err := normalizeOrigin(strings.TrimSpace(candidate))
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := seen[origin]; duplicate {
+			continue
+		}
+		seen[origin] = struct{}{}
+		origins = append(origins, origin)
+	}
+	if len(origins) == 0 {
+		return nil, fmt.Errorf("origin list is empty")
+	}
+	return origins, nil
+}
+
+func normalizeOrigin(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#") || strings.HasSuffix(u.Host, ":") {
+		return "", fmt.Errorf("%q is not an origin", raw)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	hostname := strings.ToLower(u.Hostname())
+	ip := net.ParseIP(hostname)
+	if hostname == "" || strings.Contains(hostname, "%") || (ip == nil && !validOriginDNSHostname(hostname)) {
+		return "", fmt.Errorf("%q has an invalid host", raw)
+	}
+	secureHTTPHost := hostname == "localhost" || strings.HasSuffix(hostname, ".onion")
+	if ip != nil && ip.IsLoopback() {
+		secureHTTPHost = true
+	}
+	if scheme != "https" && !(scheme == "http" && secureHTTPHost) {
+		return "", fmt.Errorf("%q must use HTTPS (HTTP is limited to loopback/.onion)", raw)
+	}
+	// url.Parse has already validated a numeric port when Port is accessed.
+	if port := u.Port(); port != "" {
+		if value, err := strconv.Atoi(port); err != nil || value < 1 || value > 65535 {
+			return "", fmt.Errorf("%q has an invalid port", raw)
+		}
+	}
+	return scheme + "://" + strings.ToLower(u.Host), nil
+}
+
+func validOriginDNSHostname(host string) bool {
+	if len(host) == 0 || len(host) > 253 {
+		return false
+	}
+	numeric := true
+	for _, c := range host {
+		if c < '0' || c > '9' {
+			if c != '.' {
+				numeric = false
 			}
 		}
 	}
-	return origins
+	if numeric { // avoid ambiguous non-canonical IPv4-looking names
+		return false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if len(label) == 0 || len(label) > 63 || !isOriginAlphaNum(label[0]) || !isOriginAlphaNum(label[len(label)-1]) {
+			return false
+		}
+		for i := 1; i < len(label)-1; i++ {
+			if !isOriginAlphaNum(label[i]) && label[i] != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isOriginAlphaNum(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }
 
 // findAvailablePort tries the preferred port, then increments up to 100 times.
 // Falls back to OS-assigned port if none found. Never kills existing processes.
 func findAvailablePort(host string, preferred int) int {
 	for port := preferred; port < preferred+100; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
+		ln, err := net.Listen("tcp", listenAddress(host, port))
 		if err == nil {
 			ln.Close()
 			return port
 		}
 	}
 	// Let the OS assign a port
-	ln, err := net.Listen("tcp", host+":0")
+	ln, err := net.Listen("tcp", listenAddress(host, 0))
 	if err != nil {
 		log.Fatal("cannot find any available port")
 	}

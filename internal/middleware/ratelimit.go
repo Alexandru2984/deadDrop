@@ -1,21 +1,25 @@
 package middleware
 
 import (
+	"math"
 	"net"
 	"net/http"
-	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+const maxRateLimitVisitors = 50_000
+
 // RateLimiter provides per-IP token-bucket rate limiting.
 type RateLimiter struct {
-	mu       sync.Mutex
-	visitors map[string]*bucket
-	rate     int           // tokens added per interval
-	burst    int           // max tokens
-	interval time.Duration // refill interval
+	mu                sync.Mutex
+	visitors          map[string]*bucket
+	rate              int           // tokens added per interval
+	burst             int           // max tokens
+	interval          time.Duration // refill interval
+	lastCapacitySweep time.Time
 }
 
 type bucket struct {
@@ -26,6 +30,9 @@ type bucket struct {
 // NewRateLimiter creates a limiter that allows `rate` requests per `interval`,
 // with a burst capacity of `burst`.
 func NewRateLimiter(rate, burst int, interval time.Duration) *RateLimiter {
+	if rate <= 0 || burst <= 0 || interval <= 0 {
+		panic("rate limiter values must be positive")
+	}
 	rl := &RateLimiter{
 		visitors: make(map[string]*bucket),
 		rate:     rate,
@@ -45,6 +52,15 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	now := time.Now()
 
 	if !exists {
+		if len(rl.visitors) >= maxRateLimitVisitors {
+			if now.Sub(rl.lastCapacitySweep) >= time.Minute {
+				rl.cleanupLocked(now)
+				rl.lastCapacitySweep = now
+			}
+			if len(rl.visitors) >= maxRateLimitVisitors {
+				return false
+			}
+		}
 		rl.visitors[ip] = &bucket{tokens: rl.burst - 1, lastSeen: now}
 		return true
 	}
@@ -73,7 +89,11 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 		ip := ExtractIP(r)
 		if !rl.Allow(ip) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "10")
+			retryAfter := int(math.Ceil(rl.interval.Seconds()))
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
 			w.Write([]byte(`{"error":"too many requests"}`))
 			return
@@ -92,24 +112,27 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 // by the nearest proxy), never the attacker-controlled left-most hop.
 func ExtractIP(r *http.Request) string {
 	if isTrustedProxyRequest(r) {
-		if ip := r.Header.Get("X-Real-IP"); validIP(ip) {
-			return strings.TrimSpace(ip)
+		if ip, ok := canonicalIP(r.Header.Get("X-Real-IP")); ok {
+			return ip
 		}
-		if ip := lastForwardedFor(r.Header.Get("X-Forwarded-For")); validIP(ip) {
+		if ip, ok := canonicalIP(lastForwardedFor(r.Header.Get("X-Forwarded-For"))); ok {
 			return ip
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
+		if ip, ok := canonicalIP(r.RemoteAddr); ok {
+			return ip
+		}
 		return r.RemoteAddr
+	}
+	if ip, ok := canonicalIP(host); ok {
+		return ip
 	}
 	return host
 }
 
 func isTrustedProxyRequest(r *http.Request) bool {
-	if os.Getenv("TRUST_PROXY_HEADERS") == "1" {
-		return true
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
@@ -119,8 +142,8 @@ func isTrustedProxyRequest(r *http.Request) bool {
 		return false
 	}
 	// The supported production layout has nginx on the same host. Deployments
-	// with a separate/container proxy must opt in explicitly after ensuring that
-	// proxy overwrites, rather than appends, the normalized client header.
+	// with a separate/container proxy should bind that proxy through loopback or
+	// add an explicit CIDR-aware trust policy instead of trusting every peer.
 	return ip.IsLoopback()
 }
 
@@ -134,20 +157,28 @@ func lastForwardedFor(value string) string {
 	return ""
 }
 
-func validIP(ip string) bool {
-	return net.ParseIP(strings.TrimSpace(ip)) != nil
+func canonicalIP(raw string) (string, bool) {
+	ip := net.ParseIP(strings.TrimSpace(raw))
+	if ip == nil {
+		return "", false
+	}
+	return ip.String(), true
 }
 
 // cleanup removes stale entries every 5 minutes.
 func (rl *RateLimiter) cleanup() {
 	for range time.NewTicker(5 * time.Minute).C {
 		rl.mu.Lock()
-		cutoff := time.Now().Add(-10 * time.Minute)
-		for ip, b := range rl.visitors {
-			if b.lastSeen.Before(cutoff) {
-				delete(rl.visitors, ip)
-			}
-		}
+		rl.cleanupLocked(time.Now())
 		rl.mu.Unlock()
+	}
+}
+
+func (rl *RateLimiter) cleanupLocked(now time.Time) {
+	cutoff := now.Add(-10 * time.Minute)
+	for ip, b := range rl.visitors {
+		if b.lastSeen.Before(cutoff) {
+			delete(rl.visitors, ip)
+		}
 	}
 }

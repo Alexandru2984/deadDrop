@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,40 @@ func TestRateLimiterWrap429(t *testing.T) {
 	if w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request expected 429, got %d", w.Code)
 	}
+	if got := w.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want 60", got)
+	}
+}
+
+func TestRateLimiterVisitorMapIsBounded(t *testing.T) {
+	rl := NewRateLimiter(1, 1, time.Minute)
+	now := time.Now()
+	rl.mu.Lock()
+	for i := 0; i < maxRateLimitVisitors; i++ {
+		rl.visitors[strconv.Itoa(i)] = &bucket{tokens: 1, lastSeen: now}
+	}
+	rl.lastCapacitySweep = now
+	rl.mu.Unlock()
+	if rl.Allow("new-visitor") {
+		t.Fatal("limiter accepted a new visitor beyond its memory cap")
+	}
+
+	rl.mu.Lock()
+	rl.visitors["0"].lastSeen = now.Add(-11 * time.Minute)
+	rl.lastCapacitySweep = time.Time{}
+	rl.mu.Unlock()
+	if !rl.Allow("new-visitor") {
+		t.Fatal("limiter did not reclaim stale capacity")
+	}
+}
+
+func TestRateLimiterRejectsInvalidConfiguration(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("invalid limiter configuration did not panic")
+		}
+	}()
+	_ = NewRateLimiter(0, 1, time.Minute)
 }
 
 func TestSecurityHeaders(t *testing.T) {
@@ -133,6 +168,7 @@ func TestExtractIP(t *testing.T) {
 		{"RemoteAddr", "", "", "", "192.168.1.1:5678", "192.168.1.1"},
 		{"Untrusted public proxy header ignored", "", "10.0.0.2", "", "8.8.8.8:5678", "8.8.8.8"},
 		{"Private peer is not implicitly trusted", "10.0.0.2", "", "", "192.168.1.7:5678", "192.168.1.7"},
+		{"IPv4-mapped address is canonicalized", "::ffff:192.0.2.9", "", "", "127.0.0.1:1234", "192.0.2.9"},
 	}
 
 	for _, tt := range tests {

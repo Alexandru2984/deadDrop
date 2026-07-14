@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"deaddrop/internal/middleware"
+	"deaddrop/internal/strictjson"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -264,9 +265,27 @@ func (sm *sessions) delete(token string) {
 }
 
 func (sm *sessions) deleteUser(username string) {
+	sm.deleteUserExcept(username, "")
+}
+
+func (sm *sessions) deleteUserExcept(username, keepToken string) {
 	sm.mu.Lock()
 	for token, s := range sm.m {
-		if s.username == username {
+		if token != keepToken && s.username == username {
+			delete(sm.m, token)
+		}
+	}
+	sm.mu.Unlock()
+}
+
+func (sm *sessions) deleteUserKind(username string, duress bool) {
+	sm.deleteUserKindExcept(username, duress, "")
+}
+
+func (sm *sessions) deleteUserKindExcept(username string, duress bool, keepToken string) {
+	sm.mu.Lock()
+	for token, s := range sm.m {
+		if token != keepToken && s.username == username && s.duress == duress {
 			delete(sm.m, token)
 		}
 	}
@@ -340,7 +359,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -369,7 +388,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -421,6 +440,10 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	c, err := sessionCookie(r)
 	if err != nil {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
@@ -444,17 +467,30 @@ func sessionFeatures(_ bool) []string {
 // RequireAuth rejects unauthenticated requests before they reach the next handler.
 func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := sessionCookie(r)
-		if err != nil {
-			jsonErr(w, "not authenticated", http.StatusUnauthorized)
-			return
-		}
-		if _, ok := h.sess.get(c.Value); !ok {
+		if !h.SessionValid(r) {
 			jsonErr(w, "session expired", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
+}
+
+// SessionValid re-checks the cookie-backed in-memory session. Long-lived
+// transports use it periodically so logout, deletion, and expiry revoke an
+// already-open WebSocket instead of only blocking future upgrades.
+func (h *Handler) SessionValid(r *http.Request) bool {
+	_, ok := h.SessionPrincipal(r)
+	return ok
+}
+
+// SessionPrincipal returns the account identity only for in-process resource
+// accounting. It is never serialized or logged by the signaling layer.
+func (h *Handler) SessionPrincipal(r *http.Request) (string, bool) {
+	c, err := sessionCookie(r)
+	if err != nil {
+		return "", false
+	}
+	return h.sess.get(c.Value)
 }
 
 // setCookie detects HTTPS (via X-Forwarded-Proto from nginx) to set the Secure flag.
