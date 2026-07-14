@@ -10,8 +10,9 @@
  * Exits non-zero on any failure.
  */
 
-import { CryptoLayer } from '../web/js/crypto.js';
+import { CryptoLayer, PROTOCOL_VERSION } from '../web/js/crypto.js';
 import { Handshake } from '../web/js/handshake.js';
+import { PeerConnection } from '../web/js/peer.js';
 
 let failures = 0;
 function ok(cond, msg) {
@@ -72,6 +73,35 @@ async function messaging(a, b) {
   let tampered = false;
   try { await a.decrypt(bad, m2.iv, m2.epoch); } catch { tampered = true; }
   ok(tampered, 'tampered ciphertext is rejected');
+
+  // Direction-specific keys prevent reflecting A's ciphertext back to A.
+  const reflected = await a.encrypt('must not reflect');
+  let reflectionRejected = false;
+  try { await a.decrypt(reflected.ciphertext, reflected.iv, reflected.epoch); } catch {
+    reflectionRejected = true;
+  }
+  ok(reflectionRejected, 'directional keys reject reflected ciphertext');
+  ok(await b.decrypt(reflected.ciphertext, reflected.iv, reflected.epoch) === 'must not reflect',
+     'reflection attempt does not poison the legitimate receive path');
+
+  // Context-separated keys/AAD prevent moving a text ciphertext into the
+  // sealed-control-message parser.
+  const wrongContext = await a.encrypt('wrong context');
+  let contextRejected = false;
+  try { await b.open(wrongContext.ciphertext, wrongContext.iv, wrongContext.epoch); } catch {
+    contextRejected = true;
+  }
+  ok(contextRejected, 'cross-context ciphertext is rejected');
+  ok(await b.decrypt(wrongContext.ciphertext, wrongContext.iv, wrongContext.epoch) === 'wrong context',
+     'failed cross-context attempt does not consume the authenticated IV');
+
+  // An unauthenticated packet with a copied IV must not reserve that IV in the
+  // replay cache and suppress the subsequent genuine packet.
+  const poison = await a.encrypt('genuine after forgery');
+  const forged = poison.ciphertext.slice(0, -4) + 'AAAA';
+  try { await b.decrypt(forged, poison.iv, poison.epoch); } catch { /* expected */ }
+  ok(await b.decrypt(poison.ciphertext, poison.iv, poison.epoch) === 'genuine after forgery',
+     'unauthenticated ciphertext cannot poison replay tracking');
 }
 
 async function sealing(a, b) {
@@ -129,6 +159,8 @@ async function rekeying(a, b) {
   console.log('rekey ratchet (forward secrecy)');
   // A is the rekey initiator.
   const offer = await a.beginRekey();
+  ok(a._pendingRekey?.keyPair?.privateKey?.extractable === false,
+     'ratchet ECDH private key is non-extractable');
   const answer = await b.acceptRekey(offer.publicKey, offer.epoch);
   await a.completeRekey(answer.publicKey, answer.epoch);
   ok(a.sendEpoch === 1 && b.sendEpoch === 1, 'both advanced to epoch 1');
@@ -136,6 +168,13 @@ async function rekeying(a, b) {
   const m = await a.encrypt('after rekey');
   ok(m.epoch === 1, 'new messages use epoch 1');
   ok(await b.decrypt(m.ciphertext, m.iv, m.epoch) === 'after rekey', 'peer decrypts epoch-1 message');
+  const reverse = await b.encrypt('reverse after rekey');
+  ok(await a.decrypt(reverse.ciphertext, reverse.iv, reverse.epoch) === 'reverse after rekey',
+     'directional epoch-1 keys work in reverse');
+
+  let skipped = false;
+  try { await b.acceptRekey(offer.publicKey, 3); } catch { skipped = true; }
+  ok(skipped, 'rekey accepts exactly the next epoch');
 
   // An in-flight epoch-0 message must still decrypt (retention window).
   const old = await a.encrypt('straggler'); // a is at epoch 1 now → this is epoch 1
@@ -169,6 +208,7 @@ async function commitmentRejection() {
   await hsB.handle(outA.shift());          // legit commit from A → B reveals
   const forgedReveal = {
     type: 'kex-reveal',
+    v: PROTOCOL_VERSION,
     publicKey: bufToB64Fake(65),
     kemPublicKey: bufToB64Fake(1184),
     nonce: bufToB64Fake(16),
@@ -192,11 +232,83 @@ async function kemCtTampering() {
     if (m.type !== 'kex-encaps') return m;
     const ct = new Uint8Array(Buffer.from(m.ct, 'base64'));
     ct[7] ^= 0x01;
-    return { type: 'kex-encaps', ct: Buffer.from(ct).toString('base64') };
+    return { ...m, ct: Buffer.from(ct).toString('base64') };
   });
   ok(!sasA && !sasB, 'no SAS is shown on a tampered KEM ciphertext');
   ok([errA, errB].includes('key confirmation failed — possible MitM'),
      'tampered KEM ciphertext is rejected at key confirmation');
+}
+
+async function malformedNonceRejection() {
+  console.log('strict handshake field lengths');
+  const victim = new CryptoLayer();
+  const outgoing = [];
+  let error = null;
+  const hs = new Handshake(victim, (m) => outgoing.push(m), {
+    onEstablished: () => {},
+    onError: (reason) => { error = reason; },
+  });
+  await hs.start();
+
+  const ecdh = new Uint8Array(65); ecdh[0] = 4;
+  const kem = new Uint8Array(1184);
+  const nonce = new Uint8Array(15);
+  const commitInput = concatForTest(
+    new TextEncoder().encode('deaddrop/v4/commit\0'), ecdh, kem, nonce,
+  );
+  const commit = new Uint8Array(await crypto.subtle.digest('SHA-256', commitInput));
+  await hs.handle({ type: 'kex-commit', v: PROTOCOL_VERSION, commit: toB64(commit) });
+  await hs.handle({
+    type: 'kex-reveal',
+    v: PROTOCOL_VERSION,
+    publicKey: toB64(ecdh),
+    kemPublicKey: toB64(kem),
+    nonce: toB64(nonce),
+  });
+  ok(error === 'invalid nonce length', 'non-canonical commitment nonce is rejected');
+}
+
+async function authenticatedRekeyTransport(a, b) {
+  console.log('authenticated rekey transport');
+  const wireA = [], wireB = [];
+  const noop = () => {};
+  const pa = new PeerConnection({ send: noop }, a, noop, noop);
+  const pb = new PeerConnection({ send: noop }, b, noop, noop);
+  pa.dc = { readyState: 'open', send: (raw) => wireA.push(JSON.parse(raw)) };
+  pb.dc = { readyState: 'open', send: (raw) => wireB.push(JSON.parse(raw)) };
+
+  await pa._doRekey();
+  const outerOffer = wireA.shift();
+  ok(outerOffer?.type === 'enc' && outerOffer.v === PROTOCOL_VERSION
+     && !('publicKey' in outerOffer),
+     'rekey offer exposes only a protocol-v4 sealed envelope');
+  const offer = await b.open(outerOffer.c, outerOffer.iv, outerOffer.e);
+  ok(offer?.type === 'rekey-offer', 'peer authenticates rekey offer under old epoch');
+
+  await pb._onRekeyOffer(offer);
+  const outerAnswer = wireB.shift();
+  ok(outerAnswer?.type === 'enc' && outerAnswer.e === offer.epoch - 1,
+     'rekey answer is sealed under the old epoch');
+  const answer = await a.open(outerAnswer.c, outerAnswer.iv, outerAnswer.e);
+  await pa._onRekeyAnswer(answer);
+  ok(a.sendEpoch === b.sendEpoch, 'authenticated rekey advances both peers together');
+
+  const post = await b.encrypt('authenticated ratchet complete');
+  ok(await a.decrypt(post.ciphertext, post.iv, post.epoch) === 'authenticated ratchet complete',
+     'traffic works after authenticated rekey');
+  pa._clearRekey();
+  pb._clearRekey();
+}
+
+function concatForTest(...parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const part of parts) { out.set(part, offset); offset += part.length; }
+  return out;
+}
+
+function toB64(bytes) {
+  return Buffer.from(bytes).toString('base64');
 }
 
 function bufToB64Fake(len = 65) {
@@ -215,8 +327,10 @@ function bufToB64Fake(len = 65) {
     await sealing(a, b);
     await binary(a, b);
     await rekeying(a, b);
+    await authenticatedRekeyTransport(a, b);
     await commitmentRejection();
     await kemCtTampering();
+    await malformedNonceRejection();
   } catch (e) {
     console.error('FATAL', e);
     failures++;

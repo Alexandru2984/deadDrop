@@ -1,36 +1,33 @@
 /**
- * Dead Drop — Encryption Layer (v3)
+ * Dead Drop — Encryption Layer (protocol v4)
  *
  * Hybrid post-quantum key agreement: ephemeral ECDH (P-256) + ML-KEM-768
  * (FIPS 203) → HKDF-SHA256 → AES-256-GCM.
  *
- * Improvements over v2:
- *  - The session secret mixes a classical ECDH share with an ML-KEM-768 share, so
- *    recorded traffic stays confidential even against a future quantum computer
- *    ("harvest now, decrypt later"). Breaking the session requires breaking BOTH.
- *  - A 32-byte post-quantum root secret from the initial handshake is mixed into
- *    every DH ratchet, so rekeyed epochs inherit the PQ resistance too.
+ * Protocol v4 derives independent traffic keys for each direction and content
+ * type, authenticates the protocol context and epoch as AEAD additional data,
+ * and tracks authenticated 96-bit IVs for the complete retained key lifetime.
+ * Rekeys mix a fresh ephemeral ECDH share with the evolving post-quantum root.
  *
- * Carried over from v2: transcript-bound HKDF salts, 6-symbol SAS (2^36),
- * symmetric rekey epochs with a short retention window.
- *
- * ECDH/HKDF/AES use the Web Crypto API; ML-KEM-768 is the vendored, audited
- * noble implementation (same-origin ESM, no third parties). Keys are never
- * persisted; everything is regenerated per connection and wiped on destroy().
+ * ECDH/HKDF/AES use the Web Crypto API; ML-KEM-768 is vendored same-origin.
+ * Keys are never persisted. Private ECDH keys are non-extractable and references
+ * to obsolete material are dropped as soon as the protocol no longer needs them.
  */
 
 import { bufToB64, b64ToBuf } from './util.js';
 import { ml_kem768 } from './vendor/noble/ml-kem.js';
 
-const RETAINED_EPOCHS = 3; // keep current + 2 previous keys for in-flight messages
-const SAS_LENGTH = 6;      // 6 symbols from a 64-emoji alphabet = 2^36 combinations
+export const PROTOCOL_VERSION = 4;
 
-// Padding buckets for sealed envelopes: every ciphertext length lands on one of
-// these sizes (bytes of plaintext), so an observer of the encrypted channel—
-// DTLS-MitM relay included—learns only the bucket, not the exact message length,
-// and typing notices are indistinguishable from short chat messages.
+const RETAINED_EPOCHS = 3; // current + 2 previous epochs for ordered in-flight data
+const MAX_IVS_PER_EPOCH = 100000; // fail closed instead of forgetting replay history
+const SAS_LENGTH = 6;      // 6 symbols from a 64-emoji alphabet = 2^36 combinations
+const TRAFFIC_CONTEXTS = ['text', 'sealed', 'binary'];
+
+// Padding buckets for sealed envelopes. This hides exact plaintext length within
+// a bucket; it does not hide traffic timing, packet counts, or large transfers.
 const PAD_BUCKETS = [256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536];
-const PAD_STEP_ABOVE_MAX = 16384; // beyond the largest bucket, round up to this
+const PAD_STEP_ABOVE_MAX = 16384;
 
 const SAS_EMOJI = [
   '🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼',
@@ -48,82 +45,107 @@ const dec = new TextDecoder();
 
 export class CryptoLayer {
   constructor() {
-    this.keyPair = null;             // current ephemeral ECDH pair (handshake / rekey)
-    this._myPubRaw = null;           // raw bytes of our current ECDH public key
-    this._kemKeys = null;            // ephemeral ML-KEM-768 keypair (handshake only)
-    this._kemPubRaw = null;          // raw bytes of our KEM public key
-    this._rootSecret = null;         // 32B PQ root mixed into every rekey epoch
-    this.epochs = new Map();         // epoch number → AES-GCM CryptoKey
-    this.sendEpoch = -1;             // epoch we encrypt under
-    this._pendingRekey = null;       // { epoch, keyPair, myPubRaw } while a rekey is in flight
-    this._sasSecret = null;          // bytes for the SAS (initial handshake only)
-    this._confirmSecret = null;      // bytes for the key-confirmation tags
-    this.seenNonces = new Set();     // replay protection (text)
-    this.seenBinaryNonces = new Set();
-    this._maxNonces = 10000;
+    this.keyPair = null;
+    this._myPubRaw = null;
+    this._kemKeys = null;
+    this._kemPubRaw = null;
+    this._rootSecret = null;
+    this.sendEpochs = new Map(); // epoch → { text, sealed, binary } CryptoKeys
+    this.recvEpochs = new Map();
+    this.sendEpoch = -1;
+    this._pendingRekey = null;
+    this._sasSecret = null;
+    this._confirmSecret = null;
+    this._seenIVs = Object.fromEntries(TRAFFIC_CONTEXTS.map((c) => [c, new Map()]));
   }
 
-  /** Generate an ephemeral ECDH key pair; returns the raw public key bytes. */
+  /** Generate an ephemeral, non-extractable ECDH private key. */
   async generateKeyPair() {
-    this.keyPair = await crypto.subtle.generateKey(
-      { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'],
-    );
+    this.keyPair = await generateEcdhKeyPair();
     this._myPubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', this.keyPair.publicKey));
     return this._myPubRaw;
   }
 
-  /** Generate the ephemeral ML-KEM-768 keypair; returns the encapsulation key bytes. */
   generateKemKeys() {
     this._kemKeys = ml_kem768.keygen();
     this._kemPubRaw = this._kemKeys.publicKey;
     return this._kemPubRaw;
   }
 
-  /** Encapsulate to the peer's KEM public key → { cipherText, sharedSecret }. */
   kemEncapsulate(peerKemPubRaw) {
+    if (!(peerKemPubRaw instanceof Uint8Array) || peerKemPubRaw.length !== 1184) {
+      throw new Error('Invalid ML-KEM public key');
+    }
     return ml_kem768.encapsulate(peerKemPubRaw);
   }
 
-  /** Decapsulate a ciphertext with our KEM secret key → sharedSecret bytes. */
   kemDecapsulate(cipherText) {
     if (!this._kemKeys) throw new Error('No KEM keypair');
+    if (!(cipherText instanceof Uint8Array) || cipherText.length !== 1088) {
+      throw new Error('Invalid ML-KEM ciphertext');
+    }
     return ml_kem768.decapsulate(cipherText, this._kemKeys.secretKey);
   }
 
   /**
-   * Establish the initial session key (epoch 0) from the hybrid transcript:
-   * the peer's ECDH public key, the ML-KEM shared secret, and the KEM transcript
-   * bytes (decapsulator's public key ‖ ciphertext). The HKDF salt binds to the
-   * sorted ECDH keys AND the KEM transcript, so the derived key, the SAS and the
-   * confirmation tags are all bound to the exact handshake that took place.
+   * Establish epoch 0. `role` is `e` (KEM encapsulator) or `d`
+   * (decapsulator); `transcript` is the canonical, role-ordered full handshake.
    */
-  async deriveSession(peerPubRaw, kemShared, kemTranscript) {
-    const ecdhSecret = new Uint8Array(await this._ecdh(this.keyPair.privateKey, peerPubRaw));
-    const ikm = new Uint8Array(ecdhSecret.length + kemShared.length);
-    ikm.set(ecdhSecret, 0);
-    ikm.set(kemShared, ecdhSecret.length);
-    const salt = await this._transcriptSalt(this._myPubRaw, peerPubRaw, kemTranscript);
+  async deriveSession(peerPubRaw, kemShared, transcript, role) {
+    if (!['e', 'd'].includes(role)) throw new Error('Invalid handshake role');
+    if (!(kemShared instanceof Uint8Array) || kemShared.length !== 32) {
+      throw new Error('Invalid ML-KEM shared secret');
+    }
+    if (!(transcript instanceof Uint8Array) || transcript.length === 0) {
+      throw new Error('Invalid handshake transcript');
+    }
 
-    const key = await this._hkdfAesKey(ikm, salt, 'deaddrop/v3/aead/epoch/0');
-    this.epochs.set(0, key);
-    this.sendEpoch = 0;
+    let ecdhSecret;
+    let ikm;
+    try {
+      ecdhSecret = new Uint8Array(await this._ecdh(this.keyPair?.privateKey, peerPubRaw));
+      ikm = concatBytes(ecdhSecret, kemShared);
+      const salt = await crypto.subtle.digest('SHA-256', transcript);
 
-    this._sasSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v3/sas', 16);
-    this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v3/confirm', 32);
-    // The PQ root: mixed into every future rekey so post-quantum resistance
-    // survives the ratchet, while fresh ECDH still provides forward secrecy.
-    this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v3/root', 32);
-    ecdhSecret.fill(0);
-    ikm.fill(0);
+      const eToD = await this._deriveTrafficKeys(ikm, salt, 'encapsulator-to-decapsulator', 0);
+      const dToE = await this._deriveTrafficKeys(ikm, salt, 'decapsulator-to-encapsulator', 0);
+      this.sendEpochs.set(0, role === 'e' ? eToD : dToE);
+      this.recvEpochs.set(0, role === 'e' ? dToE : eToD);
+      this.sendEpoch = 0;
+
+      this._sasSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v4/sas', 16);
+      this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v4/confirm', 32);
+      this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v4/root/epoch/0', 32);
+    } finally {
+      if (ecdhSecret) ecdhSecret.fill(0);
+      if (ikm) ikm.fill(0);
+      kemShared.fill(0);
+      this.keyPair = null;
+      this._discardKemKeys();
+    }
   }
 
-  /** Key-confirmation tag for one direction ('e' = encapsulator, 'd' = decapsulator). */
   async confirmTag(role) {
     if (!this._confirmSecret) throw new Error('No session established');
-    return this._hkdfBytes(this._confirmSecret, new Uint8Array(32), `deaddrop/v3/confirm/${role}`, 16);
+    if (!['e', 'd'].includes(role)) throw new Error('Invalid confirmation role');
+    return this._hkdfBytes(
+      this._confirmSecret,
+      new Uint8Array(32),
+      `deaddrop/v4/confirm/${role}`,
+      16,
+    );
   }
 
-  /** 6-symbol SAS string both peers compute identically — compare out-of-band to detect MitM. */
+  /** Drop handshake-only material after both key-confirmation tags match. */
+  finishHandshake() {
+    if (this._confirmSecret) this._confirmSecret.fill(0);
+    this._confirmSecret = null;
+    if (this._myPubRaw) this._myPubRaw.fill(0);
+    this._myPubRaw = null;
+    this.keyPair = null;
+    this._discardKemKeys();
+  }
+
   computeSAS() {
     if (!this._sasSecret) throw new Error('No session established');
     let sas = '';
@@ -133,11 +155,6 @@ export class CryptoLayer {
     return sas;
   }
 
-  /**
-   * Full 128-bit verification token for QR comparison. The visual SAS shows
-   * 2^36 of the secret for human comparison; scanning a QR can compare all
-   * 128 bits, making a survived MitM cryptographically negligible.
-   */
   computeSASToken() {
     if (!this._sasSecret) throw new Error('No session established');
     let hex = '';
@@ -146,207 +163,298 @@ export class CryptoLayer {
   }
 
   get established() {
-    return this.sendEpoch >= 0 && this.epochs.has(this.sendEpoch);
+    return this.sendEpoch >= 0
+      && this.sendEpochs.has(this.sendEpoch)
+      && this.recvEpochs.has(this.sendEpoch);
   }
 
-  /* ── Rekey (DH ratchet → forward secrecy) ──
-   * Initiator: beginRekey() → send offer; on answer → completeRekey().
-   * Responder: on offer → acceptRekey() → send answer.
-   * Each rekey derives a brand-new key from fresh ephemeral ECDH keys; once we
-   * advance past the retention window the old key is destroyed and the messages it
-   * protected can never be decrypted again, even if the device is later seized.
-   */
+  /* ── Authenticated DH ratchet ── */
 
   async beginRekey() {
+    if (!this.established) throw new Error('No session established');
+    if (this._pendingRekey) throw new Error('Rekey already in progress');
     const epoch = this.sendEpoch + 1;
-    const kp = await crypto.subtle.generateKey(
-      { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'],
-    );
+    const kp = await generateEcdhKeyPair();
     const myPubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
     this._pendingRekey = { epoch, keyPair: kp, myPubRaw };
     return { epoch, publicKey: bufToB64(myPubRaw) };
   }
 
   async acceptRekey(peerPubB64, epoch) {
-    if (!Number.isInteger(epoch) || epoch <= this.sendEpoch) throw new Error('stale rekey epoch');
-    const peerPubRaw = new Uint8Array(b64ToBuf(peerPubB64));
-    const kp = await crypto.subtle.generateKey(
-      { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits'],
-    );
+    if (this._pendingRekey) throw new Error('Conflicting rekey in progress');
+    this._requireNextEpoch(epoch);
+    const peerPubRaw = decodePublicKey(peerPubB64);
+    const kp = await generateEcdhKeyPair();
     const myPubRaw = new Uint8Array(await crypto.subtle.exportKey('raw', kp.publicKey));
-    await this._installRatchetKey(kp.privateKey, myPubRaw, peerPubRaw, epoch);
-    return { epoch, publicKey: bufToB64(myPubRaw) };
+    try {
+      await this._installRatchetKeys(kp.privateKey, myPubRaw, peerPubRaw, epoch, 'answerer');
+      return { epoch, publicKey: bufToB64(myPubRaw) };
+    } finally {
+      myPubRaw.fill(0);
+      peerPubRaw.fill(0);
+    }
   }
 
   async completeRekey(peerPubB64, epoch) {
-    if (!this._pendingRekey || this._pendingRekey.epoch !== epoch) throw new Error('no matching pending rekey');
-    const peerPubRaw = new Uint8Array(b64ToBuf(peerPubB64));
+    if (!this._pendingRekey || this._pendingRekey.epoch !== epoch) {
+      throw new Error('No matching pending rekey');
+    }
+    const peerPubRaw = decodePublicKey(peerPubB64);
     const { keyPair, myPubRaw } = this._pendingRekey;
-    await this._installRatchetKey(keyPair.privateKey, myPubRaw, peerPubRaw, epoch);
-    this._pendingRekey = null;
+    try {
+      this._requireNextEpoch(epoch);
+      await this._installRatchetKeys(
+        keyPair.privateKey,
+        myPubRaw,
+        peerPubRaw,
+        epoch,
+        'offerer',
+      );
+    } finally {
+      myPubRaw.fill(0);
+      peerPubRaw.fill(0);
+      this._pendingRekey = null;
+    }
   }
 
-  async _installRatchetKey(privateKey, myPubRaw, peerPubRaw, epoch) {
-    const secret = await this._ecdh(privateKey, peerPubRaw);
-    // Mixing the PQ root into the salt makes every ratcheted epoch as
-    // quantum-resistant as the initial hybrid handshake; the fresh ECDH share
-    // still provides forward secrecy against classical compromise.
-    const salt = await this._transcriptSalt(myPubRaw, peerPubRaw, this._rootSecret);
-    const key = await this._hkdfAesKey(secret, salt, `deaddrop/v3/aead/epoch/${epoch}`);
-    this.epochs.set(epoch, key);
-    this.sendEpoch = epoch;
-    // Drop keys that have fallen out of the retention window.
-    for (const e of this.epochs.keys()) {
-      if (e <= epoch - RETAINED_EPOCHS) this.epochs.delete(e);
+  async _installRatchetKeys(privateKey, myPubRaw, peerPubRaw, epoch, role) {
+    if (compareBytes(myPubRaw, peerPubRaw) === 0) throw new Error('Reflected rekey public key');
+    const offerPub = role === 'offerer' ? myPubRaw : peerPubRaw;
+    const answerPub = role === 'answerer' ? myPubRaw : peerPubRaw;
+    let ecdhSecret;
+    let ikm;
+    try {
+      ecdhSecret = new Uint8Array(await this._ecdh(privateKey, peerPubRaw));
+      ikm = concatBytes(this._rootSecret, ecdhSecret);
+      const ratchetTranscript = concatBytes(
+        enc.encode(`deaddrop/v4/ratchet/epoch/${epoch}\0`),
+        offerPub,
+        answerPub,
+      );
+      const salt = await crypto.subtle.digest('SHA-256', ratchetTranscript);
+      const offerToAnswer = await this._deriveTrafficKeys(
+        ikm, salt, 'offerer-to-answerer', epoch,
+      );
+      const answerToOffer = await this._deriveTrafficKeys(
+        ikm, salt, 'answerer-to-offerer', epoch,
+      );
+      const nextRoot = await this._hkdfBytes(
+        ikm, salt, `deaddrop/v4/root/epoch/${epoch}`, 32,
+      );
+
+      this.sendEpochs.set(epoch, role === 'offerer' ? offerToAnswer : answerToOffer);
+      this.recvEpochs.set(epoch, role === 'offerer' ? answerToOffer : offerToAnswer);
+      if (this._rootSecret) this._rootSecret.fill(0);
+      this._rootSecret = nextRoot;
+      this.sendEpoch = epoch;
+      this._pruneEpochs(epoch);
+    } finally {
+      if (ecdhSecret) ecdhSecret.fill(0);
+      if (ikm) ikm.fill(0);
     }
   }
 
   /* ── Text messages ── */
 
   async encrypt(plaintext) {
-    const key = this._sendKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)));
-    const envelope = JSON.stringify({ text: plaintext, nonce, ts: Date.now() });
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(envelope));
-    return { ciphertext: bufToB64(ciphertext), iv: bufToB64(iv), epoch: this.sendEpoch };
+    const epoch = this.sendEpoch;
+    const body = enc.encode(JSON.stringify({ text: plaintext, ts: Date.now() }));
+    const { ciphertext, iv } = await this._encryptBytes(body, 'text', epoch);
+    return { ciphertext: bufToB64(ciphertext), iv: bufToB64(iv), epoch };
   }
 
   async decrypt(ciphertextB64, ivB64, epoch) {
-    const key = this._recvKey(epoch);
-    const plainBuf = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: b64ToBuf(ivB64) }, key, b64ToBuf(ciphertextB64),
-    );
-    const envelope = JSON.parse(dec.decode(plainBuf));
-    if (!Array.isArray(envelope.nonce) || envelope.nonce.length !== 8) throw new Error('Invalid nonce');
-    this._checkReplay(this.seenNonces, envelope.nonce.join(','));
+    const plain = await this._decryptBytes(ciphertextB64, ivB64, epoch, 'text');
+    const envelope = JSON.parse(dec.decode(plain));
     return envelope.text;
   }
 
-  /* ── Sealed envelopes (all app-level channel traffic) ──
-   * seal() wraps an arbitrary JS object in an encrypted, replay-protected,
-   * length-padded envelope. Used by the peer layer for EVERY post-handshake
-   * message (chat, typing, read receipts, deletes, call signaling, file
-   * chunks), so a compromised relay sees only uniform ciphertext blobs. */
+  /* ── Sealed envelopes (all post-handshake channel traffic) ── */
 
-  async seal(obj) {
-    const key = this._sendKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const nonce = Array.from(crypto.getRandomValues(new Uint8Array(8)));
+  async seal(obj, epoch = this.sendEpoch) {
+    this._requireEpoch(epoch);
     const ts = Date.now();
-    // Measure with an empty pad, then re-serialize with ASCII filler so the
-    // plaintext byte length lands exactly on the bucket (non-ASCII content is
-    // measured in encoded bytes, and each 'x' adds exactly one byte).
-    const bareBytes = enc.encode(JSON.stringify({ msg: obj, nonce, ts, pad: '' })).byteLength;
-    const envelope = JSON.stringify({ msg: obj, nonce, ts, pad: 'x'.repeat(padBucket(bareBytes) - bareBytes) });
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(envelope));
-    return { ciphertext: bufToB64(ciphertext), iv: bufToB64(iv), epoch: this.sendEpoch };
+    const bareBytes = enc.encode(JSON.stringify({ msg: obj, ts, pad: '' })).byteLength;
+    const envelope = JSON.stringify({
+      msg: obj,
+      ts,
+      pad: 'x'.repeat(padBucket(bareBytes) - bareBytes),
+    });
+    const { ciphertext, iv } = await this._encryptBytes(
+      enc.encode(envelope), 'sealed', epoch,
+    );
+    return { ciphertext: bufToB64(ciphertext), iv: bufToB64(iv), epoch };
   }
 
   async open(ciphertextB64, ivB64, epoch) {
-    const key = this._recvKey(epoch);
-    const plainBuf = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: b64ToBuf(ivB64) }, key, b64ToBuf(ciphertextB64),
-    );
-    const envelope = JSON.parse(dec.decode(plainBuf));
-    if (!Array.isArray(envelope.nonce) || envelope.nonce.length !== 8) throw new Error('Invalid nonce');
-    this._checkReplay(this.seenNonces, envelope.nonce.join(','));
+    const plain = await this._decryptBytes(ciphertextB64, ivB64, epoch, 'sealed');
+    const envelope = JSON.parse(dec.decode(plain));
     return envelope.msg;
   }
 
   /* ── Binary (files) ── */
 
   async encryptBinary(data) {
-    const key = this._sendKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const nonce = crypto.getRandomValues(new Uint8Array(8));
-    const withNonce = new Uint8Array(nonce.length + data.byteLength);
-    withNonce.set(nonce, 0);
-    withNonce.set(new Uint8Array(data), nonce.length);
-    const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, withNonce);
-    return { ciphertext, iv: bufToB64(iv), epoch: this.sendEpoch };
+    const epoch = this.sendEpoch;
+    const bytes = data instanceof ArrayBuffer
+      ? new Uint8Array(data)
+      : new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    const { ciphertext, iv } = await this._encryptBytes(bytes, 'binary', epoch);
+    return { ciphertext, iv: bufToB64(iv), epoch };
   }
 
   async decryptBinary(ciphertextBuf, ivB64, epoch) {
-    const key = this._recvKey(epoch);
-    const withNonce = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBuf(ivB64) }, key, ciphertextBuf);
-    if (withNonce.byteLength < 8) throw new Error('Invalid encrypted file payload');
-    const nonce = Array.from(new Uint8Array(withNonce.slice(0, 8))).join(',');
-    this._checkReplay(this.seenBinaryNonces, nonce);
-    return withNonce.slice(8);
+    const plain = await this._decryptBytes(ciphertextBuf, ivB64, epoch, 'binary');
+    return plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength);
   }
 
-  /** Destroy all key material. */
   destroy() {
     this.keyPair = null;
+    if (this._myPubRaw) this._myPubRaw.fill(0);
     this._myPubRaw = null;
-    if (this._kemKeys) {
-      this._kemKeys.secretKey.fill(0);
-      this._kemKeys.publicKey.fill(0);
-      this._kemKeys = null;
-    }
-    this._kemPubRaw = null;
+    this._discardKemKeys();
     for (const b of [this._rootSecret, this._sasSecret, this._confirmSecret]) {
       if (b) b.fill(0);
     }
     this._rootSecret = null;
     this._sasSecret = null;
     this._confirmSecret = null;
-    this.epochs.clear();
-    this.sendEpoch = -1;
+    if (this._pendingRekey?.myPubRaw) this._pendingRekey.myPubRaw.fill(0);
     this._pendingRekey = null;
-    this.seenNonces.clear();
-    this.seenBinaryNonces.clear();
+    this.sendEpochs.clear();
+    this.recvEpochs.clear();
+    this.sendEpoch = -1;
+    for (const context of TRAFFIC_CONTEXTS) this._seenIVs[context].clear();
   }
 
   /* ── Private helpers ── */
 
-  _sendKey() {
-    const key = this.epochs.get(this.sendEpoch);
-    if (!key) throw new Error('No session key established');
+  async _encryptBytes(data, context, epoch) {
+    const key = this._sendKey(context, epoch);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+      {
+        name: 'AES-GCM',
+        iv,
+        additionalData: this._aad(context, epoch),
+      },
+      key,
+      data,
+    );
+    return { ciphertext, iv };
+  }
+
+  async _decryptBytes(ciphertext, ivB64, epoch, context) {
+    this._requireEpoch(epoch);
+    const key = this._recvKey(context, epoch);
+    const iv = decodeIV(ivB64);
+    const ivKey = bufToB64(iv);
+    this._checkReplay(context, epoch, ivKey);
+
+    const ciphertextBytes = typeof ciphertext === 'string'
+      ? b64ToBuf(ciphertext)
+      : ciphertext;
+    const plain = await crypto.subtle.decrypt(
+      {
+        name: 'AES-GCM',
+        iv,
+        additionalData: this._aad(context, epoch),
+      },
+      key,
+      ciphertextBytes,
+    );
+    this._markAuthenticatedIV(context, epoch, ivKey);
+    return new Uint8Array(plain);
+  }
+
+  _sendKey(context, epoch) {
+    const key = this.sendEpochs.get(epoch)?.[context];
+    if (!key) throw new Error('No sending key for epoch and context');
     return key;
   }
 
-  _recvKey(epoch) {
-    // Backwards/missing epoch defaults to the send epoch (v1 peers send no epoch).
-    const e = Number.isInteger(epoch) ? epoch : this.sendEpoch;
-    const key = this.epochs.get(e);
-    if (!key) throw new Error('Unknown key epoch — message dropped');
+  _recvKey(context, epoch) {
+    const key = this.recvEpochs.get(epoch)?.[context];
+    if (!key) throw new Error('Unknown receiving key epoch — message dropped');
     return key;
   }
 
-  _checkReplay(set, nonceKey) {
-    if (set.has(nonceKey)) throw new Error('Replay attack detected — duplicate nonce');
-    set.add(nonceKey);
-    if (set.size > this._maxNonces) set.delete(set.values().next().value);
+  _aad(context, epoch) {
+    return enc.encode(`deaddrop/v4/aead/${context}/epoch/${epoch}`);
+  }
+
+  _checkReplay(context, epoch, ivKey) {
+    const set = this._seenIVs[context].get(epoch);
+    if (set?.has(ivKey)) throw new Error('Replay attack detected — duplicate IV');
+    if (set && set.size >= MAX_IVS_PER_EPOCH) {
+      throw new Error('Replay tracking capacity exceeded');
+    }
+  }
+
+  _markAuthenticatedIV(context, epoch, ivKey) {
+    let set = this._seenIVs[context].get(epoch);
+    if (!set) {
+      set = new Set();
+      this._seenIVs[context].set(epoch, set);
+    }
+    if (set.has(ivKey)) throw new Error('Replay attack detected — duplicate IV');
+    if (set.size >= MAX_IVS_PER_EPOCH) throw new Error('Replay tracking capacity exceeded');
+    set.add(ivKey);
+  }
+
+  _requireEpoch(epoch) {
+    if (!Number.isSafeInteger(epoch) || epoch < 0) throw new Error('Invalid key epoch');
+  }
+
+  _requireNextEpoch(epoch) {
+    this._requireEpoch(epoch);
+    if (epoch !== this.sendEpoch + 1) throw new Error('Unexpected rekey epoch');
+  }
+
+  _pruneEpochs(current) {
+    for (const epochs of [this.sendEpochs, this.recvEpochs]) {
+      for (const epoch of epochs.keys()) {
+        if (epoch <= current - RETAINED_EPOCHS) epochs.delete(epoch);
+      }
+    }
+    for (const context of TRAFFIC_CONTEXTS) {
+      for (const epoch of this._seenIVs[context].keys()) {
+        if (epoch <= current - RETAINED_EPOCHS) this._seenIVs[context].delete(epoch);
+      }
+    }
   }
 
   async _ecdh(privateKey, peerPubRaw) {
+    if (!privateKey) throw new Error('No ECDH private key');
+    if (!(peerPubRaw instanceof Uint8Array)
+        || peerPubRaw.length !== 65
+        || peerPubRaw[0] !== 4) {
+      throw new Error('Invalid P-256 public key');
+    }
     const peerKey = await crypto.subtle.importKey(
       'raw', peerPubRaw, { name: 'ECDH', namedCurve: 'P-256' }, false, [],
     );
     return crypto.subtle.deriveBits({ name: 'ECDH', public: peerKey }, privateKey, 256);
   }
 
-  async _transcriptSalt(pubA, pubB, extra) {
-    const a = new Uint8Array(pubA);
-    const b = new Uint8Array(pubB);
-    // Order-independent: sort the two public keys so both peers compute one salt.
-    // `extra` (KEM transcript on handshake, PQ root on rekey) is identical on
-    // both sides already, so it is appended as-is.
-    const [first, second] = compareBytes(a, b) <= 0 ? [a, b] : [b, a];
-    const extraLen = extra ? extra.length : 0;
-    const buf = new Uint8Array(first.length + second.length + extraLen);
-    buf.set(first, 0);
-    buf.set(second, first.length);
-    if (extra) buf.set(extra, first.length + second.length);
-    return crypto.subtle.digest('SHA-256', buf);
+  async _deriveTrafficKeys(secret, salt, direction, epoch) {
+    const entries = await Promise.all(TRAFFIC_CONTEXTS.map(async (context) => [
+      context,
+      await this._hkdfAesKey(
+        secret,
+        salt,
+        `deaddrop/v4/aead/${direction}/${context}/epoch/${epoch}`,
+      ),
+    ]));
+    return Object.fromEntries(entries);
   }
 
   async _hkdfBytes(secret, salt, info, length) {
     const base = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits(
-      { name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode(info) }, base, length * 8,
+      { name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode(info) },
+      base,
+      length * 8,
     );
     return new Uint8Array(bits);
   }
@@ -355,15 +463,69 @@ export class CryptoLayer {
     const base = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
     return crypto.subtle.deriveKey(
       { name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode(info) },
-      base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
+      base,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt'],
     );
+  }
+
+  _discardKemKeys() {
+    if (this._kemKeys) {
+      this._kemKeys.secretKey.fill(0);
+      this._kemKeys.publicKey.fill(0);
+    }
+    this._kemKeys = null;
+    this._kemPubRaw = null;
   }
 }
 
-/** Smallest padding bucket that fits `n` plaintext bytes. */
+async function generateEcdhKeyPair() {
+  return crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' },
+    false,
+    ['deriveBits'],
+  );
+}
+
+function decodePublicKey(value) {
+  if (typeof value !== 'string') throw new Error('Invalid rekey public key');
+  let raw;
+  try {
+    raw = new Uint8Array(b64ToBuf(value));
+  } catch {
+    throw new Error('Invalid rekey public key');
+  }
+  if (raw.length !== 65 || raw[0] !== 4) throw new Error('Invalid rekey public key');
+  return raw;
+}
+
+function decodeIV(value) {
+  if (typeof value !== 'string') throw new Error('Invalid AES-GCM IV');
+  let iv;
+  try {
+    iv = new Uint8Array(b64ToBuf(value));
+  } catch {
+    throw new Error('Invalid AES-GCM IV');
+  }
+  if (iv.length !== 12) throw new Error('Invalid AES-GCM IV');
+  return iv;
+}
+
+function concatBytes(...arrs) {
+  const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0));
+  let off = 0;
+  for (const arr of arrs) {
+    const bytes = new Uint8Array(arr);
+    out.set(bytes, off);
+    off += bytes.length;
+  }
+  return out;
+}
+
 function padBucket(n) {
-  for (const b of PAD_BUCKETS) {
-    if (n <= b) return b;
+  for (const bucket of PAD_BUCKETS) {
+    if (n <= bucket) return bucket;
   }
   return Math.ceil(n / PAD_STEP_ABOVE_MAX) * PAD_STEP_ABOVE_MAX;
 }

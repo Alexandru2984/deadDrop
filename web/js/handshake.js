@@ -1,79 +1,63 @@
 /**
- * Dead Drop — Authenticated Hybrid Key Exchange (commit-reveal, ECDH + ML-KEM-768)
+ * Dead Drop — Authenticated hybrid key exchange (protocol v4)
  *
- * A man-in-the-middle who relays the WebRTC connection (e.g. a malicious signaling
- * server) could substitute its own keys toward each peer. The Short Authentication
- * String (SAS) lets users detect that out-of-band — but only if the attacker cannot
- * *grind* keys to force both sides to show the same SAS.
+ * Both parties commit to their ephemeral P-256 key, ML-KEM-768 key and random
+ * nonce before revealing them. The lexicographically smaller ECDH key becomes
+ * the ML-KEM encapsulator. A role-ordered transcript binds both complete reveals
+ * and the KEM ciphertext into every derived secret and confirmation tag.
  *
- * This commit-reveal handshake removes the attacker's ability to grind: each side
- * publishes H(ecdhPub ‖ kemPub ‖ nonce) BEFORE either side reveals its keys. A relay
- * therefore has to commit to its substituted keys blind, gets exactly one guess at
- * matching the SAS, and succeeds only with probability 2^-36. (ZRTP-style.)
- *
- * The session secret is hybrid: an ECDH (P-256) share AND an ML-KEM-768 (FIPS 203)
- * share, combined in HKDF. Recorded traffic therefore stays confidential even if
- * large quantum computers arrive later — an attacker must break both primitives.
- *
- *   A ── commit_A ──►             ◄── commit_B ── B    (both commit first)
- *   A ── reveal_A ──►             ◄── reveal_B ── B    (reveal only after peer's commit)
- *   both verify H(reveal)==commit; the side with the lexicographically smaller
- *   ECDH key becomes the ENCAPSULATOR:
- *   E ── encaps(ct) ──► D                              (KEM ciphertext)
- *   E ── confirm_e ──►             ◄── confirm_d ── D  (key confirmation)
- *   both verify the peer's confirmation tag, then show the SAS.
- *
- * The explicit confirmation step matters because ML-KEM uses implicit rejection:
- * a tampered ciphertext decapsulates to a *different* secret instead of an error,
- * which without confirmation would surface as confusing decrypt failures later.
+ * The SAS authenticates the otherwise unauthenticated exchange only after users
+ * compare it out of band. Until then, encryption protects against passive
+ * observers but a malicious signaling/transport service can still interpose.
  */
 
 import { bufToB64, b64ToBuf } from './util.js';
-import { compareBytes } from './crypto.js';
+import { compareBytes, PROTOCOL_VERSION } from './crypto.js';
 
 const COMMIT_NONCE_BYTES = 16;
-const ECDH_PUB_BYTES = 65;    // uncompressed P-256 point
-const KEM_PUB_BYTES = 1184;   // ML-KEM-768 encapsulation key (FIPS 203)
-const KEM_CT_BYTES = 1088;    // ML-KEM-768 ciphertext (FIPS 203)
+const ECDH_PUB_BYTES = 65;
+const KEM_PUB_BYTES = 1184;
+const KEM_CT_BYTES = 1088;
+const enc = new TextEncoder();
 
 export class Handshake {
-  /**
-   * @param {CryptoLayer} crypto
-   * @param {(msg:object)=>void} send  – sends a JS object over the data channel
-   * @param {{onEstablished:(sas:string)=>void, onError:(reason:string)=>void}} cb
-   */
-  constructor(crypto, send, { onEstablished, onError }) {
-    this.crypto = crypto;
+  constructor(cryptoLayer, send, { onEstablished, onError }) {
+    this.crypto = cryptoLayer;
     this.send = send;
     this.onEstablished = onEstablished;
     this.onError = onError;
     this._myNonce = null;
     this._peerCommit = null;
+    this._peerRecord = null;
     this._revealed = false;
     this._isEncapsulator = false;
     this._awaitingCt = false;
     this._derived = false;
     this._confirmed = false;
     this._done = false;
-    this._queue = Promise.resolve(); // serialize async message handling
+    this._queue = Promise.resolve();
   }
 
-  /** Generate our keys, publish our commitment. Called once when the channel opens. */
   async start() {
     const myEcdhPub = await this.crypto.generateKeyPair();
     const myKemPub = this.crypto.generateKemKeys();
     this._myNonce = crypto.getRandomValues(new Uint8Array(COMMIT_NONCE_BYTES));
     const commit = await commitment(myEcdhPub, myKemPub, this._myNonce);
-    this.send({ type: 'kex-commit', commit: bufToB64(commit) });
+    this.send({ type: 'kex-commit', v: PROTOCOL_VERSION, commit: bufToB64(commit) });
   }
 
-  /** Returns true if the message was a handshake message (and was consumed). */
+  /** Returns true if a key-exchange message was consumed. */
   async handle(msg) {
-    if (!['kex-commit', 'kex-reveal', 'kex-encaps', 'kex-confirm'].includes(msg.type)) {
+    if (!msg || !['kex-commit', 'kex-reveal', 'kex-encaps', 'kex-confirm'].includes(msg.type)) {
       return false;
     }
-    // Chain, so a slow async step never processes two messages concurrently.
-    this._queue = this._queue.then(() => this._dispatch(msg)).catch(() => {});
+    if (msg.v !== PROTOCOL_VERSION) {
+      this._fail('unsupported encryption protocol version');
+      return true;
+    }
+    this._queue = this._queue
+      .then(() => this._dispatch(msg))
+      .catch(() => this._fail('handshake processing failed'));
     await this._queue;
     return true;
   }
@@ -82,7 +66,7 @@ export class Handshake {
     if (msg.type === 'kex-commit') return this._onCommit(msg);
     if (msg.type === 'kex-reveal') return this._onReveal(msg);
     if (msg.type === 'kex-encaps') return this._onEncaps(msg);
-    if (msg.type === 'kex-confirm') return this._onConfirm(msg);
+    return this._onConfirm(msg);
   }
 
   async _onCommit(msg) {
@@ -94,10 +78,11 @@ export class Handshake {
       return this._fail('malformed commitment');
     }
     if (this._peerCommit.length !== 32) return this._fail('bad commitment length');
-    // Only now — after the peer has committed — do we reveal our public keys.
+
     this._revealed = true;
     this.send({
       type: 'kex-reveal',
+      v: PROTOCOL_VERSION,
       publicKey: bufToB64(this.crypto._myPubRaw),
       kemPublicKey: bufToB64(this.crypto._kemPubRaw),
       nonce: bufToB64(this._myNonce),
@@ -107,38 +92,52 @@ export class Handshake {
   async _onReveal(msg) {
     if (this._done || this._derived || this._awaitingCt) return;
     if (!this._peerCommit) return this._fail('reveal before commit');
-    if (typeof msg.publicKey !== 'string' || typeof msg.kemPublicKey !== 'string'
+    if (typeof msg.publicKey !== 'string'
+        || typeof msg.kemPublicKey !== 'string'
         || typeof msg.nonce !== 'string') {
       return this._fail('malformed reveal');
     }
-    let peerPub, peerKemPub, peerNonce;
+
+    let peerEcdh, peerKem, peerNonce;
     try {
-      peerPub = new Uint8Array(b64ToBuf(msg.publicKey));
-      peerKemPub = new Uint8Array(b64ToBuf(msg.kemPublicKey));
+      peerEcdh = new Uint8Array(b64ToBuf(msg.publicKey));
+      peerKem = new Uint8Array(b64ToBuf(msg.kemPublicKey));
       peerNonce = new Uint8Array(b64ToBuf(msg.nonce));
     } catch {
       return this._fail('malformed reveal');
     }
-    if (peerPub.length !== ECDH_PUB_BYTES) return this._fail('invalid public key length');
-    if (peerKemPub.length !== KEM_PUB_BYTES) return this._fail('invalid KEM key length');
+    if (peerEcdh.length !== ECDH_PUB_BYTES || peerEcdh[0] !== 4) {
+      return this._fail('invalid public key');
+    }
+    if (peerKem.length !== KEM_PUB_BYTES) return this._fail('invalid KEM key length');
+    if (peerNonce.length !== COMMIT_NONCE_BYTES) return this._fail('invalid nonce length');
 
-    // The decisive check: the revealed keys must match what the peer committed to.
-    const expect = await commitment(peerPub, peerKemPub, peerNonce);
+    const expect = await commitment(peerEcdh, peerKem, peerNonce);
     if (!timingSafeEqual(new Uint8Array(expect), this._peerCommit)) {
       return this._fail('commitment mismatch — possible MitM');
     }
 
-    // Deterministic, symmetric role choice: the smaller ECDH key encapsulates.
-    this._isEncapsulator = compareBytes(this.crypto._myPubRaw, peerPub) < 0;
+    const order = compareBytes(this.crypto._myPubRaw, peerEcdh);
+    if (order === 0) return this._fail('reflected public key — possible MitM');
+    this._isEncapsulator = order < 0;
+    this._peerRecord = { ecdh: peerEcdh, kem: peerKem, nonce: peerNonce };
+
     try {
       if (this._isEncapsulator) {
-        const { cipherText, sharedSecret } = this.crypto.kemEncapsulate(peerKemPub);
-        this.send({ type: 'kex-encaps', ct: bufToB64(cipherText) });
-        // KEM transcript = decapsulator's public key ‖ ciphertext (both known here).
-        await this._deriveAndConfirm(peerPub, sharedSecret, concatBytes(peerKemPub, cipherText));
+        const { cipherText, sharedSecret } = this.crypto.kemEncapsulate(peerKem);
+        this.send({
+          type: 'kex-encaps',
+          v: PROTOCOL_VERSION,
+          ct: bufToB64(cipherText),
+        });
+        const transcript = handshakeTranscript(
+          this._myRecord(),
+          this._peerRecord,
+          cipherText,
+        );
+        await this._deriveAndConfirm(peerEcdh, sharedSecret, transcript, 'e');
       } else {
-        this._peerEcdhPub = peerPub;
-        this._awaitingCt = true; // wait for the peer's kex-encaps
+        this._awaitingCt = true;
       }
     } catch {
       return this._fail('key derivation failed');
@@ -147,32 +146,44 @@ export class Handshake {
 
   async _onEncaps(msg) {
     if (this._done || this._derived) return;
-    if (!this._awaitingCt) return this._fail('unexpected KEM ciphertext');
+    if (!this._awaitingCt || !this._peerRecord) {
+      return this._fail('unexpected KEM ciphertext');
+    }
     if (typeof msg.ct !== 'string') return this._fail('malformed KEM ciphertext');
-    let ct;
+    let ciphertext;
     try {
-      ct = new Uint8Array(b64ToBuf(msg.ct));
+      ciphertext = new Uint8Array(b64ToBuf(msg.ct));
     } catch {
       return this._fail('malformed KEM ciphertext');
     }
-    if (ct.length !== KEM_CT_BYTES) return this._fail('invalid KEM ciphertext length');
+    if (ciphertext.length !== KEM_CT_BYTES) {
+      return this._fail('invalid KEM ciphertext length');
+    }
+
     try {
-      const sharedSecret = this.crypto.kemDecapsulate(ct);
-      await this._deriveAndConfirm(this._peerEcdhPub, sharedSecret,
-        concatBytes(this.crypto._kemPubRaw, ct));
+      const sharedSecret = this.crypto.kemDecapsulate(ciphertext);
+      const transcript = handshakeTranscript(
+        this._peerRecord,
+        this._myRecord(),
+        ciphertext,
+      );
+      await this._deriveAndConfirm(
+        this._peerRecord.ecdh,
+        sharedSecret,
+        transcript,
+        'd',
+      );
     } catch {
       return this._fail('key derivation failed');
     }
   }
 
-  async _deriveAndConfirm(peerPub, kemShared, kemTranscript) {
-    await this.crypto.deriveSession(peerPub, kemShared, kemTranscript);
+  async _deriveAndConfirm(peerPub, kemShared, transcript, role) {
+    await this.crypto.deriveSession(peerPub, kemShared, transcript, role);
     this._derived = true;
     this._awaitingCt = false;
-    // Prove we hold the session key; the tag is direction-bound so it cannot be
-    // reflected back. If the peer's tag never verifies, we never show a SAS.
-    const tag = await this.crypto.confirmTag(this._isEncapsulator ? 'e' : 'd');
-    this.send({ type: 'kex-confirm', tag: bufToB64(tag) });
+    const tag = await this.crypto.confirmTag(role);
+    this.send({ type: 'kex-confirm', v: PROTOCOL_VERSION, tag: bufToB64(tag) });
     if (this._peerConfirm) await this._checkConfirm(this._peerConfirm);
   }
 
@@ -185,8 +196,10 @@ export class Handshake {
     } catch {
       return this._fail('malformed confirmation');
     }
+    if (tag.length !== 16) return this._fail('invalid confirmation length');
     if (!this._derived) {
-      this._peerConfirm = tag; // encapsulator's confirm can arrive before our derive
+      if (this._peerConfirm) return this._fail('duplicate early confirmation');
+      this._peerConfirm = tag;
       return;
     }
     await this._checkConfirm(tag);
@@ -199,7 +212,17 @@ export class Handshake {
     }
     this._confirmed = true;
     this._done = true;
-    this.onEstablished(this.crypto.computeSAS());
+    const sas = this.crypto.computeSAS();
+    this.crypto.finishHandshake();
+    this.onEstablished(sas);
+  }
+
+  _myRecord() {
+    return {
+      ecdh: this.crypto._myPubRaw,
+      kem: this.crypto._kemPubRaw,
+      nonce: this._myNonce,
+    };
   }
 
   _fail(reason) {
@@ -210,13 +233,33 @@ export class Handshake {
 }
 
 async function commitment(ecdhPub, kemPub, nonce) {
-  return crypto.subtle.digest('SHA-256', concatBytes(ecdhPub, kemPub, nonce));
+  return crypto.subtle.digest(
+    'SHA-256',
+    concatBytes(enc.encode('deaddrop/v4/commit\0'), ecdhPub, kemPub, nonce),
+  );
+}
+
+function handshakeTranscript(encapsulator, decapsulator, ciphertext) {
+  return concatBytes(
+    enc.encode('deaddrop/v4/handshake\0'),
+    encapsulator.ecdh,
+    encapsulator.kem,
+    encapsulator.nonce,
+    decapsulator.ecdh,
+    decapsulator.kem,
+    decapsulator.nonce,
+    ciphertext,
+  );
 }
 
 function concatBytes(...arrs) {
   const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0));
   let off = 0;
-  for (const a of arrs) { out.set(new Uint8Array(a), off); off += a.length; }
+  for (const arr of arrs) {
+    const bytes = new Uint8Array(arr);
+    out.set(bytes, off);
+    off += bytes.length;
+  }
   return out;
 }
 

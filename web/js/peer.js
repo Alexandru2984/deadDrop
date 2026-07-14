@@ -8,9 +8,11 @@
  */
 
 import { Handshake } from './handshake.js';
+import { PROTOCOL_VERSION } from './crypto.js';
 
 const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
 const REKEY_INTERVAL_MS = 10 * 60 * 1000; // DH ratchet every 10 min for forward secrecy
+const REKEY_TIMEOUT_MS = 30 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 30 * 1000;   // fail an unfinished handshake instead of hanging forever
 
 export class PeerConnection {
@@ -38,6 +40,7 @@ export class PeerConnection {
     this.isInitiator = false;  // the data-channel creator drives rekeys
     this.handshake = null;
     this._rekeyTimer = null;
+    this._rekeyTimeout = null;
     this._sendQ = Promise.resolve(); // keeps sealed sends in order
     this._recvQ = Promise.resolve(); // keeps opened messages in order
     // Media path authenticity: call audio/video is protected by DTLS-SRTP, whose
@@ -118,15 +121,7 @@ export class PeerConnection {
     if (!this.dc || this.dc.readyState !== 'open') {
       throw new Error('Data channel not open');
     }
-    this._sendQ = this._sendQ
-      .then(async () => {
-        const { ciphertext, iv, epoch } = await this.crypto.seal(obj);
-        if (this.dc && this.dc.readyState === 'open') {
-          this.dc.send(JSON.stringify({ type: 'enc', c: ciphertext, iv, e: epoch }));
-        }
-      })
-      .catch((err) => console.warn('[peer] sealed send failed', err));
-    return this._sendQ;
+    return this._queueSealed(obj);
   }
 
   /* ── Media (audio / video calls) ── */
@@ -269,19 +264,16 @@ export class PeerConnection {
       }
       if (!msg || typeof msg.type !== 'string') return;
 
-      // Key-exchange and rekey traffic is handled here, never forwarded to the app.
+      // The commit/reveal exchange is the only post-open plaintext protocol.
       if (msg.type.startsWith('kex-')) {
         if (this.handshake) {
           try { await this.handshake.handle(msg); } catch (err) { console.warn('[peer] kex error', err); }
         }
         return;
       }
-      if (msg.type === 'rekey-offer')  { await this._onRekeyOffer(msg);  return; }
-      if (msg.type === 'rekey-answer') { await this._onRekeyAnswer(msg); return; }
 
-      // App traffic arrives ONLY as sealed envelopes; anything else after the
-      // handshake is either an old client or an injection attempt — drop it.
-      if (msg.type !== 'enc') {
+      // Rekeys and app traffic arrive only in protocol-v4 sealed envelopes.
+      if (msg.type !== 'enc' || msg.v !== PROTOCOL_VERSION) {
         console.warn('[peer] dropping unsealed app message');
         return;
       }
@@ -293,7 +285,8 @@ export class PeerConnection {
         .then(async () => {
           const inner = await this.crypto.open(msg.c, msg.iv, msg.e);
           if (!inner || typeof inner.type !== 'string') return;
-          // Transport-integrity control message stays in the peer layer.
+          if (inner.type === 'rekey-offer') { await this._onRekeyOffer(inner); return; }
+          if (inner.type === 'rekey-answer') { await this._onRekeyAnswer(inner); return; }
           if (inner.type === 'dtls-fp') { this._onPeerFingerprint(inner); return; }
           this.onMessage(inner);
         })
@@ -312,12 +305,36 @@ export class PeerConnection {
     if (this.dc && this.dc.readyState === 'open') this.dc.send(JSON.stringify(obj));
   }
 
+  _queueSealed(obj, epoch) {
+    const operation = this._sendQ.then(() => this._sendSealedNow(obj, epoch));
+    // Keep the queue usable after one failed operation while returning the real
+    // failure to the caller that initiated it.
+    this._sendQ = operation.catch((err) => {
+      console.warn('[peer] sealed send failed', err);
+    });
+    return operation;
+  }
+
+  async _sendSealedNow(obj, epoch = this.crypto.sendEpoch) {
+    if (!this.dc || this.dc.readyState !== 'open') throw new Error('Data channel not open');
+    const { ciphertext, iv, epoch: usedEpoch } = await this.crypto.seal(obj, epoch);
+    if (!this.dc || this.dc.readyState !== 'open') throw new Error('Data channel closed');
+    this.dc.send(JSON.stringify({
+      type: 'enc',
+      v: PROTOCOL_VERSION,
+      c: ciphertext,
+      iv,
+      e: usedEpoch,
+    }));
+  }
+
   _onEstablished(sas) {
     clearTimeout(this._handshakeTimer);
     this.onStateChange('encrypted', sas);
     if (this.isInitiator) this._scheduleRekey();
-    // Now that the data channel is SAS-authenticated, bind the DTLS/media path to
-    // it: send our real local fingerprint over this trusted channel so the peer
+    // Bind the DTLS/media path to this cryptographic session. Human SAS
+    // comparison is still required before the application may trust the peer.
+    // Send our real local fingerprint over the encrypted channel so the peer
     // can check it against the fingerprint signaling handed them. Messages are
     // already safe (encrypted with the SAS key); this closes the call/media gap.
     this._verifyMediaPath();
@@ -333,7 +350,7 @@ export class PeerConnection {
       mine = [];
     }
     if (mine.length === 0) return; // nothing to attest; calls stay disabled
-    this.send({ type: 'dtls-fp', fp: mine }).catch(() => {});
+    this._queueSealed({ type: 'dtls-fp', v: PROTOCOL_VERSION, fp: mine }).catch(() => {});
     // If the peer never confirms (old client, or a MitM dropping the message),
     // leave mediaVerified false — messaging still works, calls stay disabled.
     clearTimeout(this._fpTimer);
@@ -344,7 +361,9 @@ export class PeerConnection {
 
   _onPeerFingerprint(msg) {
     clearTimeout(this._fpTimer);
-    const theirs = Array.isArray(msg.fp) ? msg.fp.map(String) : [];
+    const theirs = Array.isArray(msg.fp)
+      ? [...new Set(msg.fp.map((f) => String(f).toLowerCase()))]
+      : [];
     let expected = [];
     try {
       expected = extractFingerprints(this.pc?.remoteDescription?.sdp || '');
@@ -354,8 +373,7 @@ export class PeerConnection {
       console.warn('[peer] could not compare DTLS fingerprints — calls disabled');
       return;
     }
-    const overlap = theirs.some((f) => expected.includes(f));
-    if (overlap) {
+    if (fingerprintsMatch(expected, theirs)) {
       // The cert the peer actually holds matches what signaling delivered: no
       // DTLS man-in-the-middle. Media (calls) is now bound to the verified SAS.
       this.mediaVerified = true;
@@ -373,47 +391,86 @@ export class PeerConnection {
   /* ── DH ratchet (forward secrecy) — only the initiator drives the schedule ── */
 
   _scheduleRekey() {
-    this._clearRekey();
+    clearTimeout(this._rekeyTimer);
     this._rekeyTimer = setTimeout(() => this._doRekey(), REKEY_INTERVAL_MS);
   }
 
   _clearRekey() {
     if (this._rekeyTimer) { clearTimeout(this._rekeyTimer); this._rekeyTimer = null; }
+    if (this._rekeyTimeout) { clearTimeout(this._rekeyTimeout); this._rekeyTimeout = null; }
   }
 
   async _doRekey() {
     if (!this.crypto.established || !this.dc || this.dc.readyState !== 'open') return;
-    try {
+    const operation = this._sendQ.then(async () => {
+      const oldEpoch = this.crypto.sendEpoch;
       const offer = await this.crypto.beginRekey();
-      this._dcSend({ type: 'rekey-offer', epoch: offer.epoch, publicKey: offer.publicKey });
-    } catch (err) {
+      await this._sendSealedNow({
+        type: 'rekey-offer',
+        v: PROTOCOL_VERSION,
+        epoch: offer.epoch,
+        publicKey: offer.publicKey,
+      }, oldEpoch);
+      clearTimeout(this._rekeyTimeout);
+      this._rekeyTimeout = setTimeout(() => {
+        console.warn('[peer] authenticated rekey timed out');
+        this.onStateChange('insecure', 'rekey timed out');
+        this.close();
+      }, REKEY_TIMEOUT_MS);
+    });
+    this._sendQ = operation.catch((err) => {
       console.warn('[peer] rekey offer failed', err);
-      this._scheduleRekey(); // retry next interval
-    }
+      this.onStateChange('insecure', 'rekey failed');
+      this.close();
+    });
+    await operation.catch(() => {});
   }
 
-  async _onRekeyOffer(msg) {
-    if (!this.crypto.established || typeof msg.publicKey !== 'string' || !Number.isInteger(msg.epoch)) return;
-    try {
+  _onRekeyOffer(msg) {
+    if (!this.crypto.established
+        || msg.v !== PROTOCOL_VERSION
+        || typeof msg.publicKey !== 'string'
+        || !Number.isSafeInteger(msg.epoch)) {
+      return Promise.reject(new Error('Malformed authenticated rekey offer'));
+    }
+    const operation = this._sendQ.then(async () => {
+      const oldEpoch = this.crypto.sendEpoch;
       const answer = await this.crypto.acceptRekey(msg.publicKey, msg.epoch);
-      this._dcSend({ type: 'rekey-answer', epoch: answer.epoch, publicKey: answer.publicKey });
-    } catch (err) {
+      // The answer must be authenticated under the old epoch. The initiator has
+      // not installed the new receiving keys until this answer verifies.
+      await this._sendSealedNow({
+        type: 'rekey-answer',
+        v: PROTOCOL_VERSION,
+        epoch: answer.epoch,
+        publicKey: answer.publicKey,
+      }, oldEpoch);
+    });
+    this._sendQ = operation.catch((err) => {
       console.warn('[peer] rekey accept failed — tearing down to avoid key divergence', err);
       this.onStateChange('insecure', 'rekey failed');
       this.close();
-    }
+    });
+    return operation;
   }
 
-  async _onRekeyAnswer(msg) {
-    if (typeof msg.publicKey !== 'string' || !Number.isInteger(msg.epoch)) return;
-    try {
+  _onRekeyAnswer(msg) {
+    if (msg.v !== PROTOCOL_VERSION
+        || typeof msg.publicKey !== 'string'
+        || !Number.isSafeInteger(msg.epoch)) {
+      return Promise.reject(new Error('Malformed authenticated rekey answer'));
+    }
+    const operation = this._sendQ.then(async () => {
       await this.crypto.completeRekey(msg.publicKey, msg.epoch);
+      clearTimeout(this._rekeyTimeout);
+      this._rekeyTimeout = null;
       this._scheduleRekey(); // line up the next ratchet
-    } catch (err) {
+    });
+    this._sendQ = operation.catch((err) => {
       console.warn('[peer] rekey complete failed — tearing down to avoid key divergence', err);
       this.onStateChange('insecure', 'rekey failed');
       this.close();
-    }
+    });
+    return operation;
   }
 }
 
@@ -424,10 +481,25 @@ export class PeerConnection {
  */
 export function extractFingerprints(sdp) {
   const out = [];
-  const re = /^a=fingerprint:(\S+)\s+([0-9A-Fa-f:]+)/gim;
+  const lengths = new Map([['sha-256', 32], ['sha-384', 48], ['sha-512', 64]]);
+  const re = /^a=fingerprint:(\S+)\s+(\S+)\s*$/gim;
   let m;
   while ((m = re.exec(sdp)) !== null) {
-    out.push((m[1] + ' ' + m[2]).toLowerCase());
+    const algorithm = m[1].toLowerCase();
+    const octets = m[2].toLowerCase().split(':');
+    if (octets.length !== lengths.get(algorithm)
+        || !octets.every((octet) => /^[0-9a-f]{2}$/.test(octet))) continue;
+    out.push(`${algorithm} ${octets.join(':')}`);
   }
   return [...new Set(out)];
+}
+
+/** Exact set comparison: an attacker cannot smuggle one genuine fingerprint
+ * beside an attacker-controlled certificate and pass an overlap-only check. */
+export function fingerprintsMatch(expected, asserted) {
+  if (!Array.isArray(expected) || !Array.isArray(asserted)
+      || expected.length === 0 || asserted.length === 0) return false;
+  const a = [...new Set(expected.map((f) => String(f).toLowerCase()))].sort();
+  const b = [...new Set(asserted.map((f) => String(f).toLowerCase()))].sort();
+  return a.length === b.length && a.every((value, i) => value === b[i]);
 }
