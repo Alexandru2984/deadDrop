@@ -15,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"deaddrop/internal/middleware"
+
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -42,8 +44,8 @@ type user struct {
 	DuressKdf      string `json:"duressKdf,omitempty"`
 }
 
-func (u user) isSRP() bool      { return u.Verifier != "" }
-func (u user) hasDuress() bool  { return u.DuressVerifier != "" }
+func (u user) isSRP() bool     { return u.Verifier != "" }
+func (u user) hasDuress() bool { return u.DuressVerifier != "" }
 
 type store struct {
 	mu        sync.RWMutex
@@ -315,9 +317,10 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
 		HttpOnly: true,
-		Secure:   isSecureRequest(r),
-		SameSite: http.SameSiteLaxMode,
+		Secure:   middleware.IsSecureRequest(r),
+		SameSite: http.SameSiteStrictMode,
 	})
 	jsonOK(w, map[string]string{"status": "ok"})
 }
@@ -371,13 +374,9 @@ func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string
 		Path:     "/",
 		MaxAge:   86400,
 		HttpOnly: true,
-		Secure:   isSecureRequest(r),
-		SameSite: http.SameSiteLaxMode,
+		Secure:   middleware.IsSecureRequest(r),
+		SameSite: http.SameSiteStrictMode,
 	})
-}
-
-func isSecureRequest(r *http.Request) bool {
-	return r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 func jsonOK(w http.ResponseWriter, v any) {

@@ -64,7 +64,7 @@ func (c Config) Handler() http.HandlerFunc {
 			servers = append(servers, iceServer{URLs: c.TurnURLs, Username: username, Credential: cred})
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Cache-Control", "no-store, no-transform")
 		json.NewEncoder(w).Encode(map[string]any{
 			"iceServers": servers,
 			"ttl":        int(credTTL.Seconds()),

@@ -83,19 +83,20 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // ExtractIP returns the client IP from the request.
-// Reverse proxy headers are trusted only when the direct peer is local/private
-// or TRUST_PROXY_HEADERS=1 is set. This prevents public clients from spoofing
-// X-Forwarded-For to bypass rate limits if the Go port is reachable directly.
+//
+// The reverse proxy is expected to overwrite X-Real-IP with its normalized
+// client address. In production nginx does this after applying its trusted
+// Cloudflare real-ip list. We deliberately do not consume CF-Connecting-IP
+// here: a client reaching the origin directly can supply that header itself.
+// As a safe fallback, use the right-most X-Forwarded-For hop (the one appended
+// by the nearest proxy), never the attacker-controlled left-most hop.
 func ExtractIP(r *http.Request) string {
 	if isTrustedProxyRequest(r) {
-		if ip := r.Header.Get("CF-Connecting-IP"); validIP(ip) {
-			return strings.TrimSpace(ip)
-		}
-		if ip := firstForwardedFor(r.Header.Get("X-Forwarded-For")); validIP(ip) {
-			return ip
-		}
 		if ip := r.Header.Get("X-Real-IP"); validIP(ip) {
 			return strings.TrimSpace(ip)
+		}
+		if ip := lastForwardedFor(r.Header.Get("X-Forwarded-For")); validIP(ip) {
+			return ip
 		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
@@ -117,12 +118,16 @@ func isTrustedProxyRequest(r *http.Request) bool {
 	if ip == nil {
 		return false
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	// The supported production layout has nginx on the same host. Deployments
+	// with a separate/container proxy must opt in explicitly after ensuring that
+	// proxy overwrites, rather than appends, the normalized client header.
+	return ip.IsLoopback()
 }
 
-func firstForwardedFor(value string) string {
-	for _, part := range strings.Split(value, ",") {
-		if ip := strings.TrimSpace(part); ip != "" {
+func lastForwardedFor(value string) string {
+	parts := strings.Split(value, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		if ip := strings.TrimSpace(parts[i]); ip != "" {
 			return ip
 		}
 	}

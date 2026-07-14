@@ -24,8 +24,8 @@ func TestHandlerMintsValidEphemeralCredential(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("Cache-Control = %q, want no-store", cc)
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store, no-transform" {
+		t.Errorf("Cache-Control = %q, want no-store, no-transform", cc)
 	}
 
 	var body struct {

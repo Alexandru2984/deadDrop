@@ -16,6 +16,10 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		// Code and API responses must arrive byte-for-byte. Besides preventing
+		// sensitive API caching, no-transform stops CDN bot products from
+		// injecting JavaScript into HTML and invalidating the published hashes.
+		h.Set("Cache-Control", "no-store, no-transform")
 		h.Set("Permissions-Policy",
 			"camera=(self), microphone=(self), display-capture=(), geolocation=(), "+
 				"browsing-topics=(), interest-cohort=(), payment=(), usb=(), "+

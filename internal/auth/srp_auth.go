@@ -821,6 +821,10 @@ func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 
 // GenerateInvite issues a new invite code. Protected by the ADMIN_TOKEN env secret.
 func (h *Handler) GenerateInvite(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	admin := strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))
 	if admin == "" || !subtleEqual(r.Header.Get("X-Admin-Token"), admin) {
 		jsonErr(w, "forbidden", http.StatusForbidden)
@@ -858,7 +862,8 @@ func (h *Handler) setCookieSession(w http.ResponseWriter, r *http.Request, usern
 func (h *Handler) clearCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "dd_session", Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: isSecureRequest(r), SameSite: http.SameSiteStrictMode,
+		Expires: time.Unix(1, 0), HttpOnly: true,
+		Secure: middleware.IsSecureRequest(r), SameSite: http.SameSiteStrictMode,
 	})
 }
 

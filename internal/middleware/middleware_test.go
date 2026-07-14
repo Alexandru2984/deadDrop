@@ -94,6 +94,7 @@ func TestSecurityHeaders(t *testing.T) {
 		"X-Frame-Options":           "DENY",
 		"Referrer-Policy":           "no-referrer",
 		"Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
+		"Cache-Control":             "no-store, no-transform",
 	}
 	for k, v := range expected {
 		if got := w.Header().Get(k); got != v {
@@ -119,20 +120,24 @@ func TestSecurityHeaders(t *testing.T) {
 
 func TestExtractIP(t *testing.T) {
 	tests := []struct {
-		name     string
-		xReal    string
-		xFwd     string
-		remote   string
-		expected string
+		name      string
+		xReal     string
+		xFwd      string
+		cfConnect string
+		remote    string
+		expected  string
 	}{
-		{"X-Real-IP", "10.0.0.1", "", "127.0.0.1:1234", "10.0.0.1"},
-		{"X-Forwarded-For", "", "10.0.0.2, 10.0.0.3", "127.0.0.1:1234", "10.0.0.2"},
-		{"RemoteAddr", "", "", "192.168.1.1:5678", "192.168.1.1"},
-		{"Untrusted proxy header ignored", "", "10.0.0.2", "8.8.8.8:5678", "8.8.8.8"},
+		{"normalized X-Real-IP", "10.0.0.1", "", "203.0.113.99", "127.0.0.1:1234", "10.0.0.1"},
+		{"right-most X-Forwarded-For", "", "198.51.100.10, 10.0.0.3", "", "127.0.0.1:1234", "10.0.0.3"},
+		{"CF header never trusted directly", "", "", "203.0.113.99", "127.0.0.1:1234", "127.0.0.1"},
+		{"RemoteAddr", "", "", "", "192.168.1.1:5678", "192.168.1.1"},
+		{"Untrusted public proxy header ignored", "", "10.0.0.2", "", "8.8.8.8:5678", "8.8.8.8"},
+		{"Private peer is not implicitly trusted", "10.0.0.2", "", "", "192.168.1.7:5678", "192.168.1.7"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("TRUST_PROXY_HEADERS", "")
 			req := httptest.NewRequest(http.MethodGet, "/", nil)
 			req.RemoteAddr = tt.remote
 			if tt.xReal != "" {
@@ -140,6 +145,9 @@ func TestExtractIP(t *testing.T) {
 			}
 			if tt.xFwd != "" {
 				req.Header.Set("X-Forwarded-For", tt.xFwd)
+			}
+			if tt.cfConnect != "" {
+				req.Header.Set("CF-Connecting-IP", tt.cfConnect)
 			}
 			got := ExtractIP(req)
 			if got != tt.expected {
@@ -177,5 +185,39 @@ func TestRequireSameOrigin(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("handler should be called for same-origin request")
+	}
+
+	// Same host over a different scheme is cross-origin and must not pass.
+	called = false
+	req = httptest.NewRequest(http.MethodPost, "https://dead.micutu.com/api/logout", nil)
+	req.Header.Set("Origin", "http://dead.micutu.com")
+	w = httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != http.StatusForbidden || called {
+		t.Fatal("scheme-mismatched origin must be rejected")
+	}
+
+	// nginx terminates TLS and supplies the external scheme from loopback.
+	called = false
+	req = httptest.NewRequest(http.MethodPost, "http://dead.micutu.com/api/logout", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Origin", "https://dead.micutu.com")
+	w = httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != http.StatusNoContent || !called {
+		t.Fatal("trusted proxy HTTPS origin should be accepted")
+	}
+
+	// A public client cannot spoof the forwarded scheme.
+	called = false
+	req = httptest.NewRequest(http.MethodPost, "http://dead.micutu.com/api/logout", nil)
+	req.RemoteAddr = "203.0.113.10:1234"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Origin", "https://dead.micutu.com")
+	w = httptest.NewRecorder()
+	handler(w, req)
+	if w.Code != http.StatusForbidden || called {
+		t.Fatal("untrusted forwarded scheme must be ignored")
 	}
 }

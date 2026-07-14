@@ -46,26 +46,32 @@ func sameOrigin(r *http.Request) bool {
 
 func originHostMatches(r *http.Request, raw string) bool {
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, requestScheme(r)) {
 		return false
 	}
 	originHost := strings.ToLower(u.Host)
-	for _, h := range requestHosts(r) {
-		if originHost == strings.ToLower(h) {
-			return true
-		}
-	}
-	return false
+	return originHost == strings.ToLower(r.Host)
 }
 
-func requestHosts(r *http.Request) []string {
-	hosts := []string{r.Host}
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" && isTrustedProxyRequest(r) {
-		for _, part := range strings.Split(h, ",") {
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
-				hosts = append(hosts, trimmed)
-			}
+// IsSecureRequest reports whether the browser-facing request used HTTPS. A
+// forwarded scheme is accepted only from the same trusted proxy boundary used
+// for client IP extraction.
+func IsSecureRequest(r *http.Request) bool {
+	return requestScheme(r) == "https"
+}
+
+func requestScheme(r *http.Request) string {
+	if r.TLS != nil {
+		return "https"
+	}
+	if isTrustedProxyRequest(r) {
+		proto := strings.TrimSpace(strings.Split(r.Header.Get("X-Forwarded-Proto"), ",")[0])
+		if proto == "https" || proto == "http" {
+			return proto
 		}
 	}
-	return hosts
+	return "http"
 }

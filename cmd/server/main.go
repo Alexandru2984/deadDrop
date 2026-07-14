@@ -192,7 +192,7 @@ func main() {
 	mux.HandleFunc("/api/account/delete", authRL.Wrap(middleware.RequireSameOrigin(authH.DeleteAccount)))
 
 	// Admin: issue single-use invite codes (X-Admin-Token header).
-	mux.HandleFunc("/api/admin/invite", authRL.Wrap(authH.GenerateInvite))
+	mux.HandleFunc("/api/admin/invite", authRL.Wrap(middleware.RequireSameOrigin(authH.GenerateInvite)))
 
 	// Room code generation (server-side for stronger entropy, rate limited)
 	mux.HandleFunc("/api/room", authRL.Wrap(middleware.RequireSameOrigin(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
@@ -271,7 +271,6 @@ func main() {
 func allowedOrigins(port int) []string {
 	origins := []string{
 		"https://dead.micutu.com",
-		"http://dead.micutu.com",
 		fmt.Sprintf("http://localhost:%d", port),
 		fmt.Sprintf("http://127.0.0.1:%d", port),
 	}

@@ -51,10 +51,47 @@ func TestRegisterAndLogin(t *testing.T) {
 	for _, c := range cookies {
 		if c.Name == "dd_session" && c.Value != "" {
 			found = true
+			if c.SameSite != http.SameSiteStrictMode {
+				t.Errorf("session SameSite = %v, want Strict", c.SameSite)
+			}
 		}
 	}
 	if !found {
 		t.Fatal("expected dd_session cookie")
+	}
+}
+
+func TestCookieSecureFlagTrustsOnlyLocalProxy(t *testing.T) {
+	h := newTestHandler(t)
+
+	local := httptest.NewRequest(http.MethodGet, "http://dead.micutu.com/", nil)
+	local.RemoteAddr = "127.0.0.1:1234"
+	local.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	h.setCookie(w, local, "test-token")
+	if got := w.Result().Cookies()[0]; !got.Secure {
+		t.Fatal("cookie behind the local TLS proxy must be Secure")
+	}
+
+	public := httptest.NewRequest(http.MethodGet, "http://dead.micutu.com/", nil)
+	public.RemoteAddr = "203.0.113.10:1234"
+	public.Header.Set("X-Forwarded-Proto", "https")
+	w = httptest.NewRecorder()
+	h.setCookie(w, public, "test-token")
+	if got := w.Result().Cookies()[0]; got.Secure {
+		t.Fatal("an untrusted client must not control the cookie Secure decision")
+	}
+}
+
+func TestGenerateInviteRequiresPost(t *testing.T) {
+	t.Setenv("ADMIN_TOKEN", "test-admin-token-with-enough-entropy")
+	h := newTestHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/invite", nil)
+	req.Header.Set("X-Admin-Token", "test-admin-token-with-enough-entropy")
+	w := httptest.NewRecorder()
+	h.GenerateInvite(w, req)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET invite: got %d, want 405", w.Code)
 	}
 }
 
