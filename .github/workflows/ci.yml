@@ -44,6 +44,8 @@ jobs:
         run: node test/fingerprint.selftest.mjs
       - name: STUN/TURN response validation
         run: node test/config.selftest.mjs
+      - name: Strict integrity manifest parser
+        run: node test/manifest.selftest.mjs
       - name: Integrity manifest matches the served code
         run: node scripts/gen-integrity.mjs --check
 

@@ -6,12 +6,12 @@
  *   node scripts/gen-integrity.mjs --check   # exit 1 if anything would change (CI)
  *
  * Why this exists: Dead Drop is a website, so every visit re-downloads the
- * JavaScript that does the encryption from the server. A visitor can't otherwise
- * tell whether the served code matches the open-source repo. This writes a
- * canonical SHA-256 of every served asset into web/SHA256SUMS, which is committed
- * to public git — so the served bundle can be checked, independently, against
- * GitHub (and by the in-app /verify page). It also stamps SRI hashes onto the
- * HTML entry points so the browser itself refuses a tampered stylesheet/entry.
+ * JavaScript that does the encryption from the server. This records a canonical
+ * SHA-256 for every served asset in web/SHA256SUMS, which is committed to git.
+ * An independently obtained manifest can expose deployment drift; the in-page
+ * verifier can only compare fresh same-origin responses and cannot attest to
+ * bytes already executing. SRI also makes the browser reject a mismatched
+ * stylesheet or entry script relative to the HTML response that named it.
  *
  * Run it before every deploy (scripts/deploy.sh does). CI runs --check so the
  * committed hashes can never drift from the code they describe.

@@ -1,9 +1,10 @@
 /**
  * Dead Drop — in-page code verifier.
  *
- * Fetches the server's /SHA256SUMS manifest, then re-hashes every asset the
- * server just sent (with the browser's own SubtleCrypto) and compares. This
- * proves the delivered files agree with the manifest THIS server gave you.
+ * Fetches the server's /SHA256SUMS manifest, then freshly fetches and hashes
+ * every listed asset (with the browser's own SubtleCrypto). This detects drift
+ * between fresh responses and the manifest THIS server gave you. It cannot
+ * attest to the bytes that the browser already parsed or executed in this tab.
  *
  * It deliberately does NOT reach out to GitHub: the page's CSP is connect-src
  * 'self', and more importantly, a page fetching its own "proof" from a source
@@ -12,9 +13,12 @@
  * design. See verify.html.
  */
 
+import { parseIntegrityManifest } from './manifest.js';
+
 const GH_REPO = 'Alexandru2984/deadDrop';
 const GH_BRANCH = 'main';
 const MANIFEST_PATH = 'web/SHA256SUMS';
+const MAX_MANIFEST_BYTES = 256 * 1024;
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,15 +27,6 @@ const toHex = (buf) =>
 
 async function sha256Hex(buf) {
   return toHex(await crypto.subtle.digest('SHA-256', buf));
-}
-
-function parseManifest(text) {
-  const out = [];
-  for (const line of text.split('\n')) {
-    const m = /^([0-9a-f]{64})\s+(.+)$/.exec(line.trim());
-    if (m) out.push({ hash: m[1], path: m[2] });
-  }
-  return out;
 }
 
 function row(path, state, detail) {
@@ -61,10 +56,13 @@ async function run() {
   summary.className = 'verify-summary';
 
   let manifestText;
+  let manifestBytes;
   try {
-    const res = await fetch('/SHA256SUMS', { cache: 'no-store' });
+    const res = await fetch('/SHA256SUMS', { cache: 'no-store', redirect: 'error' });
     if (!res.ok) throw new Error(String(res.status));
-    manifestText = await res.text();
+    manifestBytes = await res.arrayBuffer();
+    if (manifestBytes.byteLength > MAX_MANIFEST_BYTES) throw new Error('manifest is too large');
+    manifestText = new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes);
   } catch (e) {
     summary.textContent = `Could not load /SHA256SUMS (${e.message}).`;
     summary.className = 'verify-summary verify-bad';
@@ -72,10 +70,17 @@ async function run() {
   }
 
   // Manifest fingerprint — the one short value to compare against GitHub.
-  const fp = await sha256Hex(new TextEncoder().encode(manifestText));
+  const fp = await sha256Hex(manifestBytes);
   $('fingerprint').textContent = 'sha256:' + fp;
 
-  const files = parseManifest(manifestText);
+  let files;
+  try {
+    files = parseIntegrityManifest(manifestText);
+  } catch (e) {
+    summary.textContent = `Invalid /SHA256SUMS (${e.message}).`;
+    summary.className = 'verify-summary verify-bad';
+    return;
+  }
   summary.textContent = `Checking ${files.length} files…`;
 
   let ok = 0;
@@ -85,7 +90,7 @@ async function run() {
     results.append(pending);
     let got;
     try {
-      const res = await fetch('/' + path, { cache: 'no-store' });
+      const res = await fetch('/' + path, { cache: 'no-store', redirect: 'error' });
       if (!res.ok) throw new Error(String(res.status));
       got = await sha256Hex(await res.arrayBuffer());
     } catch (e) {
@@ -103,7 +108,7 @@ async function run() {
   }
 
   if (bad === 0) {
-    summary.textContent = `✓ All ${ok} files match the served manifest.`;
+    summary.textContent = `✓ All ${ok} fresh responses match the served manifest.`;
     summary.className = 'verify-summary verify-ok';
   } else {
     summary.textContent = `✗ ${bad} of ${files.length} files DO NOT match — do not trust this page.`;

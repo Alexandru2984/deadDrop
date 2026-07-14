@@ -10,8 +10,9 @@
  * Rekeys mix a fresh ephemeral ECDH share with the evolving post-quantum root.
  *
  * ECDH/HKDF/AES use the Web Crypto API; ML-KEM-768 is vendored same-origin.
- * Keys are never persisted. Private ECDH keys are non-extractable and references
- * to obsolete material are dropped as soon as the protocol no longer needs them.
+ * The application does not persist keys. Private ECDH keys are non-extractable
+ * and references to obsolete material are dropped when no longer needed; the
+ * browser/OS still controls physical memory and may retain copies.
  */
 
 import { bufToB64, b64ToBuf } from './util.js';

@@ -17,12 +17,15 @@
     <a class="back" href="/">← Back to Dead Drop</a>
     <h1>VERIFY THE CODE</h1>
     <p class="lead">Dead Drop is a website, so your browser downloads the encryption code from this
-      server on every visit. This page lets you check that what you received matches the published,
-      open-source code — and is honest about the limits of doing so from inside the page itself.</p>
+      server on every visit. This page can compare freshly fetched responses with a manifest and
+      helps you compare that manifest independently — while being explicit that an in-page check
+      cannot prove the integrity of the code already executing.</p>
 
-    <h2>1. Does the served code match its manifest?</h2>
-    <p>Every file this server sent is hashed in your browser and compared to
-      <code>/SHA256SUMS</code>, the manifest committed to the public repository.</p>
+    <h2>1. Do fresh responses match the served manifest?</h2>
+    <p>Every path listed in <code>/SHA256SUMS</code> is fetched again without using the HTTP cache,
+      hashed in your browser, and compared with the manifest this origin serves. This detects drift
+      and many deployment mistakes. It does not prove that the freshly fetched bytes are identical
+      to the bytes already parsed or executed in this tab.</p>
     <div class="verify-actions">
       <button id="run" class="btn btn-sm">Re-run check</button>
       <span id="summary" class="verify-summary" aria-live="polite"></span>
@@ -30,21 +33,24 @@
     <div id="results" class="verify-list"></div>
 
     <h2>2. Does that manifest match the open-source repository?</h2>
-    <p>Step 1 only proves the files agree with the manifest <em>this same server</em> handed you —
+    <p>Step 1 only shows that fresh responses agree with the manifest <em>this same server</em> handed you —
       a malicious server could serve a tampered bundle <em>and</em> a matching manifest <em>and</em> a
-      doctored version of this very page. The check that a compromised server cannot fake is comparing
-      the manifest against an <strong>independent</strong> copy — the public GitHub repo.</p>
+      doctored version of this very page. A separately obtained repository copy can expose that only
+      when you reach it through a path the same adversary cannot also control. Prefer a reviewed,
+      pinned commit or another authenticated copy you selected independently.</p>
     <p>This server's manifest fingerprint (SHA-256 of <code>/SHA256SUMS</code>):</p>
     <div class="onion" id="fingerprint">…</div>
-    <p class="note">Compare it with the canonical one from GitHub. From a terminal:</p>
+    <p class="note">The command and link below are conveniences, not trust anchors: this page could
+      change both. Obtain the repository location or expected commit independently when the server is
+      in your threat model. From a terminal:</p>
     <pre class="verify-cmd" id="cmd"></pre>
-    <p><a id="gh-link" href="#" rel="noopener">View the canonical SHA256SUMS on GitHub →</a></p>
+    <p><a id="gh-link" href="#" rel="noopener">View the published SHA256SUMS on GitHub →</a></p>
 
     <h2>3. The honest ceiling</h2>
     <ul>
       <li><strong>Reduce who you trust:</strong> load Dead Drop over its
-        <a href="/about.html">Tor onion address</a> to cut Cloudflare out of the delivery path — then
-        only the operator serves the code, not a TLS-terminating middlebox.</li>
+        <a href="/about.html">Tor onion address</a> to remove Cloudflare from the delivery path. You
+        still trust the service operator, your endpoint, and the code source you compare against.</li>
       <li><strong>A website can't fully win this.</strong> If your adversary is the operator (or anyone
         who can coerce them), no in-page check is enough — the page is served by the same party.
         The real fix is code that is installed once and updated through a signed, reviewed channel:
@@ -54,6 +60,6 @@
 
     <a class="back" href="/">← Back to Dead Drop</a>
   </main>
-  <script type="module" src="js/verify.js" integrity="sha256-wB7Cml6CBjVw+BIxRihvlq0KbaIIvzk7QIBUztRSGgg="></script>
+  <script type="module" src="js/verify.js" integrity="sha256-e7EGRoMR86GtPMg9/f7PZLHe0OxBaAhbz35SUwz70RA="></script>
 </body>
 </html>

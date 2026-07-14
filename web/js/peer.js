@@ -3,15 +3,15 @@
  *
  * Manages a single WebRTC peer connection with a data channel.
  * The signaling object must expose a `send(msg)` method.
- * Key exchange happens over the data channel (not the signaling server)
- * so the server never sees encryption keys.
+ * Key exchange happens over the data channel (not the signaling API), so the
+ * intended protocol does not transmit application encryption keys to the server.
  */
 
 import { Handshake } from './handshake.js';
 import { PROTOCOL_VERSION } from './crypto.js';
 
 const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
-const REKEY_INTERVAL_MS = 10 * 60 * 1000; // DH ratchet every 10 min for forward secrecy
+const REKEY_INTERVAL_MS = 10 * 60 * 1000; // periodic DH key evolution
 const REKEY_TIMEOUT_MS = 30 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 30 * 1000;   // fail an unfinished handshake instead of hanging forever
 const TRAFFIC_WINDOW_MS = 10 * 1000;
@@ -31,8 +31,8 @@ export class PeerConnection {
     this.onMessage = onMessage;
     this.onStateChange = onStateChange;
     this.iceServers = Array.isArray(iceConfig.iceServers) ? iceConfig.iceServers : [];
-    // relayOnly forces all traffic through the TURN relay so the peer never learns
-    // our IP (and we never learn theirs) — at the cost of routing via the server.
+    // relayOnly exposes TURN relay candidates to the peer instead of endpoint
+    // addresses. The TURN/VPS operator still sees both endpoints and timing.
     this.relayOnly = !!iceConfig.relayOnly;
     this.pc = null;
     this.dc = null;            // data channel
@@ -125,8 +125,8 @@ export class PeerConnection {
   /**
    * Send an app-level JS object over the data channel. EVERY message is sealed
    * into an encrypted, replay-protected, length-padded envelope — typing
-   * notices, read receipts, deletes and call signaling included — so even a
-   * DTLS-terminating man-in-the-middle sees only uniform ciphertext blobs.
+   * notices, read receipts, deletes and call signaling included. Padding hides
+   * exact length within a bucket, but not timing, counts, or bucket changes.
    * Sends are queued to preserve ordering across async encryption.
    */
   send(obj) {
@@ -226,8 +226,8 @@ export class PeerConnection {
   /* ── Private ── */
 
   _newRTCPeerConnection() {
-    // ICE servers come from the server's /api/turn (self-hosted coturn) — no
-    // third-party STUN, so peer IPs are never disclosed to Google et al.
+    // ICE servers come from the bounded /api/turn response. The documented
+    // deployment uses self-hosted coturn rather than a public STUN provider.
     const pc = new RTCPeerConnection({
       iceServers: this.iceServers,
       iceTransportPolicy: this.relayOnly ? 'relay' : 'all',
@@ -443,7 +443,7 @@ export class PeerConnection {
     }
   }
 
-  /* ── DH ratchet (forward secrecy) — only the initiator drives the schedule ── */
+  /* ── Periodic DH key evolution — only the initiator drives the schedule ── */
 
   _scheduleRekey() {
     clearTimeout(this._rekeyTimer);

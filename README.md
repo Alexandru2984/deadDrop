@@ -1,205 +1,182 @@
 # 💀 Dead Drop
 
-Anonymous, end-to-end encrypted, self-destructing peer-to-peer chat.
+Browser-based, peer-to-peer chat with mutually verified end-to-end encryption.
+Conversation content is not stored by the server. Dead Drop is pseudonymous, not
+anonymous by default: the service and its network providers can observe metadata,
+and deletion from another person's device can never be guaranteed.
 
-Invite-only handles (no email, zero-knowledge login). No message storage. No
-third-party services. No trace left behind.
+## Security model at a glance
+
+Dead Drop protects message/file content against passive network observers and the
+signaling/TURN service when all of the following are true:
+
+- both people received the intended client code on uncompromised browsers;
+- both confirm the same safety code over a separate trusted channel (or scan the
+  full QR token); and
+- neither endpoint is compromised while plaintext or keys are in use.
+
+It does not hide account, IP, room-membership, timing, or traffic-volume metadata
+from every party. It also cannot stop a peer from copying plaintext or a server
+from delivering malicious JavaScript on a future visit. This custom protocol has
+extensive automated tests, but has not had an independent professional
+cryptographic audit.
 
 ## Architecture
 
-```
-┌──────────┐   WebSocket    ┌─────────────┐   WebSocket    ┌──────────┐
-│  Peer A  │ ◄────────────► │  Signaling  │ ◄────────────► │  Peer B  │
-│ (Browser)│                │   Server    │                │ (Browser)│
-└────┬─────┘                └─────────────┘                └────┬─────┘
-     │                                                          │
-     │            WebRTC Data Channel (direct P2P)              │
-     │◄────────────────────────────────────────────────────────►│
-     │                                                          │
-     │  1. Hybrid key exchange: ECDH P-256 + ML-KEM-768 (PQ)    │
-     │  2. AES-256-GCM sealed, length-padded envelopes          │
-     │  3. TTL + burn-after-reading self-destruct               │
-     └──────────────────────────────────────────────────────────┘
+```text
+┌──────────┐  authenticated WebSocket  ┌─────────────┐  authenticated WebSocket  ┌──────────┐
+│ Browser A│ ◄────────────────────────► │ Signaling   │ ◄────────────────────────► │ Browser B│
+└────┬─────┘                            │ server      │                            └────┬─────┘
+     │                                  └─────────────┘                                 │
+     │                  WebRTC (direct, or through self-hosted TURN)                   │
+     │◄────────────────────────────────────────────────────────────────────────────────►│
+     │  hybrid P-256 + ML-KEM-768 handshake → mutually checked safety code             │
+     │  AES-256-GCM application envelopes; DTLS-SRTP media bound to that session       │
+     └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**The signaling server only relays WebRTC connection data.** It never sees encryption keys or message content.
+The Go server relays bounded SDP/ICE signaling; it does not receive application
+encryption keys or plaintext. At runtime it can nevertheless associate an
+authenticated handle/session with a source IP, room code, peer ID, other room
+members, timing, and the SDP/ICE candidates it relays. With TURN, the VPS also
+sees both clients' network endpoints and traffic volume.
 
-### Layers
+The browser bundle is embedded in the Go binary. Loose files under `web/` are
+not read at runtime, preventing an accidental or unauthorized live file edit from
+changing the client served by an already-built binary.
 
-| Layer | Location | Purpose |
-|---|---|---|
-| **Networking** | `internal/signaling/` | Go WebSocket hub, room management, peer relay |
-| **P2P** | `web/js/peer.js` | WebRTC data channel setup and management |
-| **Encryption** | `web/js/crypto.js` | ECDH key exchange + AES-256-GCM |
-| **Messages** | `web/js/messages.js` | TTL timers, burn-after-reading, bilateral deletion |
-| **App** | `web/js/app.js` | Orchestrates all layers, manages UI |
+## Protocol and implementation
 
-## Quick Start
+### Pairwise content encryption
 
-### Prerequisites
+- Protocol v4 combines ephemeral P-256 ECDH and ML-KEM-768, then uses
+  HKDF-SHA256 to derive independent AES-256-GCM keys for each direction and
+  content class.
+- A commit/reveal transcript, key confirmation, protocol/epoch AAD, strict field
+  lengths, and per-epoch replay tracking bind and authenticate the handshake.
+- Application traffic remains locked until both users confirm the safety code.
+  The six emoji encode 36 bits; QR verification compares the full 128-bit token.
+- Rooms contain at most six people and form a mesh of independent pairwise
+  sessions. There is no group key; each peer must be verified separately.
+- The initiator performs an authenticated fresh-ECDH rekey about every ten
+  minutes. The current and two previous epochs are retained for in-flight data.
+  This gives limited key-evolution/forward-secrecy properties, not a formally
+  verified Double Ratchet guarantee. JavaScript can drop key references but
+  cannot prove physical memory erasure by the browser or OS.
+- ML-KEM is intended to resist harvest-now/decrypt-later attacks if the primitive,
+  vendored implementation, browser runtime, and hybrid construction remain sound;
+  “post-quantum” is a design goal, not a promise against future cryptanalysis.
 
-- **Go 1.21+**
+### Calls
 
-### Build & Run
+Voice/video uses WebRTC DTLS-SRTP rather than the application AES envelope. The
+exact DTLS fingerprint set is exchanged over the encrypted session and a call is
+unlocked only after mutual safety-code verification. A mismatch closes the pair.
+
+### Padding and cover packets
+
+Application envelopes are padded to fixed buckets, which hides exact plaintext
+length within a bucket and makes some short control messages resemble short chat
+messages. It does not hide packet timing, counts, bucket transitions, large files,
+calls, or total volume. Optional cover packets are occasional randomized decoys
+(roughly every 4–16 seconds), not constant-rate traffic shaping.
+
+## Data and privacy
+
+- The server persists handles, SRP salts/verifiers/KDF labels, optional duress
+  verifiers, invites, and one local anti-enumeration secret. It does not persist
+  rooms, peer IDs, chat messages, files, calls, or session cookies across restart.
+- Messages/files exist in browser memory and may be downloaded. TTL, burn, and
+  bilateral-delete notices are cooperative UI behavior; a peer, extension,
+  modified client, screenshot, crash dump, or OS can retain plaintext.
+- The panic action clears this tab's in-memory state, closes connections, and
+  logs out on a best-effort basis. It cannot wipe the peer, infrastructure logs,
+  browser/OS forensic traces, or anything already copied.
+- “Relay-only” hides each endpoint's network address from the other peer when
+  TURN works. The TURN/VPS operator still sees both endpoint IPs and timing.
+- The Go application deliberately omits handles, room codes, peer IDs, and
+  message content from its logs. nginx, systemd/journald, Cloudflare, coturn, the
+  VPS host, and upstream networks may still record IP/request/traffic metadata.
+- There are no third-party browser assets, analytics, or public STUN services.
+  The clearnet production path does use Cloudflare; the onion path avoids
+  Cloudflare for page/API/signaling delivery, but WebRTC/TURN has separate paths.
+
+### Authentication and duress
+
+New accounts use SRP-6a with PBKDF2-SHA256 (currently 600,000 iterations), so the
+password is not sent during normal authentication. A stolen verifier still permits
+offline password guesses; PBKDF2 raises their cost but does not make weak passwords
+safe. Legacy bcrypt accounts send their password once to the Go origin (through
+the TLS proxy/Cloudflare on clearnet) and are upgraded to SRP after that login.
+
+The optional duress password gives a normal-looking decoy session to the person
+using the browser. The server necessarily knows whether a successful proof opened
+a primary or duress session, and active coercion/forensics can defeat the illusion;
+this is not a cryptographically deniable-authentication protocol.
+
+## Build and local test
+
+Prerequisites: Go 1.25+ and Node 22+ for the browser self-tests.
 
 ```bash
-# Build
-cd /path/to/deaddrop
 go build -o deaddrop ./cmd/server/
 
-# Run (defaults to port 8088; hunts for a free port only when PORT is unset)
-./deaddrop
-
-# Or specify a port
-PORT=9000 ./deaddrop
+# Development only: local WebSocket origins and open registration.
+ALLOW_LOCAL_ORIGINS=1 OPEN_REGISTRATION=1 ./deaddrop
 ```
 
-### Two-Peer Chat (Local Test)
+Open two tabs at the displayed loopback URL, register test handles, create/join a
+room, compare the safety code over a separate trusted path, and have both tabs
+confirm it. Messaging, files, and calls stay locked until mutual confirmation.
 
-1. Start the server:
-   ```bash
-   ./deaddrop
-   ```
-2. Open **two browser tabs** at the URL shown (e.g., `http://localhost:8088`)
-3. In tab 1: click **Create Room** → copy the room code
-4. In other tabs (up to 5 more): paste the code → click **Join**
-5. Once the status shows 🔒 **End-to-end encrypted**, start chatting. In a group,
-   verify each peer's safety code row separately.
+## Project structure
 
-## Features
-
-### Encryption
-- **Hybrid post-quantum key exchange**: ephemeral **ECDH P-256 + ML-KEM-768**
-  (FIPS 203) — breaking a recorded session requires breaking both primitives
-- **AES-256-GCM** symmetric encryption for all messages
-- **Everything is sealed**: typing notices, read receipts, deletes, call
-  signaling and file chunks travel in encrypted envelopes **padded to size
-  buckets**, so an observer can't tell a typing notice from a short message
-- Keys exchanged over WebRTC data channel (signaling server never sees them)
-- Nonce-based replay attack protection
-- All key material destroyed on disconnect
-
-### Group chat (mesh)
-- Rooms hold **up to 6 people**. There is **no group key** — the room is a full
-  mesh of **pairwise** end-to-end sessions, each with its own hybrid handshake,
-  safety code and ratchet. A member only ever holds key material for their own
-  pairs, and every message is encrypted separately for each recipient.
-- The safety-code bar shows **one row per peer** — verify each independently
-  (emoji or QR). Peers are identified by an ephemeral ID label, not a username
-  (the signaling server never learns who is who).
-- Voice/video **calls stay 1:1** — offered only in a two-person room.
-
-### Self-Destruct
-- **TTL timer**: messages auto-delete after 10s / 30s / 1min / 5min
-- **Burn after reading**: message destroyed 2s after the peer reads it
-- Deletion is **bilateral** — every peer's copy is destroyed
-- Burn animation on destruction
-
-### Privacy
-- No accounts, no login
-- Random peer ID generated per session
-- No message persistence (in-memory only)
-- No logs of message content
-- Minimal metadata (room code + peer ID, both ephemeral)
-- **Cover traffic** (opt-in 🕶️): each session emits constant decoy packets,
-  padded to the same size as real messages, so a network observer — or the
-  TURN relay in "max anonymity" mode — can't tell when, or whether, you're
-  actually chatting
-
-## Project Structure
-
-```
+```text
 deaddrop/
-├── cmd/server/main.go          # Entry point + port detection
-├── internal/signaling/
-│   ├── hub.go                  # Channel-based room manager
-│   ├── peer.go                 # WebSocket peer + message relay
-│   └── signaling_test.go       # Integration tests
-├── web/
-│   ├── index.html              # UI
-│   ├── css/style.css           # Dark minimal theme
-│   └── js/
-│       ├── app.js              # Main orchestrator
-│       ├── crypto.js           # Encryption layer
-│       ├── peer.js             # WebRTC P2P layer
-│       ├── messages.js         # Self-destruct lifecycle
-│       └── util.js             # Shared helpers
-├── go.mod
-├── go.sum
-└── .gitignore
+├── assets.go                    # embeds web/ into the server binary
+├── cmd/server/main.go           # server, API routes, runtime validation
+├── internal/auth/               # SRP, sessions, credentials, invites
+├── internal/signaling/          # bounded WebSocket room/signaling relay
+├── internal/srp/                # server-side SRP math
+├── internal/strictjson/         # unambiguous protocol JSON decoder
+├── internal/turn/               # short-lived coturn REST credentials
+├── web/js/crypto.js             # pairwise key schedule and AEAD
+├── web/js/handshake.js          # authenticated hybrid handshake
+├── web/js/peer.js               # WebRTC, media binding, rekey transport
+└── scripts/deploy.sh            # fail-closed test/build/preflight/rollback
 ```
 
-## Security Notes
+## Verifying a build
 
-- ✅ End-to-end encrypted: AES-256-GCM over a hybrid **ECDH-P256 + ML-KEM-768**
-  exchange → HKDF-SHA256 — post-quantum "harvest now, decrypt later" resistant
-- ✅ Authenticated key exchange (ZRTP-style commit-reveal) + key confirmation +
-  a 6-emoji safety code — verifiable by a **full 128-bit QR scan** — to detect MitM
-- ✅ Forward secrecy: the session DH-ratchets every ~10 min (PQ root mixed into
-  every epoch) and destroys old keys
-- ✅ Traffic-analysis resistance on the channel: all control traffic is encrypted
-  and padded to fixed buckets
-- ✅ Zero-knowledge login (SRP-6a) — the password never reaches the server or Cloudflare,
-  and is stretched with PBKDF2-SHA256 (600k iterations) so even a stolen verifier
-  database resists offline cracking
-- ✅ Self-hosted STUN/TURN (coturn) with ephemeral credentials — no third-party (Google) STUN
-- ✅ "Max anonymity" relay-only mode hides peer IPs from each other
-- ✅ Reachable as a Tor v3 onion service (Cloudflare-free, no DNS leak)
-- ✅ Invite-only registration, login lockout keyed by account+IP (no lockout DoS),
-  strict same-origin + CSP without any 'unsafe-inline'
-- ✅ Optional duress (decoy) password; nothing in the API or UI betrays a decoy session
-- ✅ No third-party analytics, no message storage, PII-free server logs
-- ✅ Build-locked delivery: the complete browser client is embedded in the Go
-  binary, and every asset is recorded in committed `web/SHA256SUMS`; live disk
-  edits cannot change what an already-built server serves
-
-> **Honest limitation.** Dead Drop is a *website*, so your browser re-downloads
-> the encryption code from the server on every visit. A compromised or coerced
-> server could serve backdoored JavaScript — the fundamental ceiling of any
-> browser-based E2EE. The verification below shrinks that trust but cannot
-> eliminate it; for the strongest guarantees, load over the Tor onion and use a
-> pinned extension / native client. This is stated plainly rather than hidden.
-
-See the in-app **Security & Privacy** page (`/about.html`) for the full, honest
-threat model — including what Dead Drop does **not** protect against.
-
-### Verifying the code
+`web/SHA256SUMS` records every served browser asset and entry scripts/styles use
+SRI. After changing `web/`, regenerate and review the result:
 
 ```bash
-# Developer step after changing web assets; review and commit the result:
 node scripts/gen-integrity.mjs
-
-# Deploy/CI step is read-only and fails if anything drifted:
 node scripts/gen-integrity.mjs --check
-
-# Confirm the live server serves exactly the open-source bundle:
-diff <(curl -s https://dead.micutu.com/SHA256SUMS) \
-     <(curl -s https://raw.githubusercontent.com/Alexandru2984/deadDrop/main/web/SHA256SUMS) \
-  && echo "MATCHES the repo"
 ```
 
-Or just open **`/verify.html`** in the browser — it hashes every asset it
-received and compares against the served manifest, then shows how to check that
-manifest against GitHub (a source the server can't forge).
+The in-app `/verify.html` page can compare the served manifest with the public
+repository. An in-page check cannot prove the integrity of code already executing,
+cannot detect a targeted response by itself, and cannot make a compromised server
+trustworthy. Independent retrieval/pinning or an installed, signed client is
+required against that threat.
 
-## Testing
+## Tests
 
 ```bash
-go test ./...                      # server (incl. SRP JS↔Go interop vectors)
-node test/crypto.selftest.mjs      # hybrid handshake + sealing + ratchet
-node test/lifecycle.selftest.mjs   # bounded, peer-scoped message/file lifecycle
-node test/mlkem.selftest.mjs       # vendored ML-KEM-768 sanity
-node test/srp.selftest.mjs         # SRP client↔server (legacy + PBKDF2 kdf)
-node test/fingerprint.selftest.mjs # DTLS media-path fingerprint check
-node test/config.selftest.mjs      # bounded STUN/TURN browser configuration
-node test/srp.e2e.mjs              # live SRP against a running server
+go vet ./...
+go test -race ./...
+node test/crypto.selftest.mjs
+node test/lifecycle.selftest.mjs
+node test/mlkem.selftest.mjs
+node test/srp.selftest.mjs
+node test/fingerprint.selftest.mjs
+node test/config.selftest.mjs
+node test/manifest.selftest.mjs
+node scripts/gen-integrity.mjs --check
 ```
 
-## Deployment
-
-Production setup (systemd, nginx, coturn, Tor, invites) is documented in
+The live SRP migration test is `node test/srp.e2e.mjs` against a disposable local
+server. Production setup and the required pre-deploy configuration changes are in
 [`DEPLOY.md`](DEPLOY.md).
-
-## Future Work
-
-- [ ] Larger rooms (the N² mesh keeps them small today)

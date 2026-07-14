@@ -22,7 +22,7 @@
     <button id="lang-btn" class="lang-btn" data-i18n="lang.toggle" title="Language">RO</button>
     <div class="logo">💀</div>
     <h1>DEAD DROP</h1>
-    <p class="tagline" data-i18n="tagline">Anonymous · Encrypted · Ephemeral</p>
+    <p class="tagline" data-i18n="tagline">Pseudonymous · Verified E2EE · Ephemeral</p>
 
     <form id="auth-form" class="auth-form" autocomplete="off">
       <input id="auth-user" type="text" placeholder="Username" data-i18n-ph="auth.user" maxlength="20"
@@ -37,7 +37,7 @@
         <button type="button" id="register-btn" class="btn" data-i18n="auth.register">Register</button>
       </div>
       <p class="auth-hint" data-i18n="auth.hint">
-        Zero-knowledge login (SRP) — your password never leaves this device.
+        SRP accounts do not send the password. Legacy accounts send it once to upgrade.
         No email. No recovery. Registration needs an invite code.
       </p>
       <a href="/about.html" class="about-link" data-i18n="about.link">🔐 How your privacy is protected</a>
@@ -64,7 +64,7 @@
 
     <div class="logo">💀</div>
     <h1>DEAD DROP</h1>
-    <p class="tagline" data-i18n="tagline">Anonymous · Encrypted · Ephemeral</p>
+    <p class="tagline" data-i18n="tagline">Pseudonymous · Verified E2EE · Ephemeral</p>
 
     <div class="actions">
       <button id="create-room" class="btn primary" data-i18n="landing.create">Create Room</button>
@@ -74,11 +74,11 @@
                spellcheck="false" autocomplete="off" />
         <button id="join-room" class="btn" data-i18n="landing.join">Join</button>
       </div>
-      <label class="relay-toggle" title="Route the connection through the server so your peer never sees your IP address">
+      <label class="relay-toggle" title="Use TURN to hide your address from the peer; the VPS/TURN operator still sees it">
         <input id="relay-toggle" type="checkbox" />
-        <span><span data-i18n="relay.label">🛡️ Max anonymity</span> <small data-i18n="relay.sub">— relay via server, hide IP from peer</small></span>
+        <span><span data-i18n="relay.label">🛡️ Hide IP from peer</span> <small data-i18n="relay.sub">— TURN relay; VPS still sees it</small></span>
       </label>
-      <label class="relay-toggle" title="Send steady decoy traffic so an observer can't tell when you're actually chatting">
+      <label class="relay-toggle" title="Add occasional padded decoys; timing and traffic volume remain visible">
         <input id="cover-toggle" type="checkbox" />
         <span><span data-i18n="cover.label">🕶️ Cover traffic</span> <small data-i18n="cover.sub">— occasional decoys; does not hide traffic volume</small></span>
       </label>
@@ -99,7 +99,7 @@
       </div>
       <div class="header-right">
         <button id="call-btn" class="btn-icon call-btn" title="Start call">📞</button>
-        <button id="panic-btn" class="btn-icon panic-btn" title="Panic — wipe everything (or press Esc three times)">💣</button>
+        <button id="panic-btn" class="btn-icon panic-btn" title="Panic — clear this tab and log out (or press Esc three times)">💣</button>
         <div id="status" class="status waiting">⏳ Initializing…</div>
       </div>
     </header>
@@ -163,7 +163,7 @@
           <input id="burn-toggle" type="checkbox" />
           <span data-i18n="chat.burn">🔥 Burn</span>
         </label>
-        <select id="ttl-select" title="Self-destruct timer">
+        <select id="ttl-select" title="Cooperative deletion timer">
           <option value="0" data-i18n="chat.ttl.none">No TTL</option>
           <option value="10">10 s</option>
           <option value="30" selected>30 s</option>
@@ -201,6 +201,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-lTW8GKiBG4ITpMZ5/TKcZcPNA+jv+kKsXKRAsOP80Vs="></script>
+  <script type="module" src="js/app.js" integrity="sha256-4Tk1EYhzm0FtKQosuxrkaTWn7NduDYJJQV60OTgmHx0="></script>
 </body>
 </html>

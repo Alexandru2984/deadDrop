@@ -113,13 +113,16 @@ turnutils_uclient -y -u "$U" -w "$P" -p 3478 -n 2 <PUBLIC_IP>   # expect 0 lost 
 
 > **Privacy note:** TURN requires clients to reach the VPS directly on UDP, so the
 > origin IP is disclosed to call participants (Cloudflare cannot proxy TURN). The
-> win from "Max anonymity" (relay-only) mode is that the two *peers* never see each
-> other's IPs and the payload stays end-to-end encrypted.
+> relay-only mode hides endpoint addresses from the other *peer* when TURN
+> succeeds. The VPS/TURN operator still sees both client IPs, timing, and volume;
+> this is not anonymity.
 
 ## 5. Accounts (SRP) & invites
 
-Login uses SRP-6a: the password is turned into a verifier in the browser and never
-reaches the server (or Cloudflare). Registration requires a single-use invite code.
+New and upgraded accounts use SRP-6a: normal login sends proofs instead of the
+password. A legacy bcrypt account still sends its password once to the Go origin
+(through Cloudflare on clearnet), then upgrades. Registration requires a
+single-use invite code by default.
 
 Mint invites from the CLI (codes go to stdout, status to stderr, so they pipe cleanly):
 
@@ -155,8 +158,9 @@ not resent). Failed logins are throttled per-account (lockout after 5 tries).
 
 ## 6. Tor onion service (Cloudflare-free access)
 
-`tor` serves the app as a v3 onion straight to the Go app on loopback, so visitors
-never touch Cloudflare or leak the DNS lookup for dead.micutu.com.
+`tor` serves the app as a v3 onion straight to the Go app on loopback, removing
+Cloudflare and public DNS from page/API/WebSocket signaling delivery. WebRTC and
+TURN use separate network paths and are not automatically anonymized by this.
 
 `/etc/tor/torrc`:
 

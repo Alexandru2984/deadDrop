@@ -1,8 +1,9 @@
 /**
  * Dead Drop — Message Lifecycle Manager
  *
- * Handles TTL countdown, burn-after-reading, and bilateral message destruction.
- * All message state is in-memory only — nothing is persisted.
+ * Handles TTL countdown, burn-after-reading, and cooperative bilateral removal.
+ * This application does not persist message state; a peer/browser/OS can still
+ * retain plaintext outside this manager.
  */
 
 export class MessageManager {
@@ -19,7 +20,7 @@ export class MessageManager {
   }
 
   /**
-   * Track a new message with self-destruct rules.
+   * Track a new message with cooperative removal rules.
    * @param {string}      id               – unique message id
    * @param {HTMLElement}  element          – DOM node to remove on destruction
    * @param {number}       ttl              – seconds until auto-destroy (0 = no TTL)

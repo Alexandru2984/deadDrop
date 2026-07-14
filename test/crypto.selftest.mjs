@@ -156,7 +156,7 @@ async function binary(a, b) {
 }
 
 async function rekeying(a, b) {
-  console.log('rekey ratchet (forward secrecy)');
+  console.log('periodic rekey and old-epoch retirement');
   // A is the rekey initiator.
   const offer = await a.beginRekey();
   ok(a._pendingRekey?.keyPair?.privateKey?.extractable === false,
@@ -180,8 +180,9 @@ async function rekeying(a, b) {
   const old = await a.encrypt('straggler'); // a is at epoch 1 now → this is epoch 1
   ok(old.epoch === 1, 'sender always uses current epoch');
 
-  // Drive enough rekeys to push epoch 0 out of the retention window, then prove the
-  // old key is gone (forward secrecy: a seized device can't decrypt old epochs).
+  // Drive enough rekeys to push epoch 1 out of the application's retention map.
+  // This tests protocol state only; JavaScript cannot prove physical key erasure
+  // by the browser/OS or make a general post-compromise security guarantee.
   const stale = await a.encrypt('will be undecryptable old-epoch'); // epoch 1 ciphertext
   for (let i = 0; i < 3; i++) {
     const o = await a.beginRekey();
@@ -191,7 +192,7 @@ async function rekeying(a, b) {
   ok(a.sendEpoch === 4, 'advanced to epoch 4 after 3 more rekeys');
   let dropped = false;
   try { await b.decrypt(stale.ciphertext, stale.iv, 1); } catch { dropped = true; }
-  ok(dropped, 'epoch-1 key destroyed after retention window (forward secrecy)');
+  ok(dropped, 'epoch-1 key is unavailable through the app after its retention window');
 }
 
 async function commitmentRejection() {

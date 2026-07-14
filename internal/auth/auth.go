@@ -27,8 +27,9 @@ var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_]{3,20}$`)
 /* ── User Store (file-backed) ── */
 
 // user holds either a legacy bcrypt hash (kept so existing accounts are never
-// locked out) or an SRP verifier+salt (zero-knowledge — the server never sees the
-// password). New accounts are SRP-only; legacy accounts auto-upgrade on next login.
+// locked out) or an SRP verifier+salt. SRP login sends proofs rather than the
+// password. New accounts are SRP-only; legacy accounts send their password once
+// to the legacy endpoint and auto-upgrade on that login.
 type user struct {
 	Hash     string `json:"hash,omitempty"`     // legacy bcrypt over SHA-256(password)
 	Salt     string `json:"salt,omitempty"`     // SRP salt (hex)

@@ -1084,9 +1084,9 @@ class DeadDrop {
     if (!s || !s.verified || !s.conn.userVerified) return;
     switch (msg.type) {
       case 'cover':
-        // Decoy packet from the peer's cover-traffic generator — sealed and
-        // padded exactly like a real message, so it's indistinguishable on the
-        // wire. Silently discarded; never shown, never acknowledged.
+        // Decoy packet from the peer's cover generator. It has the same sealed
+        // application shape as a short message, but does not hide timing or
+        // aggregate volume. Silently discard it without acknowledgement.
         break;
 
       case 'typing':

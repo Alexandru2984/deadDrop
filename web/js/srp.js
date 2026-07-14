@@ -1,8 +1,9 @@
 /**
  * Dead Drop — SRP-6a client (RFC 5054 2048-bit group, SHA-256).
  *
- * The password is turned into a verifier locally and never leaves the browser, so
- * neither the server nor a TLS-terminating middlebox (Cloudflare) ever sees it.
+ * In these SRP flows, the password is turned into a verifier locally and is not
+ * sent to the server, so a TLS-terminating middlebox sees proofs, not the password.
+ * The separate legacy-login migration path is documented in README.md.
  * This mirrors internal/srp/srp.go byte-for-byte (group elements are zero-padded to
  * the byte length of N before hashing); the two are cross-checked with deterministic
  * vectors in test/srp.selftest.mjs ↔ internal/srp/srp_test.go.

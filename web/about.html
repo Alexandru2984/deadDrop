@@ -16,79 +16,63 @@
   <main class="doc">
     <a class="back" href="/">← Back to Dead Drop</a>
     <h1>SECURITY &amp; PRIVACY</h1>
-    <p class="lead">Honest threat model. What this protects, and — just as important — what it does not.</p>
+    <p class="lead">A precise threat model: what is encrypted, what metadata remains, and which promises a website cannot make.</p>
 
-    <h2>How a conversation is protected</h2>
+    <h2>Before you trust a conversation</h2>
     <ul>
-      <li><strong>End-to-end encryption, post-quantum hybrid.</strong> Messages, files and calls travel directly between browsers over a WebRTC data channel. They are encrypted with <strong>AES-256-GCM</strong> using a key agreed by <strong>ECDH (P-256) + ML-KEM-768 (FIPS 203)</strong> → <strong>HKDF-SHA256</strong> — an attacker recording traffic today cannot decrypt it even with a future quantum computer, because breaking the session requires breaking <em>both</em> primitives. The server only relays connection setup — it never sees keys or content.</li>
-      <li><strong>Group chats are a mesh of private links.</strong> A room can hold up to six people, but there is no shared "group key": every pair of people has its own independent encrypted session and its own safety code. Each message is encrypted separately for each recipient, so no one — not even another member — can read a message that wasn't meant for them. Verify each peer's safety code separately.</li>
-      <li><strong>Authenticated handshake.</strong> A ZRTP-style commit-reveal step (with explicit key confirmation) stops a relay from secretly sitting in the middle and grinding keys.</li>
-      <li><strong>Calls are bound to the same check.</strong> Voice/video runs over WebRTC (DTLS-SRTP), whose certificate is normally authenticated only by a fingerprint relayed through the signaling server. Dead Drop re-confirms that fingerprint <em>over the safety-code-verified channel</em> before a call can start — so a malicious signaling server can't quietly man-in-the-middle a call the way it otherwise could, even while your messages stayed safe. If the fingerprint doesn't match, the connection is torn down.</li>
-      <li><strong>Uniform, padded traffic.</strong> Every message on the channel — typing notices, read receipts, deletions, call signaling, file chunks — is sealed in an encrypted envelope padded to fixed size buckets, so even someone who could break the transport sees only same-sized ciphertext blobs, not what kind of message you sent or how long it was.</li>
-      <li><strong>Cover traffic (optional).</strong> Turn on <strong>🕶️ Cover traffic</strong> and each connection sends a steady stream of decoy packets — indistinguishable from real ones — whether or not you're typing. An observer watching the encrypted channel (including the relay, in "max anonymity" mode) then can't tell when a real message goes out, or whether the conversation is active at all. It costs a little bandwidth; leave it off if you only care about content secrecy.</li>
-      <li><strong>Forward secrecy.</strong> The session re-keys with fresh ECDH every ~10 minutes and destroys old keys, so a device seized later cannot decrypt earlier messages.</li>
-      <li><strong>Zero-knowledge login (SRP-6a).</strong> Your password is turned into a verifier <em>in your browser</em>. It never reaches the server — or Cloudflare. Before that, it is stretched with <strong>PBKDF2-SHA256 (600,000 iterations)</strong>, so even if the server's verifier store leaked, offline password cracking would be hundreds of thousands of times slower.</li>
-      <li><strong>Self-destruct.</strong> Messages can carry a TTL and/or burn-after-reading; deletion is bilateral and nothing is stored on the server.</li>
+      <li>Use uncompromised devices and browsers that received the intended client code.</li>
+      <li>Compare every peer's safety code over a <strong>separate trusted channel</strong>, then have both sides confirm it. Messaging, files, and calls stay locked until mutual confirmation.</li>
+      <li>Treat the 6 emoji as a 36-bit manual check. For a higher-confidence in-person check, scan the full 128-bit QR token.</li>
+      <li>If codes differ or the handshake fails, stop. A matching code strongly authenticates this session under the protocol assumptions; it does not mean nobody can observe or record the ciphertext and metadata.</li>
     </ul>
 
-    <h2>⚠️ Verify your safety code</h2>
-    <p>When a chat becomes encrypted, both sides see a <strong>6-emoji safety code</strong>. Read it aloud to your peer (in person or on a call you trust). If the codes match, no one is intercepting. <strong>If they differ, stop — the line is compromised.</strong> This is the one step only <em>you</em> can do.</p>
-    <p>For a stronger check, tap <strong>📷 QR</strong> next to the code: scanning your peer's screen compares the <strong>full 128-bit</strong> verification token automatically — a man-in-the-middle has no realistic chance of surviving that comparison.</p>
-
-    <h2>⚠️ The hardest problem: trusting the code you're served</h2>
-    <p>This is the honest weak point of <em>every</em> end-to-end-encrypted <strong>website</strong>,
-      Dead Drop included. The encryption runs in JavaScript that your browser downloads from this
-      server on <em>every visit</em>. A server that is compromised — or whose operator is coerced —
-      could serve a subtly modified script that copies your keys or messages before encrypting them.
-      No amount of client-side cryptography can rule this out, because the attacker would control that
-      very cryptography. Unlike a native app installed once and updated through a signed, reviewed
-      channel, a website re-establishes this trust with you on each load.</p>
-    <p>What Dead Drop does to shrink that trust:</p>
+    <h2>What is end-to-end encrypted</h2>
     <ul>
-      <li>The whole client is <strong>open source</strong>, and every served file is hashed into a
-        manifest (<code>/SHA256SUMS</code>) committed to the public repository. The
-        <a href="/verify.html">Verify the code</a> page re-hashes what you received and checks it
-        against that manifest — and shows you how to compare it against GitHub, a source this server
-        can't fake.</li>
-      <li>A strict Content-Security-Policy blocks any inline or third-party script, so injected code
-        can't run — though this does not, by itself, stop a malicious <em>first-party</em> server.</li>
-      <li>Loading over the <strong>Tor onion</strong> (below) removes Cloudflare from the delivery
-        path, so a TLS-terminating middlebox can't tamper with the code.</li>
-    </ul>
-    <p>The real ceiling: if your adversary is the operator itself, a website cannot fully win — for
-      that threat model you want a pinned browser extension or a native client. We'd rather say so
-      than pretend otherwise.</p>
-
-    <h2>What the server can and cannot see</h2>
-    <ul>
-      <li><span class="no">✗ Cannot</span> read your messages, files, or call audio/video (end-to-end encrypted).</li>
-      <li><span class="no">✗ Cannot</span> see your password (SRP — it never leaves your device).</li>
-      <li><span class="yes">✓ Can</span> see connection metadata: that two peers shared a room code, and (unless you use “Max anonymity”) their IP addresses during setup.</li>
-      <li><strong>Cloudflare</strong> terminates TLS in front of the site, so it can see request metadata and signalling. It <em>cannot</em> see message content (that goes peer-to-peer) or your password (SRP). To avoid it entirely, use the Tor address below.</li>
+      <li><strong>Messages, files, and app controls.</strong> Pairwise protocol v4 combines ephemeral P-256 ECDH and ML-KEM-768, derives direction- and context-specific keys with HKDF-SHA256, and seals data with AES-256-GCM. The transcript, role, epoch, and content class are authenticated; replays are rejected.</li>
+      <li><strong>Groups are pairwise meshes.</strong> A room holds at most six people and has no group key. Your browser creates a separate handshake, safety code, ratchet, and ciphertext for each recipient. Verify each row independently.</li>
+      <li><strong>Calls use WebRTC DTLS-SRTP.</strong> Media is not wrapped in the app's AES envelope. Instead, the exact DTLS certificate fingerprint set is confirmed over the verified encrypted session before a 1:1 call is enabled.</li>
+      <li><strong>Periodic key evolution.</strong> Fresh ECDH is mixed in about every ten minutes. The current and two prior epochs remain for in-flight data. This offers limited forward-secrecy/key-evolution properties, not a formally verified Double Ratchet guarantee; a browser cannot prove that dropped key objects were physically erased from RAM.</li>
+      <li><strong>Hybrid/PQ scope.</strong> ML-KEM is intended to protect recorded traffic if its security and implementation hold even when P-256 is no longer sufficient. “Post-quantum” is a design goal, not a guarantee against future cryptanalysis, endpoint compromise, or implementation bugs.</li>
     </ul>
 
-    <h2>Hide your IP from your peer</h2>
-    <p>Enable <strong>🛡️ Max anonymity</strong> on the home screen to relay the connection through the server (self-hosted TURN). Your peer then never learns your IP, and vice-versa — the relay only ever sees encrypted DTLS, never content.</p>
+    <h2>Traffic shape is only partly hidden</h2>
+    <p>Encrypted app envelopes use size buckets. This hides exact plaintext length within a bucket and makes some short control events resemble short messages. It does <strong>not</strong> hide timing, packet count, bucket changes, large files, call traffic, or total volume. Optional cover traffic adds one randomized short decoy roughly every 4–16 seconds; it is not constant-rate shaping and cannot make activity invisible to a capable observer.</p>
 
-    <h2>Access over Tor <span class="pill">no Cloudflare · no DNS</span></h2>
-    <p>Reach the app without touching Cloudflare or leaking a DNS lookup:</p>
+    <h2>What the service and network can see</h2>
+    <ul>
+      <li><span class="no">Content:</span> with the intended client, uncompromised endpoints, and mutually verified safety codes, the signaling server/TURN relay receives ciphertext rather than message, file, or call plaintext.</li>
+      <li><span class="yes">Account and session metadata:</span> the Go server can associate a handle/session and source IP with a room code, peer ID, other room members, connection times, and the SDP/ICE signaling it relays. These values are kept in memory for active sessions but are not written to the app log.</li>
+      <li><span class="yes">Network metadata:</span> nginx, Cloudflare, journald, coturn, the VPS host, and upstream networks may record IP addresses, paths, timing, sizes, or traffic volume. The application's generic logs are not the only logs in the system.</li>
+      <li><strong>Relay-only mode</strong> hides each endpoint's IP from the other peer when TURN succeeds. The VPS/TURN operator still sees both endpoint IPs and timing. This is IP privacy from the peer, not anonymity.</li>
+      <li><strong>Cloudflare</strong> terminates clearnet TLS and can see/modify page, API, cookie, and WebSocket signaling traffic. It normally does not carry the P2P data channel. The onion route removes Cloudflare from page/API/signaling delivery, but WebRTC/TURN follows a separate network path.</li>
+    </ul>
+
+    <h2>Storage, TTL, burn, and panic</h2>
+    <ul>
+      <li>The server persists handles, password verifiers/KDF labels, optional duress verifiers, invites, and an anti-enumeration secret. It does not persist chat rooms, messages, files, or calls.</li>
+      <li>TTL, burn-after-reading, and bilateral delete are cooperative browser behavior. A peer can screenshot, save, instrument, or modify their client; downloaded files and OS/browser forensic traces can survive.</li>
+      <li>The panic button clears this tab's in-memory state, closes connections, and attempts logout. It cannot wipe another device, infrastructure logs, crash dumps, swap, extensions, or data already copied.</li>
+    </ul>
+
+    <h2>Authentication and duress</h2>
+    <p>New and upgraded accounts use SRP-6a. The password is not sent during a normal SRP login; the server stores a verifier, which still permits offline dictionary guesses if stolen. PBKDF2-SHA256 (currently 600,000 iterations) raises that cost but does not rescue a weak password. A legacy bcrypt account sends its password once to the Go origin—through Cloudflare on clearnet—then upgrades to SRP.</p>
+    <p>The optional duress password opens a normal-looking decoy session and API responses do not label it to the browser. The server necessarily knows which credential succeeded. A determined coercer, operator, device compromise, or forensic comparison can defeat the illusion; this is not cryptographically deniable authentication.</p>
+
+    <h2>Trusting the code delivered to your browser</h2>
+    <p>This is the fundamental limit of browser E2EE. A compromised/coerced server or TLS-terminating provider can send JavaScript that copies plaintext or keys before encryption. CSP, SRI, an embedded bundle, and <code>/SHA256SUMS</code> reduce accidental and some supply-chain changes, but a malicious first-party response can alter the page, script, manifest, and in-page verifier together.</p>
+    <p><a href="/verify.html">Verify the code</a> explains how to compare the manifest through an independent channel. That still cannot prove bytes already executing or detect every targeted response. A separately installed, signed/pinned client is required when the server itself is in the threat model.</p>
+
+    <h2>Other non-goals and residual risk</h2>
+    <ul>
+      <li>Compromised endpoints, malicious peers, shoulder surfing, screen capture, and keyloggers.</li>
+      <li>Global traffic analysis or hiding that the service was contacted.</li>
+      <li>Account recovery: there is no email or recovery channel.</li>
+      <li>Formal assurance: this custom protocol has automated adversarial tests, but no independent professional cryptographic audit.</li>
+    </ul>
+
+    <h2>Tor address <span class="pill">Cloudflare-free page/signaling path</span></h2>
     <span class="onion">http://bhfutxa5e7tvpw4y4zhm2bc7o3kvbdgug34i6bahjr2eb5ifpfobuvid.onion</span>
-    <p class="note"><em>Limitation:</em> Tor carries TCP only, so the peer-to-peer channel (UDP) may not establish over the onion. The onion is best for privately loading the app and signing in; the live P2P chat still needs a normal connection.</p>
-
-    <h2>Duress / decoy password</h2>
-    <p>In account settings (⚙️) you can set an optional <strong>duress password</strong>. Entering it logs you into a normal-looking decoy session instead of your real one. Because Dead Drop stores nothing between sessions, the practical value is mainly that you can hand over a <em>working</em> password under coercion without revealing your real one — the verifier check is done so the server can’t tell, from the request, whether a duress password even exists. Nothing in the API responses labels a decoy session, and a decoy session cannot touch the real credentials: changing the password from inside it changes only the password the coercer already knows. It is not a substitute for the panic button (💣) or for simply not opening the app under duress.</p>
-
-    <h2>What this does NOT protect against</h2>
-    <ul>
-      <li>A <strong>compromised device</strong> (malware, keylogger, someone reading over your shoulder). Encryption can’t help if your screen is already visible.</li>
-      <li>Your <strong>peer</strong> screenshotting or saving what you send. Burn/TTL are cooperative, not enforced on a malicious peer.</li>
-      <li><strong>Skipping the safety-code check</strong> — without it, end-to-end encryption can’t rule out a man-in-the-middle.</li>
-      <li><strong>A compromised or coerced server serving backdoored code</strong> — the fundamental limit of any E2E website (see above). Use <a href="/verify.html">Verify the code</a>, the onion, and ultimately a native client for the strongest guarantees.</li>
-      <li><strong>Traffic analysis</strong> at a global scale (who talks to whom, when). Tor + Max-anonymity + cover traffic help, but nothing is magic.</li>
-    </ul>
-
-    <h2>Transparency</h2>
-    <p>No accounts beyond a handle, no email, no message storage, no third-party analytics, no third-party STUN/TURN. Security headers and CSP are strict and same-origin only. The client is open source and the served bundle is verifiable — see <a href="/verify.html">Verify the code</a>.</p>
+    <p class="note">Tor carries TCP. Browser WebRTC behavior and TURN connectivity are separate; using the onion does not automatically anonymize the live media/data path.</p>
 
     <a class="back" href="/">← Back to Dead Drop</a>
   </main>

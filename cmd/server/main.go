@@ -185,7 +185,8 @@ func main() {
 		fmt.Fprintf(w, `{"openRegistration":%t}`, auth.OpenRegistration())
 	})
 
-	// SRP-6a zero-knowledge auth — the password never reaches the server.
+	// SRP-6a authentication — these routes receive a verifier or proofs, not the
+	// password. The separate legacy endpoint exists only for one-time migration.
 	mux.HandleFunc("/api/srp/register", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPRegister)))
 	mux.HandleFunc("/api/srp/challenge", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPChallenge)))
 	mux.HandleFunc("/api/srp/authenticate", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPAuthenticate)))

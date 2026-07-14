@@ -43,6 +43,7 @@ node test/mlkem.selftest.mjs
 node test/srp.selftest.mjs
 node test/fingerprint.selftest.mjs
 node test/config.selftest.mjs
+node test/manifest.selftest.mjs
 
 echo "▸ building (prod flags)…"
 CANDIDATE="$(mktemp "$ROOT/.deaddrop-build.XXXXXX")"

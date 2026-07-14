@@ -1,7 +1,7 @@
 {
   "name": "Dead Drop",
   "short_name": "Dead Drop",
-  "description": "Anonymous, end-to-end encrypted, self-destructing peer-to-peer chat.",
+  "description": "Pseudonymous peer-to-peer chat with mutually verified end-to-end encryption.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
