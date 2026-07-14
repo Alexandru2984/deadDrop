@@ -271,9 +271,10 @@ async function malformedNonceRejection() {
 async function authenticatedRekeyTransport(a, b) {
   console.log('authenticated rekey transport');
   const wireA = [], wireB = [];
+  const receivedA = [], receivedB = [];
   const noop = () => {};
-  const pa = new PeerConnection({ send: noop }, a, noop, noop);
-  const pb = new PeerConnection({ send: noop }, b, noop, noop);
+  const pa = new PeerConnection({ send: noop }, a, (m) => receivedA.push(m), noop);
+  const pb = new PeerConnection({ send: noop }, b, (m) => receivedB.push(m), noop);
   pa.dc = { readyState: 'open', send: (raw) => wireA.push(JSON.parse(raw)) };
   pb.dc = { readyState: 'open', send: (raw) => wireB.push(JSON.parse(raw)) };
 
@@ -296,6 +297,30 @@ async function authenticatedRekeyTransport(a, b) {
   const post = await b.encrypt('authenticated ratchet complete');
   ok(await a.decrypt(post.ciphertext, post.iv, post.epoch) === 'authenticated ratchet complete',
      'traffic works after authenticated rekey');
+
+  let preVerificationBlocked = false;
+  try { pa.send({ type: 'chat', text: 'too early' }); } catch { preVerificationBlocked = true; }
+  ok(preVerificationBlocked, 'application traffic is blocked before SAS verification');
+
+  await pa.markVerified();
+  const readyFromA = wireA.shift();
+  await pb._handleInner(await b.open(readyFromA.c, readyFromA.iv, readyFromA.e));
+  ok(!pa.userVerified && !pb.userVerified,
+     'one-sided verification does not unlock either application');
+  await pb.markVerified();
+  const readyFromB = wireB.shift();
+  await pa._handleInner(await a.open(readyFromB.c, readyFromB.iv, readyFromB.e));
+  ok(pa.userVerified && pb.userVerified, 'both SAS confirmations unlock the session');
+
+  await pa.send({ type: 'chat', text: 'after mutual verification' });
+  const appEnvelope = wireA.shift();
+  await pb._handleInner(await b.open(appEnvelope.c, appEnvelope.iv, appEnvelope.e));
+  ok(receivedB.at(-1)?.text === 'after mutual verification',
+     'verified application traffic reaches the peer');
+
+  let mediaBlocked = false;
+  try { pa._requireVerifiedMedia(); } catch { mediaBlocked = true; }
+  ok(mediaBlocked, 'media remains blocked until its DTLS fingerprint is bound');
   pa._clearRekey();
   pb._clearRekey();
 }

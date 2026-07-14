@@ -80,7 +80,7 @@
       </label>
       <label class="relay-toggle" title="Send steady decoy traffic so an observer can't tell when you're actually chatting">
         <input id="cover-toggle" type="checkbox" />
-        <span><span data-i18n="cover.label">🕶️ Cover traffic</span> <small data-i18n="cover.sub">— constant decoy packets hide when you talk</small></span>
+        <span><span data-i18n="cover.label">🕶️ Cover traffic</span> <small data-i18n="cover.sub">— occasional decoys; does not hide traffic volume</small></span>
       </label>
       <a href="/about.html" class="about-link" data-i18n="about.link.short">🔐 Security &amp; privacy</a>
       <a href="/verify.html" class="about-link" data-i18n="verify.code.link">🔎 Verify the code you're running</a>
@@ -109,8 +109,8 @@
       <span class="verify-label" data-i18n="verify.label">🔐 Safety code</span>
       <div id="verify-rows"></div>
       <p class="verify-hint" data-i18n="verify.hint">
-        Read this aloud to your peer (call/in person). If your codes match, no one is
-        intercepting. If they differ, stop — the line is compromised.
+        Compare this over a separate trusted channel. Chat, files, and calls stay
+        locked until you confirm an exact match. If they differ, stop.
       </p>
     </div>
 
@@ -119,8 +119,8 @@
       <div class="qr-verify-box">
         <h3 data-i18n="qr.title">📷 QR verification</h3>
         <p class="qr-verify-hint" data-i18n="qr.hint">
-          Point your camera at your peer's screen (and let them scan yours).
-          The codes are compared automatically — a match proves no one is in the middle.
+          Scan your peer's screen over a trusted in-person path. An exact match
+          authenticates this encrypted session.
         </p>
         <div class="qr-verify-panels">
           <img id="qr-verify-img" alt="Your verification QR code" />
@@ -201,6 +201,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-fhL93TfF8ooNhZ10acx089DsoB8FrEVBQC25WfwiYlg="></script>
+  <script type="module" src="js/app.js" integrity="sha256-VzYAHNw81v9AWIxIQQ1n6TFHev2yXdoLMsjtiWQwmxY="></script>
 </body>
 </html>

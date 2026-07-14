@@ -1,279 +1,349 @@
 /**
- * Dead Drop — File Transfer Layer
+ * Dead Drop — bounded, peer-scoped file transfer.
  *
- * Chunked file transfers over the WebRTC data channel.
- * Files are encrypted with AES-256-GCM before chunking so the
- * plaintext never touches the wire.
- *
- * Flow:  encrypt whole file → chunk ciphertext → send chunks
- *        receive chunks → reassemble → decrypt → display
+ * File bytes and metadata are encrypted before they enter sealed data-channel
+ * messages. Receiver allocations are reserved up front against a global budget,
+ * and transfer IDs are scoped to the authenticated peer that created them.
  */
 
-const CHUNK_SIZE = 48 * 1024;   // 48 KB raw → ~64 KB base64
-const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
-const BUFFER_HIGH = 1024 * 1024; // pause sending above 1 MB buffered
-const INBOUND_TIMEOUT = 2 * 60 * 1000; // 2 min — abort stale inbound transfers
-const MAX_ID_LEN = 80;
+const CHUNK_SIZE = 48 * 1024;
+const MAX_FILE_SIZE = 25 * 1024 * 1024;
+const MAX_ENCRYPTED_FILE_SIZE = MAX_FILE_SIZE + 16; // AES-GCM tag
+const MAX_ACTIVE_INBOUND = 4;
+const MAX_RESERVED_INBOUND_BYTES = MAX_ENCRYPTED_FILE_SIZE * 2;
+const MAX_ACTIVE_OUTBOUND = 1;
+const BUFFER_HIGH = 1024 * 1024;
+const BUFFER_WAIT_TIMEOUT = 30 * 1000;
+const INBOUND_TIMEOUT = 2 * 60 * 1000;
+const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export { MAX_FILE_SIZE };
 
 export class FileTransferManager {
   constructor() {
-    this.inbound  = new Map(); // id → { meta, chunks[], received, … }
-    this.outbound = new Map(); // id → { aborted }
+    this.inbound = new Map();
+    this.outbound = new Map();
+    this._reservedInboundBytes = 0;
   }
 
-  /**
-   * Encrypt and send a file in chunks.
-   *
-   * @param {File}            file
-   * @param {string}          id          – message ID
-   * @param {CryptoLayer}     crypto
-   * @param {PeerConnection}  peer
-   * @param {number}          ttl
-   * @param {boolean}         burn
-   * @param {Function}        onProgress  – (sentChunks, totalChunks)
-   */
-  async send(file, id, crypto, peer, ttl, burn, onProgress) {
-    if (file.size > MAX_FILE_SIZE) {
+  async send(file, id, cryptoLayer, peer, ttl, burn, onProgress, scope = '') {
+    if (!this._validID(id)) throw new Error('Invalid file transfer ID');
+    if (!Number.isSafeInteger(file?.size) || file.size < 0 || file.size > MAX_FILE_SIZE) {
       throw new Error(`File too large (max ${MAX_FILE_SIZE / 1024 / 1024} MB)`);
     }
+    if (this.outbound.size >= MAX_ACTIVE_OUTBOUND) {
+      throw new Error('Another file transfer is already active');
+    }
+    const key = this._key(scope, id);
+    if (this.outbound.has(key)) throw new Error('Duplicate outbound transfer ID');
+    this.outbound.set(key, { aborted: false });
 
-    const data = await file.arrayBuffer();
+    let plaintext;
+    let encrypted;
+    try {
+      plaintext = new Uint8Array(await file.arrayBuffer());
+      const fileEnvelope = await cryptoLayer.encryptBinary(plaintext);
+      encrypted = new Uint8Array(fileEnvelope.ciphertext);
+      plaintext.fill(0);
+      plaintext = null;
 
-    // Encrypt file content
-    const { ciphertext, iv: fileIv, epoch: fileEpoch } = await crypto.encryptBinary(data);
+      const metaEnvelope = await cryptoLayer.encrypt(JSON.stringify({
+        fileName: String(file.name || 'file').slice(0, 180),
+        fileType: String(file.type || 'application/octet-stream').slice(0, 100),
+        fileSize: file.size,
+      }));
+      const totalChunks = Math.ceil(encrypted.length / CHUNK_SIZE);
 
-    // Encrypt metadata (file name, type, size)
-    const metaStr = JSON.stringify({
-      fileName: file.name,
-      fileType: file.type || 'application/octet-stream',
-      fileSize: file.size,
-    });
-    const encMeta = await crypto.encrypt(metaStr);
+      if (this.outbound.get(key)?.aborted) return;
 
-    // Chunk the ciphertext
-    const bytes = new Uint8Array(ciphertext);
-    const totalChunks = Math.ceil(bytes.length / CHUNK_SIZE);
-
-    // 1. File header
-    peer.send({
-      type: 'file',
-      id,
-      meta: encMeta,
-      fileIv,
-      fileEpoch,
-      totalChunks,
-      totalSize: bytes.length,
-      ttl,
-      burnAfterReading: burn,
-    });
-
-    this.outbound.set(id, { aborted: false });
-
-    // 2. Chunks (with backpressure)
-    for (let i = 0; i < totalChunks; i++) {
-      if (this.outbound.get(id)?.aborted) break;
-
-      const start = i * CHUNK_SIZE;
-      const end   = Math.min(start + CHUNK_SIZE, bytes.length);
-
-      await this._waitForBuffer(peer);
-
-      peer.send({
-        type: 'file-chunk',
+      await peer.send({
+        type: 'file',
         id,
-        index: i,
-        data: _uint8ToB64(bytes.slice(start, end)),
+        meta: metaEnvelope,
+        fileIv: fileEnvelope.iv,
+        fileEpoch: fileEnvelope.epoch,
+        totalChunks,
+        totalSize: encrypted.length,
+        ttl,
+        burnAfterReading: burn,
       });
 
-      if (onProgress) onProgress(i + 1, totalChunks);
-    }
+      for (let index = 0; index < totalChunks; index++) {
+        if (this.outbound.get(key)?.aborted) return;
+        await this._waitForBuffer(peer);
+        const start = index * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, encrypted.length);
+        await peer.send({
+          type: 'file-chunk',
+          id,
+          index,
+          data: uint8ToB64(encrypted.subarray(start, end)),
+        });
+        if (onProgress) onProgress(index + 1, totalChunks);
+      }
 
-    // 3. End marker
-    peer.send({ type: 'file-end', id });
-    this.outbound.delete(id);
+      if (!this.outbound.get(key)?.aborted) await peer.send({ type: 'file-end', id });
+    } finally {
+      if (plaintext) plaintext.fill(0);
+      if (encrypted) encrypted.fill(0);
+      this.outbound.delete(key);
+    }
   }
 
-  /**
-   * Process an incoming file-related message.
-   * @returns {{ event, id, … } | null}
-   */
-  handleMessage(msg) {
+  handleMessage(msg, scope = '') {
+    if (!msg || !this._validID(msg.id)) return null;
+    const key = this._key(scope, msg.id);
     switch (msg.type) {
-      case 'file':       return this._onStart(msg);
-      case 'file-chunk': return this._onChunk(msg);
-      case 'file-end':   return this._onEnd(msg);
+      case 'file': return this._onStart(msg, scope, key);
+      case 'file-chunk': return this._onChunk(msg, key);
+      case 'file-end': return this._onEnd(msg, key);
       default: return null;
     }
   }
 
-  abort(id) {
-    const out = this.outbound.get(id);
-    if (out) out.aborted = true;
-    const inb = this.inbound.get(id);
-    if (inb) clearTimeout(inb.timer);
-    this.inbound.delete(id);
-    this.outbound.delete(id);
+  abort(id, scope = '') {
+    const key = this._key(scope, id);
+    const outbound = this.outbound.get(key);
+    if (outbound) outbound.aborted = true;
+    this._discardInbound(key);
   }
 
-  /* ── Private ── */
+  abortScope(scope) {
+    const prefix = `${scope}\0`;
+    for (const [key, transfer] of this.outbound) {
+      if (key.startsWith(prefix)) transfer.aborted = true;
+    }
+    for (const key of [...this.inbound.keys()]) {
+      if (key.startsWith(prefix)) this._discardInbound(key);
+    }
+  }
 
-  _onStart(msg) {
-    // Validate totalSize to prevent memory exhaustion from malicious peers
-    // Encrypted size can be slightly larger than MAX_FILE_SIZE due to AES-GCM overhead
-    const maxEncryptedSize = MAX_FILE_SIZE + 1024 * 1024; // 26 MB
-    if (!this._validID(msg.id)) {
-      console.warn('File transfer rejected: invalid id');
+  destroyAll() {
+    for (const transfer of this.outbound.values()) transfer.aborted = true;
+    for (const key of [...this.inbound.keys()]) this._discardInbound(key);
+  }
+
+  _onStart(msg, scope, key) {
+    if (this.inbound.has(key)) {
+      console.warn('File transfer rejected: duplicate active id');
       return null;
     }
-    if (!Number.isSafeInteger(msg.totalSize) || msg.totalSize <= 0 || msg.totalSize > maxEncryptedSize) {
-      console.warn('File transfer rejected: invalid totalSize', msg.totalSize);
+    if (!Number.isSafeInteger(msg.totalSize)
+        || msg.totalSize < 16
+        || msg.totalSize > MAX_ENCRYPTED_FILE_SIZE) {
+      console.warn('File transfer rejected: invalid totalSize');
       return null;
     }
-    if (!Number.isSafeInteger(msg.totalChunks) || msg.totalChunks < 1 || msg.totalChunks > Math.ceil(maxEncryptedSize / CHUNK_SIZE) + 1) {
-      console.warn('File transfer rejected: invalid totalChunks', msg.totalChunks);
+    const expectedChunks = Math.ceil(msg.totalSize / CHUNK_SIZE);
+    if (!Number.isSafeInteger(msg.totalChunks)
+        || msg.totalChunks !== expectedChunks) {
+      console.warn('File transfer rejected: inconsistent chunk count');
       return null;
     }
-    if (!this._validEncryptedMeta(msg.meta) || typeof msg.fileIv !== 'string') {
+    if (!this._validEncryptedMeta(msg.meta)
+        || typeof msg.fileIv !== 'string'
+        || msg.fileIv.length > 32
+        || !Number.isSafeInteger(msg.fileEpoch)
+        || msg.fileEpoch < 0) {
       console.warn('File transfer rejected: invalid encrypted metadata');
       return null;
     }
-    // Clear any existing transfer with the same ID (prevents timer leak)
-    const existing = this.inbound.get(msg.id);
-    if (existing) clearTimeout(existing.timer);
-    this.inbound.set(msg.id, {
-      meta:            msg.meta,
-      fileIv:          msg.fileIv,
-      fileEpoch:       msg.fileEpoch,
-      totalChunks:     msg.totalChunks,
-      totalSize:       msg.totalSize,
-      ttl:             msg.ttl,
+    if (this.inbound.size >= MAX_ACTIVE_INBOUND
+        || this._reservedInboundBytes + msg.totalSize > MAX_RESERVED_INBOUND_BYTES) {
+      console.warn('File transfer rejected: receiver memory budget exceeded');
+      return null;
+    }
+
+    let buffer;
+    try {
+      buffer = new Uint8Array(msg.totalSize);
+    } catch {
+      console.warn('File transfer rejected: allocation failed');
+      return null;
+    }
+    this._reservedInboundBytes += msg.totalSize;
+    const transfer = {
+      scope,
+      id: msg.id,
+      meta: msg.meta,
+      fileIv: msg.fileIv,
+      fileEpoch: msg.fileEpoch,
+      totalChunks: msg.totalChunks,
+      totalSize: msg.totalSize,
+      ttl: msg.ttl,
       burnAfterReading: msg.burnAfterReading,
-      chunks:          new Array(msg.totalChunks),
-      received:        0,
-      receivedBytes:   0,
-      // Auto-abort stale transfers that never complete
-      timer:           setTimeout(() => {
-        console.warn(`File transfer ${msg.id} timed out — cleaning up`);
-        this.inbound.delete(msg.id);
-      }, INBOUND_TIMEOUT),
-    });
-    return { event: 'start', id: msg.id, totalChunks: msg.totalChunks };
-  }
-
-  _onChunk(msg) {
-    const t = this.inbound.get(msg.id);
-    if (!t) return null;
-    // Validate chunk index to prevent sparse array attacks
-    if (!Number.isSafeInteger(msg.index) || msg.index < 0 || msg.index >= t.totalChunks) {
-      console.warn('File chunk rejected: invalid index', msg.index);
-      return null;
-    }
-    if (typeof msg.data !== 'string') {
-      console.warn('File chunk rejected: invalid data');
-      return null;
-    }
-    // Only count new chunks — ignore duplicates to prevent inflating received count
-    if (!t.chunks[msg.index]) {
-      let chunk;
-      try {
-        chunk = _b64ToUint8(msg.data);
-      } catch {
-        console.warn('File chunk rejected: invalid base64');
-        return null;
-      }
-      if (chunk.byteLength > CHUNK_SIZE || t.receivedBytes + chunk.byteLength > t.totalSize) {
-        console.warn('File chunk rejected: invalid size');
-        return null;
-      }
-      t.chunks[msg.index] = chunk;
-      t.received++;
-      t.receivedBytes += chunk.byteLength;
-    }
-    return { event: 'progress', id: msg.id, received: t.received, totalChunks: t.totalChunks };
-  }
-
-  _onEnd(msg) {
-    const t = this.inbound.get(msg.id);
-    if (!t) return null;
-
-    clearTimeout(t.timer);
-
-    // Validate all chunks were received before reassembly
-    if (t.received !== t.totalChunks) {
-      console.warn(`File ${msg.id}: incomplete — got ${t.received}/${t.totalChunks} chunks`);
-      this.inbound.delete(msg.id);
-      return { event: 'error', id: msg.id, error: 'Incomplete transfer — missing chunks' };
-    }
-    if (t.receivedBytes !== t.totalSize) {
-      console.warn(`File ${msg.id}: size mismatch — got ${t.receivedBytes}/${t.totalSize} bytes`);
-      this.inbound.delete(msg.id);
-      return { event: 'error', id: msg.id, error: 'Transfer size mismatch' };
-    }
-
-    // Reassemble ciphertext
-    let offset = 0;
-    const buf = new Uint8Array(t.totalSize);
-    for (const chunk of t.chunks) {
-      buf.set(chunk, offset);
-      offset += chunk.length;
-    }
-
-    const result = {
-      event:           'complete',
-      id:              msg.id,
-      ciphertext:      buf.buffer,
-      fileIv:          t.fileIv,
-      fileEpoch:       t.fileEpoch,
-      meta:            t.meta,
-      ttl:             t.ttl,
-      burnAfterReading: t.burnAfterReading,
+      buffer,
+      receivedChunks: new Uint8Array(msg.totalChunks),
+      received: 0,
+      receivedBytes: 0,
+      timer: null,
     };
-    this.inbound.delete(msg.id);
+    transfer.timer = setTimeout(() => {
+      console.warn(`File transfer ${msg.id} timed out — cleaning up`);
+      this._discardInbound(key);
+    }, INBOUND_TIMEOUT);
+    this.inbound.set(key, transfer);
+    return { event: 'start', id: msg.id, scope, totalChunks: msg.totalChunks };
+  }
+
+  _onChunk(msg, key) {
+    const transfer = this.inbound.get(key);
+    if (!transfer) return null;
+    if (!Number.isSafeInteger(msg.index)
+        || msg.index < 0
+        || msg.index >= transfer.totalChunks
+        || typeof msg.data !== 'string') {
+      console.warn('File chunk rejected: invalid fields');
+      return this._failInbound(key, 'Invalid file chunk');
+    }
+    if (transfer.receivedChunks[msg.index]) {
+      return {
+        event: 'progress',
+        id: transfer.id,
+        scope: transfer.scope,
+        received: transfer.received,
+        totalChunks: transfer.totalChunks,
+      };
+    }
+
+    const offset = msg.index * CHUNK_SIZE;
+    const expectedLength = Math.min(CHUNK_SIZE, transfer.totalSize - offset);
+    if (msg.data.length !== 4 * Math.ceil(expectedLength / 3)) {
+      console.warn('File chunk rejected: invalid encoded size');
+      return this._failInbound(key, 'Invalid file chunk size');
+    }
+    let chunk;
+    try {
+      chunk = b64ToUint8(msg.data);
+    } catch {
+      console.warn('File chunk rejected: invalid base64');
+      return this._failInbound(key, 'Invalid file chunk encoding');
+    }
+    if (chunk.byteLength !== expectedLength) {
+      console.warn('File chunk rejected: invalid decoded size');
+      chunk.fill(0);
+      return this._failInbound(key, 'Invalid file chunk size');
+    }
+
+    transfer.buffer.set(chunk, offset);
+    chunk.fill(0);
+    transfer.receivedChunks[msg.index] = 1;
+    transfer.received++;
+    transfer.receivedBytes += expectedLength;
+    return {
+      event: 'progress',
+      id: transfer.id,
+      scope: transfer.scope,
+      received: transfer.received,
+      totalChunks: transfer.totalChunks,
+    };
+  }
+
+  _onEnd(msg, key) {
+    const transfer = this.inbound.get(key);
+    if (!transfer) return null;
+    if (transfer.received !== transfer.totalChunks
+        || transfer.receivedBytes !== transfer.totalSize) {
+      const id = transfer.id;
+      const scope = transfer.scope;
+      this._discardInbound(key);
+      return { event: 'error', id, scope, error: 'Incomplete or inconsistent transfer' };
+    }
+
+    clearTimeout(transfer.timer);
+    this.inbound.delete(key);
+    this._reservedInboundBytes -= transfer.totalSize;
+    return {
+      event: 'complete',
+      id: transfer.id,
+      scope: transfer.scope,
+      ciphertext: transfer.buffer.buffer,
+      fileIv: transfer.fileIv,
+      fileEpoch: transfer.fileEpoch,
+      meta: transfer.meta,
+      ttl: transfer.ttl,
+      burnAfterReading: transfer.burnAfterReading,
+    };
+  }
+
+  _discardInbound(key) {
+    const transfer = this.inbound.get(key);
+    if (!transfer) return;
+    clearTimeout(transfer.timer);
+    transfer.buffer.fill(0);
+    this._reservedInboundBytes -= transfer.totalSize;
+    this.inbound.delete(key);
+  }
+
+  _failInbound(key, error) {
+    const transfer = this.inbound.get(key);
+    if (!transfer) return null;
+    const result = { event: 'error', id: transfer.id, scope: transfer.scope, error };
+    this._discardInbound(key);
     return result;
   }
 
-  /** Pause until the data-channel send buffer drains below threshold. */
   _waitForBuffer(peer) {
-    return new Promise((resolve) => {
-      if (!peer.dc || peer.dc.readyState !== 'open') { resolve(); return; }
-      if (peer.dc.bufferedAmount <= BUFFER_HIGH) { resolve(); return; }
+    return new Promise((resolve, reject) => {
+      if (!peer.dc || peer.dc.readyState !== 'open') {
+        reject(new Error('Data channel closed'));
+        return;
+      }
+      if (peer.dc.bufferedAmount <= BUFFER_HIGH) {
+        resolve();
+        return;
+      }
       peer.dc.bufferedAmountLowThreshold = BUFFER_HIGH / 2;
-      const handler = () => { cleanup(); resolve(); };
-      const closeHandler = () => { cleanup(); resolve(); };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('Data channel backpressure timeout'));
+      }, BUFFER_WAIT_TIMEOUT);
+      const low = () => { cleanup(); resolve(); };
+      const closed = () => { cleanup(); reject(new Error('Data channel closed')); };
       const cleanup = () => {
-        peer.dc.removeEventListener('bufferedamountlow', handler);
-        peer.dc.removeEventListener('close', closeHandler);
+        clearTimeout(timer);
+        peer.dc?.removeEventListener('bufferedamountlow', low);
+        peer.dc?.removeEventListener('close', closed);
       };
-      peer.dc.addEventListener('bufferedamountlow', handler);
-      peer.dc.addEventListener('close', closeHandler);
+      peer.dc.addEventListener('bufferedamountlow', low);
+      peer.dc.addEventListener('close', closed);
     });
   }
 
+  _key(scope, id) {
+    if (typeof scope !== 'string' || scope.length > 128) throw new Error('Invalid peer scope');
+    return `${scope}\0${id}`;
+  }
+
   _validID(id) {
-    return typeof id === 'string' && id.length > 0 && id.length <= MAX_ID_LEN;
+    return typeof id === 'string' && MESSAGE_ID_RE.test(id);
   }
 
   _validEncryptedMeta(meta) {
-    return meta &&
-      typeof meta === 'object' &&
-      typeof meta.ciphertext === 'string' &&
-      typeof meta.iv === 'string';
+    return meta
+      && typeof meta === 'object'
+      && typeof meta.ciphertext === 'string'
+      && meta.ciphertext.length > 0
+      && meta.ciphertext.length <= 4096
+      && typeof meta.iv === 'string'
+      && meta.iv.length <= 32
+      && Number.isSafeInteger(meta.epoch)
+      && meta.epoch >= 0;
   }
 }
 
-/* ── Base64 helpers (keep local to avoid import cycle) ── */
-
-function _uint8ToB64(u8) {
-  let bin = '';
-  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-  return btoa(bin);
+function uint8ToB64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
 }
 
-function _b64ToUint8(b64) {
-  const bin = atob(b64);
-  const u8 = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-  return u8;
+function b64ToUint8(value) {
+  if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) {
+    throw new Error('Invalid base64');
+  }
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }

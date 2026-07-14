@@ -14,6 +14,9 @@ const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
 const REKEY_INTERVAL_MS = 10 * 60 * 1000; // DH ratchet every 10 min for forward secrecy
 const REKEY_TIMEOUT_MS = 30 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 30 * 1000;   // fail an unfinished handshake instead of hanging forever
+const TRAFFIC_WINDOW_MS = 10 * 1000;
+const MAX_MESSAGES_PER_WINDOW = 1500; // accommodates a complete 25 MB file
+const MAX_BYTES_PER_WINDOW = 128 * 1024 * 1024;
 
 export class PeerConnection {
   /**
@@ -35,6 +38,9 @@ export class PeerConnection {
     this.dc = null;            // data channel
     this.remotePeerId = null;
     this.connected = false;
+    this.localVerified = false;
+    this.remoteVerified = false;
+    this.userVerified = false; // true only after both users confirm SAS/QR
     this.onRemoteTrack = null; // callback for incoming remote media
     this.localStream = null;
     this.isInitiator = false;  // the data-channel creator drives rekeys
@@ -45,12 +51,16 @@ export class PeerConnection {
     this._recvQ = Promise.resolve(); // keeps opened messages in order
     // Media path authenticity: call audio/video is protected by DTLS-SRTP, whose
     // certificate is authenticated only by the fingerprint in the SDP — which is
-    // relayed by the (untrusted) signaling server. Until we confirm, over the
-    // SAS-verified data channel, that the peer's real DTLS cert matches what
-    // signaling delivered, the media path is NOT trusted and calls are blocked.
+    // relayed by the (untrusted) signaling server. We bind that fingerprint to
+    // the encrypted session, then separately require both users to compare and
+    // confirm the SAS before any call or application traffic is allowed.
     this.mediaVerified = false;
     this._fpTimer = null;
     this._handshakeTimer = null;
+    this._closed = false;
+    this._trafficWindowAt = Date.now();
+    this._trafficMessages = 0;
+    this._trafficBytes = 0;
   }
 
   /* ── Initiator (caller) ── */
@@ -121,7 +131,27 @@ export class PeerConnection {
     if (!this.dc || this.dc.readyState !== 'open') {
       throw new Error('Data channel not open');
     }
+    if (!this.userVerified) {
+      throw new Error('Peer identity has not been verified');
+    }
     return this._queueSealed(obj);
+  }
+
+  /** Unlock app traffic only after the user confirms the out-of-band SAS. */
+  markVerified() {
+    if (!this.crypto.established) throw new Error('Encryption is not established');
+    this.localVerified = true;
+    const sent = this._queueSealed({ type: 'verify-ready', v: PROTOCOL_VERSION });
+    this._updateVerificationState();
+    return sent;
+  }
+
+  /** A mismatching QR/SAS is a terminal authentication failure. */
+  rejectVerification(reason = 'safety code mismatch') {
+    this.userVerified = false;
+    this.localVerified = false;
+    this.remoteVerified = false;
+    this._terminateInsecure(reason);
   }
 
   /* ── Media (audio / video calls) ── */
@@ -131,6 +161,7 @@ export class PeerConnection {
    * Called by the call initiator after the remote peer accepts.
    */
   async startMedia(stream) {
+    this._requireVerifiedMedia();
     this.localStream = stream;
     for (const track of stream.getTracks()) this.pc.addTrack(track, stream);
     const offer = await this.pc.createOffer();
@@ -143,6 +174,7 @@ export class PeerConnection {
    * Adds local tracks (if provided) and returns an SDP answer.
    */
   async acceptMedia(offer, localStream) {
+    this._requireVerifiedMedia();
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
     if (localStream) {
       this.localStream = localStream;
@@ -155,6 +187,7 @@ export class PeerConnection {
 
   /** Handle the renegotiation answer. */
   async completeMedia(answer) {
+    this._requireVerifiedMedia();
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
   }
 
@@ -171,7 +204,9 @@ export class PeerConnection {
     }
   }
 
-  close() {
+  close(notify = true) {
+    if (this._closed) return;
+    this._closed = true;
     this._clearRekey();
     clearTimeout(this._fpTimer);
     clearTimeout(this._handshakeTimer);
@@ -180,7 +215,10 @@ export class PeerConnection {
     if (this.dc) this.dc.close();
     if (this.pc) this.pc.close();
     this.connected = false;
-    this.onStateChange('disconnected');
+    this.localVerified = false;
+    this.remoteVerified = false;
+    this.userVerified = false;
+    if (notify) this.onStateChange('disconnected');
   }
 
   /* ── Private ── */
@@ -211,6 +249,7 @@ export class PeerConnection {
     };
 
     pc.onconnectionstatechange = () => {
+      if (this._closed) return;
       const s = pc.connectionState;
       if (s === 'connected') {
         this.connected = true;
@@ -231,8 +270,7 @@ export class PeerConnection {
         onEstablished: (sas) => this._onEstablished(sas),
         onError: (reason) => {
           console.warn('[peer] handshake failed:', reason);
-          this.onStateChange('insecure', reason);
-          this.close();
+          this._terminateInsecure(reason);
         },
       });
       // Don't let a peer (or relay) that opens the channel but stalls the key
@@ -240,19 +278,24 @@ export class PeerConnection {
       this._handshakeTimer = setTimeout(() => {
         if (!this.crypto.established) {
           console.warn('[peer] handshake did not complete in time — closing');
-          this.close();
+          this._terminateInsecure('handshake timed out');
         }
       }, HANDSHAKE_TIMEOUT_MS);
       try {
         await this.handshake.start();
       } catch (err) {
         console.warn('[peer] handshake start failed:', err);
+        this._terminateInsecure('handshake start failed');
       }
     };
 
     ch.onmessage = async (e) => {
       if (typeof e.data !== 'string' || e.data.length > MAX_DATA_CHANNEL_MESSAGE) {
         console.warn('[peer] Received invalid message size — ignoring');
+        return;
+      }
+      if (!this._consumeTrafficBudget(e.data.length)) {
+        this._terminateInsecure('peer traffic limit exceeded');
         return;
       }
       let msg;
@@ -284,25 +327,36 @@ export class PeerConnection {
       this._recvQ = this._recvQ
         .then(async () => {
           const inner = await this.crypto.open(msg.c, msg.iv, msg.e);
-          if (!inner || typeof inner.type !== 'string') return;
-          if (inner.type === 'rekey-offer') { await this._onRekeyOffer(inner); return; }
-          if (inner.type === 'rekey-answer') { await this._onRekeyAnswer(inner); return; }
-          if (inner.type === 'dtls-fp') { this._onPeerFingerprint(inner); return; }
-          this.onMessage(inner);
+          await this._handleInner(inner);
         })
         .catch((err) => console.warn('[peer] failed to open sealed message', err));
       await this._recvQ;
     };
 
     ch.onclose = () => {
-      this.connected = false;
-      this._clearRekey();
-      this.onStateChange('disconnected');
+      if (!this._closed) this.close();
     };
   }
 
   _dcSend(obj) {
     if (this.dc && this.dc.readyState === 'open') this.dc.send(JSON.stringify(obj));
+  }
+
+  async _handleInner(inner) {
+    if (!inner || typeof inner.type !== 'string') return;
+    if (inner.type === 'rekey-offer') { await this._onRekeyOffer(inner); return; }
+    if (inner.type === 'rekey-answer') { await this._onRekeyAnswer(inner); return; }
+    if (inner.type === 'dtls-fp') { this._onPeerFingerprint(inner); return; }
+    if (inner.type === 'verify-ready' && inner.v === PROTOCOL_VERSION) {
+      this.remoteVerified = true;
+      this._updateVerificationState();
+      return;
+    }
+    if (!this.userVerified) {
+      console.warn('[peer] dropping app traffic before identity verification');
+      return;
+    }
+    await this.onMessage(inner);
   }
 
   _queueSealed(obj, epoch) {
@@ -335,8 +389,8 @@ export class PeerConnection {
     // Bind the DTLS/media path to this cryptographic session. Human SAS
     // comparison is still required before the application may trust the peer.
     // Send our real local fingerprint over the encrypted channel so the peer
-    // can check it against the fingerprint signaling handed them. Messages are
-    // already safe (encrypted with the SAS key); this closes the call/media gap.
+    // can check it against the fingerprint signaling handed them. This binds
+    // transport to the session; user verification is still a separate gate.
     this._verifyMediaPath();
   }
 
@@ -352,7 +406,7 @@ export class PeerConnection {
     if (mine.length === 0) return; // nothing to attest; calls stay disabled
     this._queueSealed({ type: 'dtls-fp', v: PROTOCOL_VERSION, fp: mine }).catch(() => {});
     // If the peer never confirms (old client, or a MitM dropping the message),
-    // leave mediaVerified false — messaging still works, calls stay disabled.
+    // leave mediaVerified false — calls stay disabled.
     clearTimeout(this._fpTimer);
     this._fpTimer = setTimeout(() => {
       if (!this.mediaVerified) console.warn('[peer] media path unverified — calls disabled');
@@ -383,8 +437,7 @@ export class PeerConnection {
       // man-in-the-middle is terminating the transport and could intercept a
       // call. Messages stayed confidential, but abort loudly.
       console.warn('[peer] DTLS fingerprint mismatch — media-path MITM');
-      this.onStateChange('insecure', 'DTLS fingerprint mismatch — media path may be intercepted');
-      this.close();
+      this._terminateInsecure('DTLS fingerprint mismatch — media path may be intercepted');
     }
   }
 
@@ -414,14 +467,12 @@ export class PeerConnection {
       clearTimeout(this._rekeyTimeout);
       this._rekeyTimeout = setTimeout(() => {
         console.warn('[peer] authenticated rekey timed out');
-        this.onStateChange('insecure', 'rekey timed out');
-        this.close();
+        this._terminateInsecure('rekey timed out');
       }, REKEY_TIMEOUT_MS);
     });
     this._sendQ = operation.catch((err) => {
       console.warn('[peer] rekey offer failed', err);
-      this.onStateChange('insecure', 'rekey failed');
-      this.close();
+      this._terminateInsecure('rekey failed');
     });
     await operation.catch(() => {});
   }
@@ -447,8 +498,7 @@ export class PeerConnection {
     });
     this._sendQ = operation.catch((err) => {
       console.warn('[peer] rekey accept failed — tearing down to avoid key divergence', err);
-      this.onStateChange('insecure', 'rekey failed');
-      this.close();
+      this._terminateInsecure('rekey failed');
     });
     return operation;
   }
@@ -467,10 +517,40 @@ export class PeerConnection {
     });
     this._sendQ = operation.catch((err) => {
       console.warn('[peer] rekey complete failed — tearing down to avoid key divergence', err);
-      this.onStateChange('insecure', 'rekey failed');
-      this.close();
+      this._terminateInsecure('rekey failed');
     });
     return operation;
+  }
+
+  _requireVerifiedMedia() {
+    if (!this.userVerified || !this.mediaVerified) {
+      throw new Error('Peer identity or media path is not verified');
+    }
+  }
+
+  _updateVerificationState() {
+    if (this.userVerified || !this.localVerified || !this.remoteVerified) return;
+    this.userVerified = true;
+    this.onStateChange('verified-ready');
+  }
+
+  _consumeTrafficBudget(bytes) {
+    const now = Date.now();
+    if (now - this._trafficWindowAt >= TRAFFIC_WINDOW_MS) {
+      this._trafficWindowAt = now;
+      this._trafficMessages = 0;
+      this._trafficBytes = 0;
+    }
+    this._trafficMessages++;
+    this._trafficBytes += bytes;
+    return this._trafficMessages <= MAX_MESSAGES_PER_WINDOW
+      && this._trafficBytes <= MAX_BYTES_PER_WINDOW;
+  }
+
+  _terminateInsecure(reason) {
+    if (this._closed) return;
+    this.close(false);
+    this.onStateChange('insecure', reason);
   }
 }
 
