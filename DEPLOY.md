@@ -76,6 +76,28 @@ The enabled vhost is a real file (not a symlink); keep `sites-available` and
 `sites-enabled` copies in sync and never leave `*.bak` files in `sites-enabled`
 (nginx globs them).
 
+### Cloudflare-only HTTPS origin
+
+Do not expose the HTTPS application origin directly. At `http` scope, maintain
+a `geo` map named `$from_cloudflare_origin` over `$realip_remote_addr`, allowing
+only loopback and Cloudflare's current published IPv4/IPv6 prefixes. Use
+`$realip_remote_addr`, not the visitor-rewritten `$remote_addr`, so a forged
+`CF-Connecting-IP` or `X-Forwarded-For` header cannot pass the check. Then put
+this fail-closed guard in the TLS server block:
+
+```nginx
+if ($from_cloudflare_origin = 0) {
+    return 444;
+}
+```
+
+Keep the port-80 Certbot/nginx challenge path outside that TLS-only guard, and
+validate before reloading with `sudo nginx -t`. After reload, the Cloudflare URL
+and an explicit loopback TLS resolve must return 200, while an explicit resolve
+to the public origin IP must fail before HTTP. The app emits
+`Cache-Control: no-store, no-transform`; compare public, loopback, and onion
+SHA-256 hashes after every deploy to detect CDN HTML rewriting.
+
 ## 4. coturn (STUN/TURN)
 
 `/etc/turnserver.conf` highlights:
