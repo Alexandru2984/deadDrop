@@ -116,7 +116,9 @@ this is not a cryptographically deniable-authentication protocol.
 
 ## Build and local test
 
-Prerequisites: Go 1.25+ and Node 22+ for the browser self-tests.
+Prerequisites: Go 1.25.12+ and Node 22+ for the browser self-tests. The minimum
+Go patch level is security-sensitive because the server uses the standard
+library for HTTP, cookies, cryptography, and rooted private-file operations.
 
 ```bash
 go build -o deaddrop ./cmd/server/
@@ -167,6 +169,10 @@ required against that threat.
 ```bash
 go vet ./...
 go test -race ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -exclude-generated \
+  -nosec-require-rules -nosec-require-justification ./...
+go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --no-banner --redact .
 node test/crypto.selftest.mjs
 node test/lifecycle.selftest.mjs
 node test/mlkem.selftest.mjs

@@ -161,10 +161,11 @@ func (p *Peer) readPump() {
 	}()
 
 	p.conn.SetReadLimit(maxMessageSize)
-	p.conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := p.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return
+	}
 	p.conn.SetPongHandler(func(string) error {
-		p.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return p.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
@@ -211,9 +212,11 @@ func (p *Peer) writePump() {
 				p.closeWithPolicy("session expired")
 				return
 			}
-			p.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
 			if !ok {
-				p.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = p.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 			if err := p.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
@@ -224,7 +227,9 @@ func (p *Peer) writePump() {
 				p.closeWithPolicy("session expired")
 				return
 			}
-			p.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				return
+			}
 			if err := p.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

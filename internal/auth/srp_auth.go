@@ -400,9 +400,6 @@ func validInviteCode(s string) bool {
 // `deaddrop invite` CLI subcommand. The running server reads invites fresh on each
 // registration, so a code minted here is immediately usable.
 func GenerateInviteForDir(dataDir string) (string, error) {
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		return "", err
-	}
 	return newInvites(dataDir).Generate()
 }
 
@@ -411,9 +408,6 @@ func GenerateInviteForDir(dataDir string) (string, error) {
 func GenerateInvitesForDir(dataDir string, n int) ([]string, error) {
 	if n < 1 {
 		return nil, errors.New("count must be at least 1")
-	}
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		return nil, err
 	}
 	return newInvites(dataDir).generateN(n)
 }
@@ -426,9 +420,6 @@ func ListInvitesForDir(dataDir string) ([]string, error) {
 // ImportInvitesForDir merges codes (already parsed) into dataDir's invite store,
 // skipping malformed ones and duplicates. Returns how many were newly added.
 func ImportInvitesForDir(dataDir string, codes []string) (added, skipped int, err error) {
-	if err := os.MkdirAll(dataDir, 0700); err != nil {
-		return 0, 0, err
-	}
 	return newInvites(dataDir).importCodes(codes)
 }
 
@@ -453,11 +444,18 @@ func ParseInviteCodes(raw []byte) []string {
 	return out
 }
 
-func (iv *invites) load() ([]string, error) {
-	f, err := os.Open(iv.path)
+func (iv *invites) load(root *os.Root, name string) ([]string, error) {
+	pathInfo, err := root.Lstat(name)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return nil, errors.New("invite store is not a regular file")
+	}
+	f, err := root.Open(name)
 	if err != nil {
 		return nil, err
 	}
@@ -500,32 +498,31 @@ func (iv *invites) load() ([]string, error) {
 	return codes, nil
 }
 
-func (iv *invites) save(codes []string) error {
+func (iv *invites) save(root *os.Root, name string, codes []string) error {
 	if len(codes) > maxInvites {
 		return errors.New("invite store exceeds code limit")
 	}
-	return atomicWriteJSON(iv.path, codes)
+	return atomicWriteJSONAt(root, name, codes)
 }
 
 // withLock serializes both goroutines and separate CLI/server processes that
 // operate on the same invite file. The lock file is intentionally persistent.
-func (iv *invites) withLock(fn func() error) (err error) {
+func (iv *invites) withLock(fn func(root *os.Root, name string) error) (err error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
-	if err := os.MkdirAll(filepath.Dir(iv.path), 0700); err != nil {
-		return err
-	}
-	if err := os.Chmod(filepath.Dir(iv.path), 0700); err != nil {
-		return err
-	}
-	lock, err := os.OpenFile(iv.path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	root, name, err := openPrivateRoot(iv.path)
 	if err != nil {
 		return err
 	}
-	if err := lock.Chmod(0600); err != nil {
+	defer root.Close()
+	lock, err := root.OpenFile(name+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
 		return err
 	}
 	defer lock.Close()
+	if err := lock.Chmod(0600); err != nil {
+		return err
+	}
 	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		return err
 	}
@@ -534,7 +531,7 @@ func (iv *invites) withLock(fn func() error) (err error) {
 			err = unlockErr
 		}
 	}()
-	return fn()
+	return fn(root, name)
 }
 
 // consume removes a code if present. Persistence failures are returned rather
@@ -544,15 +541,15 @@ func (iv *invites) consume(code string) (consumed bool, err error) {
 	if !validInviteCode(code) {
 		return false, nil
 	}
-	err = iv.withLock(func() error {
-		codes, loadErr := iv.load()
+	err = iv.withLock(func(root *os.Root, name string) error {
+		codes, loadErr := iv.load(root, name)
 		if loadErr != nil {
 			return loadErr
 		}
 		for i, c := range codes {
 			if subtleEqual(strings.ToUpper(c), code) {
 				next := append(append([]string(nil), codes[:i]...), codes[i+1:]...)
-				if saveErr := iv.save(next); saveErr != nil {
+				if saveErr := iv.save(root, name, next); saveErr != nil {
 					return saveErr
 				}
 				consumed = true
@@ -570,8 +567,8 @@ func (iv *invites) restore(code string) error {
 	if !validInviteCode(code) {
 		return errors.New("invalid invite code")
 	}
-	return iv.withLock(func() error {
-		codes, err := iv.load()
+	return iv.withLock(func(root *os.Root, name string) error {
+		codes, err := iv.load(root, name)
 		if err != nil {
 			return err
 		}
@@ -581,7 +578,7 @@ func (iv *invites) restore(code string) error {
 			}
 		}
 		codes = append(codes, code)
-		return iv.save(codes)
+		return iv.save(root, name, codes)
 	})
 }
 
@@ -596,9 +593,9 @@ func (iv *invites) Generate() (string, error) {
 
 // list returns the current unused codes (a copy is fine; caller only reads).
 func (iv *invites) list() (codes []string, err error) {
-	err = iv.withLock(func() error {
+	err = iv.withLock(func(root *os.Root, name string) error {
 		var loadErr error
-		codes, loadErr = iv.load()
+		codes, loadErr = iv.load(root, name)
 		return loadErr
 	})
 	return codes, err
@@ -611,8 +608,8 @@ func (iv *invites) generateN(n int) ([]string, error) {
 		return nil, fmt.Errorf("count must be between 1 and %d", maxInviteBatch)
 	}
 	minted := make([]string, 0, n)
-	err := iv.withLock(func() error {
-		codes, err := iv.load()
+	err := iv.withLock(func(root *os.Root, name string) error {
+		codes, err := iv.load(root, name)
 		if err != nil {
 			return err
 		}
@@ -635,7 +632,7 @@ func (iv *invites) generateN(n int) ([]string, error) {
 			codes = append(codes, code)
 			minted = append(minted, code)
 		}
-		return iv.save(codes)
+		return iv.save(root, name, codes)
 	})
 	return minted, err
 }
@@ -646,8 +643,8 @@ func (iv *invites) importCodes(in []string) (added, skipped int, err error) {
 	if len(in) > maxInviteBatch {
 		return 0, 0, fmt.Errorf("cannot import more than %d codes at once", maxInviteBatch)
 	}
-	err = iv.withLock(func() error {
-		codes, loadErr := iv.load()
+	err = iv.withLock(func(root *os.Root, name string) error {
+		codes, loadErr := iv.load(root, name)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -666,7 +663,7 @@ func (iv *invites) importCodes(in []string) (added, skipped int, err error) {
 			added++
 		}
 		if added > 0 {
-			return iv.save(codes)
+			return iv.save(root, name, codes)
 		}
 		return nil
 	})
@@ -1102,7 +1099,7 @@ func (h *Handler) setCookieSession(w http.ResponseWriter, r *http.Request, usern
 }
 
 func (h *Handler) clearCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- flags are explicit; Secure is false only for local HTTP development
 		Name: sessionCookieName(r), Value: "", Path: "/", MaxAge: -1,
 		Expires: time.Unix(1, 0), HttpOnly: true,
 		Secure: middleware.IsSecureRequest(r), SameSite: http.SameSiteStrictMode,

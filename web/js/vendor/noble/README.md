@@ -14,10 +14,12 @@ origins (CSP `script-src 'self'`).
 | `_u64.js` | `@noble/hashes@2.2.0` | `_u64.js` |
 | `fft.js` | `@noble/curves@2.2.0` | `abstract/fft.js` |
 
-The ONLY modification is rewriting bare import specifiers
+The intended modification is only rewriting bare import specifiers
 (`@noble/hashes/sha3.js` → `./sha3.js`, etc.) to relative paths so the files
-load as plain same-origin ES modules; code is otherwise byte-identical to the
-published npm artifacts. Verified by `test/mlkem.selftest.mjs`.
+load as plain same-origin ES modules. `test/mlkem.selftest.mjs` checks dimensions,
+round trips, implicit rejection, and wrong-key behavior; it does **not** prove
+byte-for-byte provenance. During an upgrade, independently fetch the pinned npm
+tarballs and diff every file before accepting the new hashes.
 
 To upgrade: `npm pack` the three packages, re-copy these files, re-apply the
 specifier rewrites, rerun the selftest.

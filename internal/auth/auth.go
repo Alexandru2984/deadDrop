@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -65,12 +66,12 @@ const (
 const legacyBcryptCost = 12
 
 func newStore(dir string) (*store, error) {
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(dir, 0700); err != nil {
+	path := filepath.Join(dir, "users.json")
+	root, name, err := openPrivateRoot(path)
+	if err != nil {
 		return nil, fmt.Errorf("secure auth data directory: %w", err)
 	}
+	defer root.Close()
 	// Generate a valid bcrypt hash at startup for constant-time dummy comparison.
 	// This prevents user enumeration via timing — the work is identical whether
 	// the user exists or not. Must be the same cost factor as real hashes.
@@ -78,17 +79,30 @@ func newStore(dir string) (*store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize legacy authentication: %w", err)
 	}
-	s := &store{users: make(map[string]user), path: filepath.Join(dir, "users.json"), dummyHash: dummy}
-	if info, err := os.Lstat(s.path); err == nil {
+	s := &store{users: make(map[string]user), path: path, dummyHash: dummy}
+	if info, err := root.Lstat(name); err == nil {
 		if !info.Mode().IsRegular() {
 			return nil, errors.New("users.json is not a regular file")
 		}
 		if info.Size() > maxUsersFileLen {
 			return nil, errors.New("users.json exceeds size limit")
 		}
-		data, err := os.ReadFile(s.path)
+		file, err := root.Open(name)
 		if err != nil {
 			return nil, fmt.Errorf("read users.json: %w", err)
+		}
+		data, readErr := io.ReadAll(io.LimitReader(file, maxUsersFileLen+1))
+		if chmodErr := file.Chmod(0600); readErr == nil && chmodErr != nil {
+			readErr = chmodErr
+		}
+		if closeErr := file.Close(); readErr == nil && closeErr != nil {
+			readErr = closeErr
+		}
+		if readErr != nil {
+			return nil, fmt.Errorf("read users.json: %w", readErr)
+		}
+		if len(data) > maxUsersFileLen {
+			return nil, errors.New("users.json exceeds size limit")
 		}
 		if err := json.Unmarshal(data, &s.users); err != nil {
 			return nil, fmt.Errorf("corrupt users.json: %w", err)
@@ -100,9 +114,6 @@ func newStore(dir string) (*store, error) {
 			if err := validateStoredUser(username, u); err != nil {
 				return nil, fmt.Errorf("invalid account %q: %w", username, err)
 			}
-		}
-		if err := os.Chmod(s.path, 0600); err != nil {
-			return nil, fmt.Errorf("secure users.json: %w", err)
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("inspect users.json: %w", err)
@@ -145,7 +156,7 @@ func (s *store) authenticate(username, password string) error {
 	if !ok || u.Hash == "" {
 		// Constant-time work to prevent user-enumeration via timing.
 		// Uses a valid bcrypt hash generated at startup (same cost factor).
-		bcrypt.CompareHashAndPassword(s.dummyHash, prehashPassword(password))
+		_ = bcrypt.CompareHashAndPassword(s.dummyHash, prehashPassword(password))
 		return errors.New("invalid credentials")
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.Hash), prehashPassword(password)); err != nil {
@@ -427,7 +438,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := sessionCookie(r); err == nil {
 		h.sess.delete(c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- flags are explicit; Secure is false only for local HTTP development
 		Name:     sessionCookieName(r),
 		Value:    "",
 		Path:     "/",
@@ -496,7 +507,7 @@ func (h *Handler) SessionPrincipal(r *http.Request) (string, bool) {
 
 // setCookie detects HTTPS (via X-Forwarded-Proto from nginx) to set the Secure flag.
 func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string) {
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- flags are explicit; Secure is false only for local HTTP development
 		Name:     sessionCookieName(r),
 		Value:    token,
 		Path:     "/",
@@ -520,13 +531,13 @@ func sessionCookie(r *http.Request) (*http.Cookie, error) {
 
 func jsonOK(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 func jsonErr(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 func subtleEqual(a, b string) bool {

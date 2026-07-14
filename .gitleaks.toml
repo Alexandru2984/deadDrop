@@ -1,0 +1,12 @@
+title = "Dead Drop secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Deterministic non-secret TURN validation fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''Secret:\s*"0123456789abcdef0123456789abcdef"''']
+paths = ['''^internal/turn/turn_test\.go$''']

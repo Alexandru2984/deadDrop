@@ -16,12 +16,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
+      - name: Known-vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+      - name: Go security static analysis
+        run: >-
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+          -exclude-generated -nosec-require-rules
+          -nosec-require-justification ./...
+      - name: Git history secret scan
+        run: >-
+          go run github.com/zricethezav/gitleaks/v8@v8.30.1 git
+          --no-banner --redact .
 
   # Browser crypto, run under Node with no server or stored state — hermetic.
   web-crypto:

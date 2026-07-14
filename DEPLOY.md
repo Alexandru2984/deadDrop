@@ -131,11 +131,11 @@ cd /home/micu/deaddrop
 ./deaddrop invite                 # mint one   → DD-FXAV-XKH6-JC22
 ./deaddrop invite 10              # mint ten at once
 ./deaddrop invites list           # show all unused codes (+ count on stderr)
-./deaddrop invites export backup.json   # back them up as JSON (or `export -` to stdout)
+./deaddrop invites export backup.json   # creates a new 0600 JSON file; refuses overwrite
 ./deaddrop invites import backup.json   # merge a backup (dedup; `-` reads stdin)
 ```
 
-`import` accepts either the JSON array that `export` writes or plain
+`import` accepts at most 4 MiB, from either the JSON array that `export` writes or plain
 newline-separated codes; malformed tokens and duplicates are skipped and reported.
 This lets you pre-generate a batch offline and restore or migrate the invite pool.
 

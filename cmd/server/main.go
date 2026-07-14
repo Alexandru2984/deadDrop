@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +30,104 @@ import (
 // inviteDataDir is where invite codes (and other state) live, relative to the
 // working directory — the same "data" dir the server uses.
 const inviteDataDir = "data"
+
+const maxInviteImportBytes = 4 << 20
+
+func openCLIFileRoot(filename string) (*os.Root, string, error) {
+	clean := filepath.Clean(filename)
+	name := filepath.Base(clean)
+	if name == "." || name == ".." || name == string(filepath.Separator) {
+		return nil, "", errors.New("invalid file path")
+	}
+	root, err := os.OpenRoot(filepath.Dir(clean))
+	if err != nil {
+		return nil, "", err
+	}
+	return root, name, nil
+}
+
+func readBoundedInviteInput(input io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(input, maxInviteImportBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxInviteImportBytes {
+		return nil, errors.New("invite import exceeds 4 MiB")
+	}
+	return raw, nil
+}
+
+func readInviteImportFile(filename string) ([]byte, error) {
+	root, name, err := openCLIFileRoot(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("invite import is not a regular file")
+	}
+	return readBoundedInviteInput(file)
+}
+
+func writeInviteExportFile(filename string, data []byte) (err error) {
+	root, name, err := openCLIFileRoot(filename)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	file, err := root.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	keep := false
+	closed := false
+	defer func() {
+		if !closed {
+			if closeErr := file.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}
+		if !keep {
+			_ = root.Remove(name)
+		}
+	}()
+	if err := file.Chmod(0600); err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	closeErr := file.Close()
+	closed = true
+	if closeErr != nil {
+		return closeErr
+	}
+	dir, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	if err := dir.Sync(); err != nil {
+		_ = dir.Close()
+		return err
+	}
+	if err := dir.Close(); err != nil {
+		return err
+	}
+	keep = true
+	return nil
+}
 
 // runInviteCLI handles the `invite` / `invites` subcommands and exits. Codes go
 // to stdout (pipe-friendly); human status goes to stderr.
@@ -48,7 +148,7 @@ func runInviteCLI(args []string) {
 		if sub != "" {
 			v, err := strconv.Atoi(sub)
 			if err != nil || v < 1 {
-				log.Fatalf("invite: expected a positive count, got %q", sub)
+				log.Fatal("invite: expected a positive integer count")
 			}
 			n = v
 		}
@@ -80,10 +180,10 @@ func runInviteCLI(args []string) {
 		}
 		data, _ := json.MarshalIndent(codes, "", "  ")
 		if len(args) > 2 && args[2] != "-" {
-			if err := os.WriteFile(args[2], data, 0600); err != nil {
+			if err := writeInviteExportFile(args[2], data); err != nil {
 				log.Fatalf("invites export: %v", err)
 			}
-			fmt.Fprintf(os.Stderr, "exported %d code(s) to %s\n", len(codes), args[2])
+			fmt.Fprintf(os.Stderr, "exported %d code(s) to %q\n", len(codes), args[2])
 		} else {
 			fmt.Println(string(data))
 		}
@@ -97,9 +197,9 @@ func runInviteCLI(args []string) {
 			err error
 		)
 		if args[2] == "-" {
-			raw, err = io.ReadAll(os.Stdin)
+			raw, err = readBoundedInviteInput(os.Stdin)
 		} else {
-			raw, err = os.ReadFile(args[2])
+			raw, err = readInviteImportFile(args[2])
 		}
 		if err != nil {
 			log.Fatalf("invites import: %v", err)
@@ -111,7 +211,7 @@ func runInviteCLI(args []string) {
 		fmt.Fprintf(os.Stderr, "imported %d new code(s), skipped %d (malformed or duplicate)\n", added, skipped)
 
 	default:
-		log.Fatalf("unknown invites subcommand %q (use: list, export, import)", sub)
+		log.Fatal("unknown invites subcommand (use: list, export, import)")
 	}
 }
 
@@ -215,7 +315,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"code":"` + code + `"}`))
+		_, _ = w.Write([]byte(`{"code":"` + code + `"}`))
 	}))))
 
 	// Ephemeral TURN/STUN credentials (auth required; never exposes the secret).
@@ -505,7 +605,7 @@ func findAvailablePort(host string, preferred int) int {
 	for port := preferred; port < preferred+100; port++ {
 		ln, err := net.Listen("tcp", listenAddress(host, port))
 		if err == nil {
-			ln.Close()
+			_ = ln.Close()
 			return port
 		}
 	}
@@ -515,6 +615,6 @@ func findAvailablePort(host string, preferred int) int {
 		log.Fatal("cannot find any available port")
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	ln.Close()
+	_ = ln.Close()
 	return port
 }

@@ -298,6 +298,85 @@ func TestAtomicWriteJSONUsesPrivateFileAndNoPredictableTemp(t *testing.T) {
 	}
 }
 
+func TestPrivatePersistenceRejectsEscapingSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideSecret := filepath.Join(outsideDir, "outside.key")
+	outsideValue := bytes.Repeat([]byte{0x42}, 32)
+	if err := os.WriteFile(outsideSecret, outsideValue, 0600); err != nil {
+		t.Fatal(err)
+	}
+	secretLink := filepath.Join(dir, "secret.key")
+	if err := os.Symlink(outsideSecret, secretLink); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := loadOrCreateSecret(secretLink, 32); err == nil {
+		t.Fatal("secret loader followed a link outside its data root")
+	}
+
+	outsideJSON := filepath.Join(outsideDir, "outside.json")
+	if err := os.WriteFile(outsideJSON, []byte(`{"untouched":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stateLink := filepath.Join(dir, "state.json")
+	if err := os.Symlink(outsideJSON, stateLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteJSON(stateLink, map[string]bool{"inside": true}); err != nil {
+		t.Fatal(err)
+	}
+	outsideAfter, err := os.ReadFile(outsideJSON)
+	if err != nil || string(outsideAfter) != `{"untouched":true}` {
+		t.Fatalf("outside target changed: %q, %v", outsideAfter, err)
+	}
+	info, err := os.Lstat(stateLink)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("state link was not atomically replaced by a regular file: %v", err)
+	}
+}
+
+func TestPrivatePersistenceRejectsSymlinkDataRoot(t *testing.T) {
+	realDir := t.TempDir()
+	linkParent := t.TempDir()
+	linkDir := filepath.Join(linkParent, "data")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := NewHandler(linkDir); err == nil {
+		t.Fatal("symlink data root was accepted")
+	}
+	if _, err := GenerateInviteForDir(linkDir); err == nil {
+		t.Fatal("invite store accepted a symlink data root")
+	}
+}
+
+func TestPrivateStoresRejectSymlinkFiles(t *testing.T) {
+	dir := t.TempDir()
+	outsideDir := t.TempDir()
+	outsideUsers := filepath.Join(outsideDir, "users.json")
+	if err := os.WriteFile(outsideUsers, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideUsers, filepath.Join(dir, "users.json")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := NewHandler(dir); err == nil {
+		t.Fatal("user store accepted a symlink file")
+	}
+
+	inviteDir := t.TempDir()
+	outsideInvites := filepath.Join(outsideDir, "invites.json")
+	if err := os.WriteFile(outsideInvites, []byte(`[]`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideInvites, filepath.Join(inviteDir, "invites.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ListInvitesForDir(inviteDir); err == nil {
+		t.Fatal("invite store accepted a symlink file")
+	}
+}
+
 func TestInviteIsNotConsumedBeforeCredentialValidation(t *testing.T) {
 	t.Setenv("OPEN_REGISTRATION", "0")
 	h := newTestHandler(t)

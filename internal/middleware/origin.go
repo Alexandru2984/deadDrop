@@ -16,7 +16,7 @@ func RequireSameOrigin(next http.HandlerFunc) http.HandlerFunc {
 		if !sameOrigin(r) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error":"forbidden origin"}`))
+			_, _ = w.Write([]byte(`{"error":"forbidden origin"}`))
 			return
 		}
 		next(w, r)

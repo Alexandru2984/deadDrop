@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,6 +21,52 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestInviteCLIFileIOIsBoundedAndDoesNotClobber(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "invites.json")
+	want := []byte(`["DD-AAAA-BBBB-CCCC"]`)
+	if err := writeInviteExportFile(path, want); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("export mode = %o, want 600", got)
+	}
+	got, err := readInviteImportFile(path)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("read export = %q, %v", got, err)
+	}
+	if err := writeInviteExportFile(path, []byte("replacement")); err == nil {
+		t.Fatal("export overwrote an existing file")
+	}
+	got, err = os.ReadFile(path)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("failed export changed file = %q, %v", got, err)
+	}
+	tooLarge := bytes.NewReader(make([]byte, maxInviteImportBytes+1))
+	if _, err := readBoundedInviteInput(tooLarge); err == nil {
+		t.Fatal("oversized invite input was accepted")
+	}
+}
+
+func TestInviteCLIImportCannotFollowLinkOutsideSelectedRoot(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "import.json")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := readInviteImportFile(link); err == nil {
+		t.Fatal("import followed a symlink outside its selected directory")
+	}
+}
 
 func TestEmbeddedWebHandlerIsBoundedAndReadOnly(t *testing.T) {
 	h := embeddedWebHandler(appassets.WebFS())

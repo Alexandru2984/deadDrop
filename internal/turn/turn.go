@@ -9,7 +9,7 @@ package turn
 import (
 	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- coturn REST credentials require HMAC-SHA1; payload encryption does not use SHA-1
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -113,7 +113,7 @@ func (c Config) Handler() http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store, no-transform")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"iceServers": servers,
 			"ttl":        int(credTTL.Seconds()),
 		})

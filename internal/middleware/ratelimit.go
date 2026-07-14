@@ -95,7 +95,7 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 			}
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"too many requests"}`))
+			_, _ = w.Write([]byte(`{"error":"too many requests"}`))
 			return
 		}
 		next(w, r)
