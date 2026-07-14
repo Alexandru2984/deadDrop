@@ -1,38 +1,112 @@
 #!/usr/bin/env bash
 #
-# Deploy Dead Drop from this working tree.
-#
-# NOTE: this directory IS the live production checkout — systemd runs
-# ./deaddrop and the server serves ./web straight off disk. This script
-# regenerates the integrity manifest FIRST (so the served SHA256SUMS/SRI can
-# never lag the code), then rebuilds the binary and restarts the service.
-#
-# It does NOT commit and does NOT push — that stays the operator's call.
+# Fail-closed deployment from a reviewed, clean working tree. The browser
+# bundle is embedded in the binary, so one atomic binary replacement deploys
+# server and client together. This script never edits source or generated
+# integrity files and never commits or pushes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+ROOT="$PWD"
+CANDIDATE=""
+BACKUP=""
+HAD_OLD=0
 
-echo "▸ regenerating integrity manifest…"
-node scripts/gen-integrity.mjs
-if ! git diff --quiet -- web/SHA256SUMS web/index.html web/about.html web/verify.html; then
-  echo "  ⚠ integrity manifest/SRI was stale and has been updated — remember to commit:"
-  git --no-pager diff --stat -- web/SHA256SUMS web/index.html web/about.html web/verify.html | sed 's/^/    /'
+cleanup() {
+  [ -z "$CANDIDATE" ] || rm -f "$CANDIDATE"
+  [ -z "$BACKUP" ] || rm -f "$BACKUP"
+}
+trap cleanup EXIT
+
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  echo "✗ refusing to deploy a dirty or untracked working tree"
+  git status --short
+  exit 1
 fi
 
+if systemctl is-active --quiet deaddrop-integrity.service 2>/dev/null \
+    || systemctl is-enabled --quiet deaddrop-integrity.service 2>/dev/null; then
+  echo "✗ obsolete deaddrop-integrity.service is still active/enabled"
+  echo "  Disable it before deployment; embedded assets make it unnecessary and"
+  echo "  an auto-regenerator could legitimize an unreviewed live edit."
+  exit 1
+fi
+
+echo "▸ checking committed integrity manifest…"
+node scripts/gen-integrity.mjs --check
+
+echo "▸ running pre-deploy tests…"
+go vet ./...
+go test ./...
+node test/crypto.selftest.mjs
+node test/lifecycle.selftest.mjs
+node test/mlkem.selftest.mjs
+node test/srp.selftest.mjs
+node test/fingerprint.selftest.mjs
+node test/config.selftest.mjs
+
 echo "▸ building (prod flags)…"
-go build -trimpath -ldflags="-s -w" -o deaddrop ./cmd/server/
+CANDIDATE="$(mktemp "$ROOT/.deaddrop-build.XXXXXX")"
+go build -trimpath -ldflags="-s -w" -o "$CANDIDATE" ./cmd/server/
+chmod 0755 "$CANDIDATE"
+
+echo "▸ validating production environment…"
+if [ -e /etc/deaddrop.env ]; then
+  if [ -r /etc/deaddrop.env ]; then
+    (
+      set -a
+      # /etc/deaddrop.env is root-owned deployment input, not user input.
+      . /etc/deaddrop.env
+      set +a
+      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" "$CANDIDATE" check-config
+    )
+  else
+    sudo /bin/bash -c '
+      set -euo pipefail
+      set -a
+      . /etc/deaddrop.env
+      set +a
+      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" "$1" check-config
+    ' _ "$CANDIDATE"
+  fi
+else
+  PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" "$CANDIDATE" check-config
+fi
+
+if [ -e deaddrop ]; then
+  BACKUP="$(mktemp "$ROOT/.deaddrop-rollback.XXXXXX")"
+  cp -p deaddrop "$BACKUP"
+  HAD_OLD=1
+fi
+mv -f "$CANDIDATE" deaddrop
+CANDIDATE=""
 
 echo "▸ restarting deaddrop.service…"
-sudo systemctl restart deaddrop
-sleep 2
+if ! sudo systemctl restart deaddrop; then
+  healthy=0
+else
+  healthy=0
+  for _ in $(seq 1 20); do
+    if systemctl is-active --quiet deaddrop \
+        && [ "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8100/api/config || true)" = "200" ]; then
+      healthy=1
+      break
+    fi
+    sleep 0.25
+  done
+fi
 
-echo "▸ health check…"
-if ! systemctl is-active --quiet deaddrop; then
-  echo "  ✗ service is not active:"
+if [ "$healthy" != "1" ]; then
+  echo "  ✗ deployment health check failed; restoring previous binary"
+  if [ "$HAD_OLD" = "1" ]; then
+    mv -f "$BACKUP" deaddrop
+    BACKUP=""
+    sudo systemctl restart deaddrop || true
+  else
+    rm -f deaddrop
+    sudo systemctl stop deaddrop || true
+  fi
   sudo journalctl -u deaddrop -n 20 --no-pager
   exit 1
 fi
-code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8100/api/config)"
-echo "  local upstream: HTTP $code"
-[ "$code" = "200" ] || { echo "  ✗ upstream unhealthy"; exit 1; }
 
-echo "✓ deployed and healthy. git is NOT pushed — push yourself when ready."
+echo "✓ embedded client/server binary deployed and healthy; git was not pushed."

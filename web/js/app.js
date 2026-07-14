@@ -1823,9 +1823,24 @@ class DeadDrop {
 
 new DeadDrop();
 
-// Register the service worker (installable PWA + offline shell). Best-effort.
-if ('serviceWorker' in navigator) {
+// Retire the former offline service worker and its caches. A cached cryptographic
+// client can outlive a security deployment and mix protocol versions, while the
+// app cannot actually chat offline; every load now comes from the embedded,
+// no-store server bundle.
+if ('serviceWorker' in navigator || 'caches' in window) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+    (async () => {
+      if ('serviceWorker' in navigator) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(registrations.filter((registration) => {
+          const workers = [registration.installing, registration.waiting, registration.active].filter(Boolean);
+          return workers.some((worker) => new URL(worker.scriptURL).pathname === '/sw.js');
+        }).map((registration) => registration.unregister()));
+      }
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter((key) => key.startsWith('deaddrop-')).map((key) => caches.delete(key)));
+      }
+    })().catch(() => {});
   });
 }

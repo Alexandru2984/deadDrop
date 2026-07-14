@@ -149,9 +149,9 @@ deaddrop/
   strict same-origin + CSP without any 'unsafe-inline'
 - ✅ Optional duress (decoy) password; nothing in the API or UI betrays a decoy session
 - ✅ No third-party analytics, no message storage, PII-free server logs
-- ✅ Verifiable delivery: every served file is hashed into `web/SHA256SUMS`
-  (committed to this repo); the `/verify.html` page re-checks the bundle in the
-  browser and against GitHub
+- ✅ Build-locked delivery: the complete browser client is embedded in the Go
+  binary, and every asset is recorded in committed `web/SHA256SUMS`; live disk
+  edits cannot change what an already-built server serves
 
 > **Honest limitation.** Dead Drop is a *website*, so your browser re-downloads
 > the encryption code from the server on every visit. A compromised or coerced
@@ -166,8 +166,11 @@ threat model — including what Dead Drop does **not** protect against.
 ### Verifying the code
 
 ```bash
-# Regenerate the integrity manifest (run before every deploy):
+# Developer step after changing web assets; review and commit the result:
 node scripts/gen-integrity.mjs
+
+# Deploy/CI step is read-only and fails if anything drifted:
+node scripts/gen-integrity.mjs --check
 
 # Confirm the live server serves exactly the open-source bundle:
 diff <(curl -s https://dead.micutu.com/SHA256SUMS) \
@@ -184,9 +187,11 @@ manifest against GitHub (a source the server can't forge).
 ```bash
 go test ./...                      # server (incl. SRP JS↔Go interop vectors)
 node test/crypto.selftest.mjs      # hybrid handshake + sealing + ratchet
+node test/lifecycle.selftest.mjs   # bounded, peer-scoped message/file lifecycle
 node test/mlkem.selftest.mjs       # vendored ML-KEM-768 sanity
 node test/srp.selftest.mjs         # SRP client↔server (legacy + PBKDF2 kdf)
 node test/fingerprint.selftest.mjs # DTLS media-path fingerprint check
+node test/config.selftest.mjs      # bounded STUN/TURN browser configuration
 node test/srp.e2e.mjs              # live SRP against a running server
 ```
 

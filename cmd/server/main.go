@@ -5,17 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	appassets "deaddrop"
 	"deaddrop/internal/auth"
 	"deaddrop/internal/middleware"
 	"deaddrop/internal/signaling"
@@ -119,6 +122,12 @@ func main() {
 		case "invite", "invites":
 			runInviteCLI(os.Args[1:])
 			return
+		case "check-config":
+			if err := checkRuntimeConfiguration(); err != nil {
+				log.Fatalf("configuration invalid: %v", err)
+			}
+			fmt.Println("configuration valid")
+			return
 		}
 	}
 
@@ -126,27 +135,9 @@ func main() {
 	// bind exactly that port and fail loudly if it's taken — silently drifting to
 	// PORT+1 would leave the reverse proxy pointing at nothing. Port hunting is a
 	// dev-only convenience for when PORT is unset.
-	port := 8088
-	portPinned := false
-	if p := os.Getenv("PORT"); p != "" {
-		v, err := strconv.Atoi(p)
-		if err != nil || v < 1 || v > 65535 {
-			log.Fatalf("invalid PORT %q", p)
-		}
-		port = v
-		portPinned = true
-	}
-
-	// Bind to loopback by default so the Go server is only reachable through the
-	// reverse proxy (nginx/Cloudflare). Binding to 0.0.0.0 would let anyone who
-	// knows the origin IP bypass the proxy, defeating origin-hiding and the WAF.
-	// Override with HOST=0.0.0.0 only for direct local testing.
-	host := "127.0.0.1"
-	if h := strings.TrimSpace(os.Getenv("HOST")); h != "" {
-		host = h
-	}
-	if !isLoopbackHost(host) && os.Getenv("ALLOW_PUBLIC_BIND") != "1" {
-		log.Fatalf("refusing non-loopback HOST=%q without ALLOW_PUBLIC_BIND=1", host)
+	port, portPinned, host, err := configuredListenAddress()
+	if err != nil {
+		log.Fatalf("invalid listen configuration: %v", err)
 	}
 
 	// Find an available port without killing existing processes (dev only)
@@ -154,18 +145,19 @@ func main() {
 		port = findAvailablePort(host, port)
 	}
 
+	// Validate every environment-controlled security setting before touching
+	// account state or starting any goroutines.
+	origins, turnCfg, err := validateRuntimeEnvironment(port)
+	if err != nil {
+		log.Fatalf("invalid runtime configuration: %v", err)
+	}
+	signaling.AllowedOrigins = origins
+
 	// Auth (username + password only, no email or identifying data)
 	authH, err := auth.NewHandler("data")
 	if err != nil {
 		log.Fatalf("auth init: %v", err)
 	}
-
-	// Restrict WebSocket origins to prevent CSRF.
-	origins, err := allowedOrigins(port)
-	if err != nil {
-		log.Fatalf("invalid WebSocket origin configuration: %v", err)
-	}
-	signaling.AllowedOrigins = origins
 
 	hub := signaling.NewHub()
 	go hub.Run()
@@ -206,9 +198,6 @@ func main() {
 	// The network admin endpoint is disabled by default; the local `deaddrop
 	// invite` CLI remains available without exposing an Internet attack surface.
 	if os.Getenv("ENABLE_ADMIN_API") == "1" {
-		if len(strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))) < 32 {
-			log.Fatal("ENABLE_ADMIN_API requires an ADMIN_TOKEN of at least 32 characters")
-		}
 		mux.HandleFunc("/api/admin/invite", authRL.Wrap(middleware.RequireSameOrigin(authH.GenerateInvite)))
 	}
 
@@ -229,10 +218,6 @@ func main() {
 	}))))
 
 	// Ephemeral TURN/STUN credentials (auth required; never exposes the secret).
-	turnCfg := turn.FromEnv()
-	if err := turnCfg.Validate(); err != nil {
-		log.Fatalf("invalid TURN configuration: %v", err)
-	}
 	if turnCfg.Enabled() {
 		log.Printf("[turn] ephemeral TURN credentials enabled (%d url(s))", len(turnCfg.TurnURLs))
 	} else {
@@ -249,9 +234,9 @@ func main() {
 		})
 	})))
 
-	// Static files (always served — auth enforced by JS + WebSocket guard)
-	fs := http.FileServer(http.Dir("web"))
-	mux.Handle("/", fs)
+	// The audited browser bundle is compiled into the binary. Files edited in
+	// the checkout after build time are never served by this process.
+	mux.Handle("/", embeddedWebHandler(appassets.WebFS()))
 
 	addr := listenAddress(host, port)
 	fmt.Println("┌─────────────────────────────────────────┐")
@@ -294,6 +279,90 @@ func main() {
 	}
 }
 
+func embeddedWebHandler(files fs.FS) http.Handler {
+	server := http.FileServer(http.FS(files))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		requestPath := r.URL.Path
+		cleanPath := path.Clean(requestPath)
+		name := strings.TrimPrefix(cleanPath, "/")
+		if requestPath == "/" {
+			name = "."
+		} else if requestPath == "" || cleanPath != requestPath || strings.HasSuffix(requestPath, "/") {
+			http.NotFound(w, r)
+			return
+		}
+		if !fs.ValidPath(name) {
+			http.NotFound(w, r)
+			return
+		}
+		info, err := fs.Stat(files, name)
+		if err != nil || (info.IsDir() && name != ".") {
+			http.NotFound(w, r)
+			return
+		}
+		server.ServeHTTP(w, r)
+	})
+}
+
+func checkRuntimeConfiguration() error {
+	port, _, _, err := configuredListenAddress()
+	if err != nil {
+		return err
+	}
+	_, _, err = validateRuntimeEnvironment(port)
+	return err
+}
+
+func configuredListenAddress() (port int, pinned bool, host string, err error) {
+	port = 8088
+	if raw := strings.TrimSpace(os.Getenv("PORT")); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value < 1 || value > 65535 {
+			return 0, false, "", fmt.Errorf("invalid PORT %q", raw)
+		}
+		port, pinned = value, true
+	}
+	host = "127.0.0.1"
+	if raw := strings.TrimSpace(os.Getenv("HOST")); raw != "" {
+		host = raw
+	}
+	if !strings.EqualFold(host, "localhost") && net.ParseIP(unbracketHost(host)) == nil {
+		return 0, false, "", fmt.Errorf("HOST must be an IP literal or localhost")
+	}
+	if !isLoopbackHost(host) && os.Getenv("ALLOW_PUBLIC_BIND") != "1" {
+		return 0, false, "", fmt.Errorf("refusing non-loopback HOST=%q without ALLOW_PUBLIC_BIND=1", host)
+	}
+	return port, pinned, host, nil
+}
+
+func validateRuntimeEnvironment(port int) ([]string, turn.Config, error) {
+	for _, name := range []string{"ALLOW_PUBLIC_BIND", "ALLOW_LOCAL_ORIGINS", "ENABLE_ADMIN_API", "OPEN_REGISTRATION"} {
+		if raw := strings.TrimSpace(os.Getenv(name)); raw != "" && raw != "0" && raw != "1" {
+			return nil, turn.Config{}, fmt.Errorf("%s must be 0 or 1", name)
+		}
+	}
+	if strings.TrimSpace(os.Getenv("TRUST_PROXY_HEADERS")) != "" {
+		return nil, turn.Config{}, fmt.Errorf("TRUST_PROXY_HEADERS is unsupported; only loopback proxies are trusted")
+	}
+	if os.Getenv("ENABLE_ADMIN_API") == "1" && len(strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))) < 32 {
+		return nil, turn.Config{}, fmt.Errorf("ENABLE_ADMIN_API requires an ADMIN_TOKEN of at least 32 characters")
+	}
+	origins, err := allowedOrigins(port)
+	if err != nil {
+		return nil, turn.Config{}, fmt.Errorf("WebSocket origins: %w", err)
+	}
+	turnCfg := turn.FromEnv()
+	if err := turnCfg.Validate(); err != nil {
+		return nil, turn.Config{}, fmt.Errorf("TURN: %w", err)
+	}
+	return origins, turnCfg, nil
+}
+
 func isLoopbackHost(host string) bool {
 	if strings.EqualFold(strings.TrimSpace(host), "localhost") {
 		return true
@@ -317,10 +386,10 @@ func listenAddress(host string, port int) string {
 func allowedOrigins(port int) ([]string, error) {
 	candidates := []string{"https://dead.micutu.com"}
 	if os.Getenv("ALLOW_LOCAL_ORIGINS") == "1" {
-		candidates = append(candidates,
+		candidates = []string{
 			fmt.Sprintf("http://localhost:%d", port),
 			fmt.Sprintf("http://127.0.0.1:%d", port),
-		)
+		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS")); raw != "" {
 		candidates = strings.Split(raw, ",")
@@ -330,6 +399,8 @@ func allowedOrigins(port int) ([]string, error) {
 	}
 	origins := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
+	hasLoopback := false
+	hasNonLoopback := false
 	for _, candidate := range candidates {
 		origin, err := normalizeOrigin(strings.TrimSpace(candidate))
 		if err != nil {
@@ -340,11 +411,32 @@ func allowedOrigins(port int) ([]string, error) {
 		}
 		seen[origin] = struct{}{}
 		origins = append(origins, origin)
+		if isLoopbackOrigin(origin) {
+			hasLoopback = true
+		} else {
+			hasNonLoopback = true
+		}
 	}
 	if len(origins) == 0 {
 		return nil, fmt.Errorf("origin list is empty")
 	}
+	if hasLoopback && hasNonLoopback {
+		return nil, fmt.Errorf("loopback development origins cannot be mixed with deployed origins")
+	}
 	return origins, nil
+}
+
+func isLoopbackOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	hostname := strings.ToLower(u.Hostname())
+	if hostname == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	return ip != nil && ip.IsLoopback()
 }
 
 func normalizeOrigin(raw string) (string, error) {

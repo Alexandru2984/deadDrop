@@ -1,0 +1,55 @@
+[Unit]
+Description=Dead Drop — E2EE P2P chat signaling server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=micu
+Group=micu
+WorkingDirectory=/home/micu/deaddrop
+ExecStart=/home/micu/deaddrop/deaddrop
+Environment=PORT=8100
+Environment=HOST=127.0.0.1
+EnvironmentFile=-/etc/deaddrop.env
+Restart=always
+RestartSec=2
+UMask=0077
+
+# The compiled binary embeds the complete browser bundle. Only account/invite
+# state is writable; source files and loose web assets are read-only in-service.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/micu/deaddrop
+ReadWritePaths=/home/micu/deaddrop/data
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RemoveIPC=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+AmbientCapabilities=
+TasksMax=256
+LimitNOFILE=4096
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -11,12 +12,41 @@ import (
 	"testing"
 	"time"
 
+	appassets "deaddrop"
 	"deaddrop/internal/auth"
 	"deaddrop/internal/signaling"
 	"deaddrop/internal/srp"
 
 	"github.com/gorilla/websocket"
 )
+
+func TestEmbeddedWebHandlerIsBoundedAndReadOnly(t *testing.T) {
+	h := embeddedWebHandler(appassets.WebFS())
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET / status=%d", w.Code)
+	}
+	body, _ := io.ReadAll(w.Result().Body)
+	if !bytes.Contains(body, []byte("Dead Drop")) {
+		t.Fatal("embedded index was not served")
+	}
+
+	for _, target := range []string{"/js/", "/../index.html", "/missing"} {
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET %s status=%d, want 404", target, w.Code)
+		}
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", nil))
+	if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "GET, HEAD" {
+		t.Fatalf("POST / status=%d Allow=%q", w.Code, w.Header().Get("Allow"))
+	}
+}
 
 func TestAllowedOriginsProductionDefault(t *testing.T) {
 	t.Setenv("ALLOWED_ORIGINS", "")
@@ -47,6 +77,52 @@ func TestLoopbackHostDetection(t *testing.T) {
 	}
 	if got := listenAddress("[::1]", 8088); got != "[::1]:8088" {
 		t.Fatalf("bracketed IPv6 listen address = %q", got)
+	}
+}
+
+func TestRuntimeEnvironmentFailsClosed(t *testing.T) {
+	for _, name := range []string{
+		"ALLOWED_ORIGINS", "ALLOW_LOCAL_ORIGINS", "ALLOW_PUBLIC_BIND",
+		"ENABLE_ADMIN_API", "ADMIN_TOKEN", "OPEN_REGISTRATION",
+		"TRUST_PROXY_HEADERS", "TURN_SECRET", "TURN_URLS", "STUN_URLS",
+	} {
+		t.Setenv(name, "")
+	}
+	if _, _, err := validateRuntimeEnvironment(8088); err != nil {
+		t.Fatalf("safe defaults rejected: %v", err)
+	}
+
+	t.Setenv("TRUST_PROXY_HEADERS", "1")
+	if _, _, err := validateRuntimeEnvironment(8088); err == nil {
+		t.Fatal("obsolete trust-all proxy switch was accepted")
+	}
+	t.Setenv("TRUST_PROXY_HEADERS", "")
+	t.Setenv("ENABLE_ADMIN_API", "1")
+	t.Setenv("ADMIN_TOKEN", "short")
+	if _, _, err := validateRuntimeEnvironment(8088); err == nil {
+		t.Fatal("network admin API accepted a weak token")
+	}
+	t.Setenv("ENABLE_ADMIN_API", "maybe")
+	if _, _, err := validateRuntimeEnvironment(8088); err == nil {
+		t.Fatal("invalid boolean environment value was accepted")
+	}
+}
+
+func TestConfiguredListenAddressRequiresPublicOptIn(t *testing.T) {
+	t.Setenv("PORT", "8100")
+	t.Setenv("HOST", "0.0.0.0")
+	t.Setenv("ALLOW_PUBLIC_BIND", "")
+	if _, _, _, err := configuredListenAddress(); err == nil {
+		t.Fatal("public bind was accepted without explicit opt-in")
+	}
+	t.Setenv("ALLOW_PUBLIC_BIND", "1")
+	port, pinned, host, err := configuredListenAddress()
+	if err != nil || port != 8100 || !pinned || host != "0.0.0.0" {
+		t.Fatalf("explicit public bind parsed as port=%d pinned=%t host=%q err=%v", port, pinned, host, err)
+	}
+	t.Setenv("HOST", "example.com")
+	if _, _, _, err := configuredListenAddress(); err == nil {
+		t.Fatal("hostname bind was accepted instead of an explicit IP literal")
 	}
 }
 
@@ -130,16 +206,28 @@ func TestAuthenticatedWebSocketIsRevokedAfterLogout(t *testing.T) {
 }
 
 func TestAllowedOriginsExplicitLocalAndOnion(t *testing.T) {
-	t.Setenv("ALLOWED_ORIGINS", "HTTPS://DEAD.MICUTU.COM,http://127.0.0.1:8088,http://exampleexample.onion")
+	t.Setenv("ALLOWED_ORIGINS", "HTTPS://DEAD.MICUTU.COM,http://exampleexample.onion")
 	got, err := allowedOrigins(8088)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"https://dead.micutu.com",
-		"http://127.0.0.1:8088",
 		"http://exampleexample.onion",
 	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("allowedOrigins = %v, want %v", got, want)
+	}
+}
+
+func TestAllowedOriginsLocalDevelopmentMode(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "")
+	t.Setenv("ALLOW_LOCAL_ORIGINS", "1")
+	got, err := allowedOrigins(8088)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"http://localhost:8088", "http://127.0.0.1:8088"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("allowedOrigins = %v, want %v", got, want)
 	}
@@ -156,6 +244,7 @@ func TestAllowedOriginsRejectsUnsafeValues(t *testing.T) {
 		"https://a..example.com",
 		"https://999.999.999.999",
 		"http://.onion",
+		"https://dead.micutu.com,http://127.0.0.1:8088",
 		"*",
 		"",
 	}

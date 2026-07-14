@@ -24,9 +24,8 @@ import { join, relative, sep } from 'node:path';
 const WEB = 'web';
 const SUMS = join(WEB, 'SHA256SUMS');
 
-// Write via a temp file + atomic rename so a concurrent regen (the file-watcher
-// service) or a browser fetch can never observe a half-written file — a torn
-// SRI hash or manifest would otherwise block the live site.
+// Write via a temp file + atomic rename so an interrupted developer-side
+// regeneration cannot leave a half-written manifest in the next build.
 function atomicWrite(path, data) {
   const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
   writeFileSync(tmp, data);
@@ -35,7 +34,7 @@ function atomicWrite(path, data) {
 
 // Entry-point subresources that also get an SRI integrity="" attribute stamped
 // into the HTML that references them. (ES-module imports beyond these entries
-// are not SRI-coverable — that whole gap is what SHA256SUMS closes.)
+// are not SRI-coverable; SHA256SUMS records them for independent verification.)
 const SRI_TARGETS = {
   'index.html': ['css/style.css', 'js/app.js'],
   'about.html': ['css/style.css', 'css/about.css'],

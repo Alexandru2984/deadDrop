@@ -5,9 +5,15 @@ self-hosts STUN/TURN via coturn. Nothing below puts secrets in the repo.
 
 ## 1. App service (systemd)
 
-`/etc/systemd/system/deaddrop.service` runs the binary as a non-root user, reads
-secrets from an env file, and is hardened (`ProtectSystem=full`, `NoNewPrivileges`,
-empty `CapabilityBoundingSet`, `ReadWritePaths=<datadir>`).
+Install the reviewed unit template. It runs the binary as a non-root user, reads
+secrets from an env file, makes the source tree read-only, and permits writes
+only in `data/`:
+
+```bash
+sudo install -d -o micu -g micu -m 0700 /home/micu/deaddrop/data
+sudo install -o root -g root -m 0644 scripts/deaddrop.service /etc/systemd/system/deaddrop.service
+sudo systemctl daemon-reload
+```
 
 Key settings:
 
@@ -18,31 +24,32 @@ EnvironmentFile=-/etc/deaddrop.env    # TURN secret etc. (mode 600, root)
 Restart=always
 ```
 
-Rebuild & restart (or just run `scripts/deploy.sh`, which also refreshes the
-integrity manifest first):
+The browser bundle is embedded in the Go binary: loose files under `web/` are
+never read at runtime. A deploy therefore cannot mix a new server with stale or
+live-edited cryptographic JavaScript. Build only after the committed integrity
+manifest passes its read-only check:
 
 ```bash
+node scripts/gen-integrity.mjs --check
 go build -trimpath -ldflags="-s -w" -o deaddrop ./cmd/server/
 sudo systemctl restart deaddrop
 ```
 
-### Code-integrity watcher (`deaddrop-integrity.service`)
+`scripts/deploy.sh` additionally requires a clean working tree, runs all Go and
+browser tests, validates `/etc/deaddrop.env` with `deaddrop check-config`, swaps
+the binary atomically, checks health, and restores the old binary on failure.
 
-Because the server serves `web/` straight off disk, editing a file that an SRI
-hash points at (e.g. `js/app.js`) without regenerating the manifest would leave a
-stale `integrity="…"` in the HTML — and the browser would then block that file
-(blank page). `scripts/deaddrop-integrity.service` runs a tiny watcher
-(`scripts/watch-integrity.mjs`) that re-runs `gen-integrity.mjs` on any change
-under `web/`, so a stale hash can never sit live.
+### Remove the obsolete integrity watcher
+
+The former watcher rewrote hashes after any live edit. That could turn a
+compromised JavaScript file into the new locally “valid” bundle. Embedded assets
+make it unnecessary; disable and remove it before using the deploy script:
 
 ```bash
-sudo cp scripts/deaddrop-integrity.service /etc/systemd/system/
+sudo systemctl disable --now deaddrop-integrity.service
+sudo rm -f /etc/systemd/system/deaddrop-integrity.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now deaddrop-integrity.service
 ```
-
-`scripts/deploy.sh` and CI (`gen-integrity.mjs --check`) cover the deploy path;
-this watcher covers live edits.
 
 ## 2. Secrets — `/etc/deaddrop.env` (mode 600, root)
 
@@ -51,6 +58,8 @@ TURN_SECRET=<openssl rand -hex 32>
 TURN_URLS=turn:<PUBLIC_IP>:3478?transport=udp,turn:<PUBLIC_IP>:3478?transport=tcp
 STUN_URLS=stun:<PUBLIC_IP>:3478
 TURN_REALM=dead.micutu.com
+ALLOWED_ORIGINS=https://dead.micutu.com,http://<onion>.onion
+OPEN_REGISTRATION=0
 ```
 
 `TURN_SECRET` must match coturn's `static-auth-secret`. The app never sends it to
@@ -127,7 +136,9 @@ cd /home/micu/deaddrop
 newline-separated codes; malformed tokens and duplicates are skipped and reported.
 This lets you pre-generate a batch offline and restore or migrate the invite pool.
 
-…or mint one via the admin endpoint (set `ADMIN_TOKEN` in `/etc/deaddrop.env`):
+The network admin endpoint is disabled by default. Prefer the local CLI. If it is
+strictly required, set both `ENABLE_ADMIN_API=1` and a random `ADMIN_TOKEN` of at
+least 32 characters in `/etc/deaddrop.env`, then use:
 
 ```bash
 curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://dead.micutu.com/api/admin/invite
@@ -155,12 +166,16 @@ HiddenServicePort 80 127.0.0.1:8100
 ```
 
 The onion address is in `/var/lib/tor/deaddrop/hostname`. Add it to
-`ALLOWED_ORIGINS` in `/etc/deaddrop.env` (this env REPLACES the built-in list, so
-include every origin):
+`ALLOWED_ORIGINS` in `/etc/deaddrop.env` (this env replaces the built-in list):
 
 ```
-ALLOWED_ORIGINS=https://dead.micutu.com,http://dead.micutu.com,http://<onion>.onion,http://localhost:8100,http://127.0.0.1:8100
+ALLOWED_ORIGINS=https://dead.micutu.com,http://<onion>.onion
 ```
+
+Plain HTTP is accepted only for loopback development and `.onion`; never list
+the public clearnet domain with `http://`. Loopback development origins cannot
+be mixed with deployed origins. For a local-only server, omit
+`ALLOWED_ORIGINS` and set `ALLOW_LOCAL_ORIGINS=1`.
 
 Test through Tor: `curl --socks5-hostname 127.0.0.1:9050 http://<onion>.onion/`.
 
