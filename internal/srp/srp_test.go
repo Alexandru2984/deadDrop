@@ -3,6 +3,7 @@ package srp
 import (
 	"encoding/hex"
 	"math/big"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +89,30 @@ func TestRejectsAZeroModN(t *testing.T) {
 	c, _ := NewChallenge(v)
 	if _, _, err := c.Verify(N, make([]byte, 32)); err != ErrBadParam { // A = N ≡ 0
 		t.Fatalf("expected ErrBadParam for A ≡ 0, got %v", err)
+	}
+}
+
+func TestDecodePublicRejectsNonCanonicalValues(t *testing.T) {
+	bad := []string{
+		"", "-1", "+1", "zz", N.Text(16),
+		new(big.Int).Add(N, big.NewInt(1)).Text(16),
+		strings.Repeat("0", nLen*2+1),
+	}
+	for _, value := range bad {
+		if _, err := DecodePublic(value); err != ErrBadParam {
+			t.Errorf("DecodePublic(%q): got %v, want ErrBadParam", value, err)
+		}
+	}
+	if got, err := DecodePublic("01"); err != nil || got.Cmp(big.NewInt(1)) != 0 {
+		t.Fatalf("canonical A=1 rejected: value=%v err=%v", got, err)
+	}
+}
+
+func TestVerifyRejectsWrongProofLengthBeforeMath(t *testing.T) {
+	v := Verifier("bob", "pw", []byte("sixteen-byte-slt"))
+	c, _ := NewChallenge(v)
+	if _, _, err := c.Verify(big.NewInt(1), make([]byte, 31)); err != ErrBadParam {
+		t.Fatalf("got %v, want ErrBadParam", err)
 	}
 }
 

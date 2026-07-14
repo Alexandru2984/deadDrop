@@ -58,13 +58,12 @@ jobs:
       - name: Build server
         run: go build -o deaddrop ./cmd/server/
 
-      # Seed one bcrypt (non-SRP) account so the legacy→SRP upgrade path is
-      # covered. The server's challenge handler only checks that the account
-      # exists and has no verifier, so the hash value is irrelevant here.
+      # Seed one valid cost-12 bcrypt (non-SRP) account so the legacy→SRP
+      # upgrade path is covered and startup credential validation also runs.
       - name: Seed a legacy account
         run: |
           mkdir -p data
-          printf '{"Micu":{"hash":"legacy-seed-not-checked-by-challenge"}}' > data/users.json
+          printf '{"Micu":{"hash":"$2a$12$tdjBzotGSk67bb6OGKGpkOtaOdt3yHNkO86tXY.xnZHnRQxhy7R1m"}}' > data/users.json
 
       - name: Start server
         run: |

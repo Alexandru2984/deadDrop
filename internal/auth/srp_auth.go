@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/big"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"deaddrop/internal/middleware"
@@ -24,10 +26,12 @@ import (
 )
 
 const (
-	srpMaxBody       = 8192
-	challengeTTL     = 2 * time.Minute
-	lockoutThreshold = 5
-	lockoutWindow    = 15 * time.Minute
+	srpMaxBody        = 8192
+	challengeTTL      = 2 * time.Minute
+	maxChallenges     = 4096
+	maxLockoutEntries = 100_000
+	lockoutThreshold  = 5
+	lockoutWindow     = 15 * time.Minute
 )
 
 /* ── store: SRP-aware methods ── */
@@ -39,18 +43,13 @@ func (s *store) getUser(username string) (user, bool) {
 	return u, ok
 }
 
-func (s *store) exists(username string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	_, ok := s.users[username]
-	return ok
-}
-
 func validSalt(h string) bool { b, err := hex.DecodeString(h); return err == nil && len(b) == 16 }
 
 // defaultKdf is what fresh clients use and what anti-enumeration dummies
 // advertise; it must stay in sync with DEFAULT_KDF in web/js/srp.js.
 const defaultKdf = "pbkdf2:600000"
+
+const minimumWritableKdfIterations = 600_000
 
 var kdfRe = regexp.MustCompile(`^pbkdf2:(\d{1,9})$`)
 
@@ -61,48 +60,69 @@ func validKdf(kdf string) bool {
 	if kdf == "" {
 		return true
 	}
+	n, ok := parseKdfIterations(kdf)
+	return ok && n >= 10_000 && n <= 5_000_000
+}
+
+func parseKdfIterations(kdf string) (int, bool) {
 	m := kdfRe.FindStringSubmatch(kdf)
 	if m == nil {
-		return false
+		return 0, false
 	}
 	n, err := strconv.Atoi(m[1])
-	return err == nil && n >= 10_000 && n <= 5_000_000
+	return n, err == nil
+}
+
+func validateSRPCredential(saltHex, verifierHex, kdf string) error {
+	if !validSalt(saltHex) {
+		return errors.New("invalid salt")
+	}
+	if _, err := srp.DecodeVerifier(verifierHex); err != nil {
+		return errors.New("invalid verifier")
+	}
+	if !validKdf(kdf) {
+		return errors.New("invalid kdf")
+	}
+	return nil
+}
+
+func validateWritableSRPCredential(saltHex, verifierHex, kdf string) error {
+	if err := validateSRPCredential(saltHex, verifierHex, kdf); err != nil {
+		return err
+	}
+	iterations, ok := parseKdfIterations(kdf)
+	if !ok || iterations < minimumWritableKdfIterations {
+		return errors.New("kdf is below the current security minimum")
+	}
+	return nil
 }
 
 func (s *store) registerSRP(username, saltHex, verifierHex, kdf string) error {
 	if !usernameRe.MatchString(username) {
 		return errors.New("username: 3–20 chars, letters/numbers/underscores")
 	}
-	if !validSalt(saltHex) {
-		return errors.New("invalid salt")
-	}
-	if _, err := srp.DecodeVerifier(verifierHex); err != nil {
-		return errors.New("invalid verifier")
-	}
-	if !validKdf(kdf) {
-		return errors.New("invalid kdf")
+	if err := validateWritableSRPCredential(saltHex, verifierHex, kdf); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.users[username]; exists {
 		return errors.New("username already taken")
 	}
-	s.users[username] = user{Salt: saltHex, Verifier: verifierHex, Kdf: kdf}
-	return s.save()
+	if len(s.users) >= maxUsers {
+		return errors.New("account limit reached")
+	}
+	next := cloneUsers(s.users)
+	next[username] = user{Salt: saltHex, Verifier: verifierHex, Kdf: kdf}
+	return s.commit(next)
 }
 
 // setVerifier installs a new SRP salt+verifier for an existing account (used for
 // legacy→SRP upgrade and password change). Clears any legacy bcrypt hash but
 // keeps the duress credential.
 func (s *store) setVerifier(username, saltHex, verifierHex, kdf string) error {
-	if !validSalt(saltHex) {
-		return errors.New("invalid salt")
-	}
-	if _, err := srp.DecodeVerifier(verifierHex); err != nil {
-		return errors.New("invalid verifier")
-	}
-	if !validKdf(kdf) {
-		return errors.New("invalid kdf")
+	if err := validateWritableSRPCredential(saltHex, verifierHex, kdf); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -110,11 +130,12 @@ func (s *store) setVerifier(username, saltHex, verifierHex, kdf string) error {
 	if !ok {
 		return errors.New("no such account")
 	}
-	s.users[username] = user{
+	next := cloneUsers(s.users)
+	next[username] = user{
 		Salt: saltHex, Verifier: verifierHex, Kdf: kdf,
 		DuressSalt: u.DuressSalt, DuressVerifier: u.DuressVerifier, DuressKdf: u.DuressKdf,
 	}
-	return s.save()
+	return s.commit(next)
 }
 
 func (s *store) deleteUser(username string) error {
@@ -123,26 +144,16 @@ func (s *store) deleteUser(username string) error {
 	if _, ok := s.users[username]; !ok {
 		return errors.New("no such account")
 	}
-	delete(s.users, username)
-	return s.save()
+	next := cloneUsers(s.users)
+	delete(next, username)
+	return s.commit(next)
 }
 
 // setDuress sets (or clears, when salt/verifier are empty) the duress credential
 // for an existing account.
 func (s *store) setDuress(username, saltHex, verifierHex, kdf string) error {
-	clear := saltHex == "" && verifierHex == ""
-	if !clear {
-		if !validSalt(saltHex) {
-			return errors.New("invalid salt")
-		}
-		if _, err := srp.DecodeVerifier(verifierHex); err != nil {
-			return errors.New("invalid verifier")
-		}
-		if !validKdf(kdf) {
-			return errors.New("invalid kdf")
-		}
-	} else {
-		kdf = ""
+	if err := validateDuressUpdate(saltHex, verifierHex, kdf); err != nil {
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -151,8 +162,9 @@ func (s *store) setDuress(username, saltHex, verifierHex, kdf string) error {
 		return errors.New("no such account")
 	}
 	u.DuressSalt, u.DuressVerifier, u.DuressKdf = saltHex, verifierHex, kdf
-	s.users[username] = u
-	return s.save()
+	next := cloneUsers(s.users)
+	next[username] = u
+	return s.commit(next)
 }
 
 /* ── pending SRP challenges (one-time, short-lived) ── */
@@ -173,22 +185,47 @@ type challengeStore struct {
 	secret []byte // for deterministic fake verifiers (anti-enumeration)
 }
 
-func newChallengeStore() *challengeStore {
-	cs := &challengeStore{m: make(map[string]*pendingChallenge), secret: randomBytes(32)}
+func newChallengeStore(dataDir string) (*challengeStore, error) {
+	secret, err := loadOrCreateSecret(filepath.Join(dataDir, "srp_dummy.key"), 32)
+	if err != nil {
+		return nil, fmt.Errorf("initialize SRP dummy secret: %w", err)
+	}
+	cs := &challengeStore{m: make(map[string]*pendingChallenge), secret: secret}
 	go cs.reap()
-	return cs
+	return cs, nil
 }
 
-func (cs *challengeStore) put(p *pendingChallenge) string {
-	tok := hex.EncodeToString(randomBytes(32))
-	p.expiry = time.Now().Add(challengeTTL)
+func (cs *challengeStore) put(p *pendingChallenge) (string, error) {
 	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	now := time.Now()
+	cs.removeExpiredLocked(now)
+	if len(cs.m) >= maxChallenges {
+		return "", errors.New("too many pending authentication challenges")
+	}
+	var tok string
+	for {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		tok = hex.EncodeToString(b)
+		if _, exists := cs.m[tok]; !exists {
+			break
+		}
+	}
+	p.expiry = now.Add(challengeTTL)
 	cs.m[tok] = p
-	cs.mu.Unlock()
-	return tok
+	return tok, nil
 }
 
 func (cs *challengeStore) take(tok string) (*pendingChallenge, bool) {
+	if len(tok) != 64 {
+		return nil, false
+	}
+	if _, err := hex.DecodeString(tok); err != nil {
+		return nil, false
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	p, ok := cs.m[tok]
@@ -206,24 +243,40 @@ func (cs *challengeStore) reap() {
 	for range time.NewTicker(time.Minute).C {
 		now := time.Now()
 		cs.mu.Lock()
-		for k, p := range cs.m {
-			if now.After(p.expiry) {
-				delete(cs.m, k)
-			}
-		}
+		cs.removeExpiredLocked(now)
 		cs.mu.Unlock()
+	}
+}
+
+func (cs *challengeStore) removeExpiredLocked(now time.Time) {
+	for token, p := range cs.m {
+		if now.After(p.expiry) {
+			delete(cs.m, token)
+		}
 	}
 }
 
 // fakeSaltAndVerifier deterministically derives a plausible salt+verifier for an
 // unknown username (or a missing duress slot) so the challenge step is
 // indistinguishable from a real account. kind separates the real vs duress dummies.
-func (cs *challengeStore) fakeSaltAndVerifier(kind, username string) (string, *srp.Challenge) {
+func (cs *challengeStore) fakeSaltAndVerifier(kind, username string) (string, *srp.Challenge, error) {
 	salt := hmacSum(cs.secret, kind+":salt:"+username)[:16]
-	fakePw := hex.EncodeToString(hmacSum(cs.secret, kind+":pw:"+username))
-	v := srp.Verifier(username, fakePw, salt)
-	ch, _ := srp.NewChallenge(v)
-	return hex.EncodeToString(salt), ch
+	verifierBytes := hmacSum(cs.secret, kind+":verifier:"+username)
+	// Any 256-bit non-zero integer is a valid member of the 2048-bit verifier
+	// range. This avoids an extra modular exponentiation only on dummy accounts.
+	allZero := true
+	for _, b := range verifierBytes {
+		allZero = allZero && b == 0
+	}
+	if allZero {
+		verifierBytes[len(verifierBytes)-1] = 1
+	}
+	v, err := srp.DecodeVerifier(hex.EncodeToString(verifierBytes))
+	if err != nil {
+		return "", nil, err
+	}
+	ch, err := srp.NewChallenge(v)
+	return hex.EncodeToString(salt), ch, err
 }
 
 /* ── login lockout, keyed by username+IP ──
@@ -270,6 +323,12 @@ func (l *lockout) fail(username, ip string) {
 	key := lockKey(username, ip)
 	e := l.m[key]
 	if e == nil {
+		if len(l.m) >= maxLockoutEntries {
+			l.removeStaleLocked(time.Now())
+			if len(l.m) >= maxLockoutEntries {
+				return
+			}
+		}
 		e = &lockEntry{}
 		l.m[key] = e
 	}
@@ -290,14 +349,18 @@ func (l *lockout) reset(username, ip string) {
 // reap drops entries idle past the lockout window so the map cannot grow unbounded.
 func (l *lockout) reap() {
 	for range time.NewTicker(10 * time.Minute).C {
-		cutoff := time.Now().Add(-lockoutWindow)
 		l.mu.Lock()
-		for k, e := range l.m {
-			if e.lastSeen.Before(cutoff) && time.Now().After(e.until) {
-				delete(l.m, k)
-			}
-		}
+		l.removeStaleLocked(time.Now())
 		l.mu.Unlock()
+	}
+}
+
+func (l *lockout) removeStaleLocked(now time.Time) {
+	cutoff := now.Add(-lockoutWindow)
+	for key, entry := range l.m {
+		if entry.lastSeen.Before(cutoff) && now.After(entry.until) {
+			delete(l.m, key)
+		}
 	}
 }
 
@@ -308,14 +371,23 @@ type invites struct {
 	path string
 }
 
+const (
+	maxInvites       = 100_000
+	maxInviteBatch   = 10_000
+	maxInviteFileLen = 8 << 20
+)
+
 // OpenRegistration reports whether registration is open to everyone (no invite).
 func OpenRegistration() bool { return os.Getenv("OPEN_REGISTRATION") == "1" }
 
 func newInvites(dir string) *invites { return &invites{path: filepath.Join(dir, "invites.json")} }
 
-// inviteRe accepts codes shaped like the ones newInviteCode mints (uppercased):
-// a "DD-" prefix followed by dash-separated groups of the safe alphabet/digits.
-var inviteRe = regexp.MustCompile(`^DD-[0-9A-Z-]{4,40}$`)
+// inviteRe accepts current 20-character codes and the previous 12-character
+// format so already-issued production invites remain usable. Imports cannot
+// introduce shorter, lower-entropy strings or ambiguous characters.
+const inviteAlphabetClass = `[ABCDEFGHJKMNPQRSTUVWXYZ23456789]`
+
+var inviteRe = regexp.MustCompile(`^DD-(?:` + inviteAlphabetClass + `{4}-){2}` + inviteAlphabetClass + `{4}(?:-` + inviteAlphabetClass + `{4}-` + inviteAlphabetClass + `{4})?$`)
 
 // validInviteCode reports whether s (once trimmed/uppercased) is a plausible
 // invite code — used to keep junk out of an import.
@@ -381,146 +453,255 @@ func ParseInviteCodes(raw []byte) []string {
 }
 
 func (iv *invites) load() ([]string, error) {
-	data, err := os.ReadFile(iv.path)
+	f, err := os.Open(iv.path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("invite store is not a regular file")
+	}
+	if err := f.Chmod(0600); err != nil {
+		return nil, err
+	}
+	if info.Size() > maxInviteFileLen {
+		return nil, errors.New("invite store exceeds size limit")
+	}
+	data := make([]byte, info.Size())
+	if _, err := io.ReadFull(f, data); err != nil {
+		return nil, err
+	}
 	var codes []string
 	if err := json.Unmarshal(data, &codes); err != nil {
 		return nil, err
+	}
+	if len(codes) > maxInvites {
+		return nil, errors.New("invite store exceeds code limit")
+	}
+	seen := make(map[string]struct{}, len(codes))
+	for _, code := range codes {
+		if !validInviteCode(code) {
+			return nil, errors.New("invite store contains an invalid code")
+		}
+		normalized := strings.ToUpper(strings.TrimSpace(code))
+		if _, duplicate := seen[normalized]; duplicate {
+			return nil, errors.New("invite store contains a duplicate code")
+		}
+		seen[normalized] = struct{}{}
 	}
 	return codes, nil
 }
 
 func (iv *invites) save(codes []string) error {
-	data, _ := json.MarshalIndent(codes, "", "  ")
-	tmp := iv.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
+	if len(codes) > maxInvites {
+		return errors.New("invite store exceeds code limit")
 	}
-	return os.Rename(tmp, iv.path)
+	return atomicWriteJSON(iv.path, codes)
 }
 
-// consume removes a code if present, returning true on success.
-func (iv *invites) consume(code string) bool {
-	code = strings.ToUpper(strings.TrimSpace(code))
-	if code == "" {
-		return false
-	}
+// withLock serializes both goroutines and separate CLI/server processes that
+// operate on the same invite file. The lock file is intentionally persistent.
+func (iv *invites) withLock(fn func() error) (err error) {
 	iv.mu.Lock()
 	defer iv.mu.Unlock()
-	codes, err := iv.load()
+	if err := os.MkdirAll(filepath.Dir(iv.path), 0700); err != nil {
+		return err
+	}
+	if err := os.Chmod(filepath.Dir(iv.path), 0700); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(iv.path+".lock", os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
-		return false
+		return err
 	}
-	for i, c := range codes {
-		if subtleEqual(strings.ToUpper(c), code) {
-			codes = append(codes[:i], codes[i+1:]...)
-			iv.save(codes)
-			return true
+	if err := lock.Chmod(0600); err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer func() {
+		if unlockErr := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err == nil && unlockErr != nil {
+			err = unlockErr
 		}
+	}()
+	return fn()
+}
+
+// consume removes a code if present. Persistence failures are returned rather
+// than silently treating a code as consumed.
+func (iv *invites) consume(code string) (consumed bool, err error) {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if !validInviteCode(code) {
+		return false, nil
 	}
-	return false
+	err = iv.withLock(func() error {
+		codes, loadErr := iv.load()
+		if loadErr != nil {
+			return loadErr
+		}
+		for i, c := range codes {
+			if subtleEqual(strings.ToUpper(c), code) {
+				next := append(append([]string(nil), codes[:i]...), codes[i+1:]...)
+				if saveErr := iv.save(next); saveErr != nil {
+					return saveErr
+				}
+				consumed = true
+				break
+			}
+		}
+		return nil
+	})
+	return consumed, err
+}
+
+// restore puts back a consumed invite when the account write fails.
+func (iv *invites) restore(code string) error {
+	code = strings.ToUpper(strings.TrimSpace(code))
+	if !validInviteCode(code) {
+		return errors.New("invalid invite code")
+	}
+	return iv.withLock(func() error {
+		codes, err := iv.load()
+		if err != nil {
+			return err
+		}
+		for _, existing := range codes {
+			if subtleEqual(strings.ToUpper(existing), code) {
+				return nil
+			}
+		}
+		codes = append(codes, code)
+		return iv.save(codes)
+	})
 }
 
 // Generate creates, stores and returns a new single-use invite code.
 func (iv *invites) Generate() (string, error) {
-	code := newInviteCode()
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	codes, err := iv.load()
+	codes, err := iv.generateN(1)
 	if err != nil {
 		return "", err
 	}
-	codes = append(codes, code)
-	if err := iv.save(codes); err != nil {
-		return "", err
-	}
-	return code, nil
+	return codes[0], nil
 }
 
 // list returns the current unused codes (a copy is fine; caller only reads).
-func (iv *invites) list() ([]string, error) {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	return iv.load()
+func (iv *invites) list() (codes []string, err error) {
+	err = iv.withLock(func() error {
+		var loadErr error
+		codes, loadErr = iv.load()
+		return loadErr
+	})
+	return codes, err
 }
 
 // generateN mints n fresh codes in a single load/save, avoiding collisions with
 // codes already stored or minted in this batch.
 func (iv *invites) generateN(n int) ([]string, error) {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	codes, err := iv.load()
-	if err != nil {
-		return nil, err
-	}
-	seen := make(map[string]bool, len(codes))
-	for _, c := range codes {
-		seen[strings.ToUpper(c)] = true
+	if n < 1 || n > maxInviteBatch {
+		return nil, fmt.Errorf("count must be between 1 and %d", maxInviteBatch)
 	}
 	minted := make([]string, 0, n)
-	for len(minted) < n {
-		code := newInviteCode()
-		if seen[strings.ToUpper(code)] {
-			continue // astronomically unlikely, but never emit a dup
+	err := iv.withLock(func() error {
+		codes, err := iv.load()
+		if err != nil {
+			return err
 		}
-		seen[strings.ToUpper(code)] = true
-		codes = append(codes, code)
-		minted = append(minted, code)
-	}
-	if err := iv.save(codes); err != nil {
-		return nil, err
-	}
-	return minted, nil
+		if len(codes)+n > maxInvites {
+			return errors.New("invite store exceeds code limit")
+		}
+		seen := make(map[string]bool, len(codes)+n)
+		for _, c := range codes {
+			seen[strings.ToUpper(c)] = true
+		}
+		for len(minted) < n {
+			code, err := newInviteCode()
+			if err != nil {
+				return err
+			}
+			if seen[strings.ToUpper(code)] {
+				continue // astronomically unlikely, but never emit a dup
+			}
+			seen[strings.ToUpper(code)] = true
+			codes = append(codes, code)
+			minted = append(minted, code)
+		}
+		return iv.save(codes)
+	})
+	return minted, err
 }
 
 // importCodes merges the given codes into the store, skipping anything malformed
 // or already present (case-insensitively). Returns counts of added and skipped.
 func (iv *invites) importCodes(in []string) (added, skipped int, err error) {
-	iv.mu.Lock()
-	defer iv.mu.Unlock()
-	codes, err := iv.load()
+	if len(in) > maxInviteBatch {
+		return 0, 0, fmt.Errorf("cannot import more than %d codes at once", maxInviteBatch)
+	}
+	err = iv.withLock(func() error {
+		codes, loadErr := iv.load()
+		if loadErr != nil {
+			return loadErr
+		}
+		seen := make(map[string]bool, len(codes)+len(in))
+		for _, c := range codes {
+			seen[strings.ToUpper(strings.TrimSpace(c))] = true
+		}
+		for _, raw := range in {
+			code := strings.ToUpper(strings.TrimSpace(raw))
+			if !validInviteCode(code) || seen[code] || len(codes) >= maxInvites {
+				skipped++
+				continue
+			}
+			seen[code] = true
+			codes = append(codes, code)
+			added++
+		}
+		if added > 0 {
+			return iv.save(codes)
+		}
+		return nil
+	})
 	if err != nil {
 		return 0, 0, err
-	}
-	seen := make(map[string]bool, len(codes))
-	for _, c := range codes {
-		seen[strings.ToUpper(strings.TrimSpace(c))] = true
-	}
-	for _, raw := range in {
-		code := strings.ToUpper(strings.TrimSpace(raw))
-		if !validInviteCode(code) || seen[code] {
-			skipped++
-			continue
-		}
-		seen[code] = true
-		codes = append(codes, code)
-		added++
-	}
-	if added > 0 {
-		if err := iv.save(codes); err != nil {
-			return 0, 0, err
-		}
 	}
 	return added, skipped, nil
 }
 
-func newInviteCode() string {
+func newInviteCode() (string, error) {
 	const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789" // no I,L,O,0,1
-	b := randomBytes(12)
+	const chars = 20                                   // ~99 bits from a 31-character alphabet
+	const unbiasedLimit = 256 - (256 % len(alphabet))
 	var sb strings.Builder
+	sb.Grow(3 + chars + (chars-1)/4)
 	sb.WriteString("DD-")
-	for i, x := range b {
-		if i > 0 && i%4 == 0 {
-			sb.WriteByte('-')
+	random := make([]byte, 32)
+	for i := 0; i < chars; {
+		if _, err := rand.Read(random); err != nil {
+			return "", err
 		}
-		sb.WriteByte(alphabet[int(x)%len(alphabet)])
+		for _, x := range random {
+			if int(x) >= unbiasedLimit {
+				continue
+			}
+			if i > 0 && i%4 == 0 {
+				sb.WriteByte('-')
+			}
+			sb.WriteByte(alphabet[int(x)%len(alphabet)])
+			i++
+			if i == chars {
+				break
+			}
+		}
 	}
-	return sb.String()
+	return sb.String(), nil
 }
 
 /* ── HTTP handlers ── */
@@ -544,17 +725,38 @@ func (h *Handler) SRPRegister(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if h.store.exists(body.Username) {
-		jsonErr(w, "username already taken", http.StatusBadRequest)
+	if !usernameRe.MatchString(body.Username) {
+		jsonErr(w, "username: 3–20 chars, letters/numbers/underscores", http.StatusBadRequest)
+		return
+	}
+	if err := validateWritableSRPCredential(body.Salt, body.Verifier, body.Kdf); err != nil {
+		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Registration is invite-only unless OPEN_REGISTRATION=1 is set (then anyone can
 	// register and the invite field is ignored).
-	if !OpenRegistration() && !h.invites.consume(body.Invite) {
-		jsonErr(w, "invalid or used invite code", http.StatusForbidden)
-		return
+	consumed := false
+	if !OpenRegistration() {
+		var err error
+		consumed, err = h.invites.consume(body.Invite)
+		if err != nil {
+			log.Printf("[auth] invite store error: %v", err)
+			jsonErr(w, "registration temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if !consumed {
+			jsonErr(w, "invalid or used invite code", http.StatusForbidden)
+			return
+		}
 	}
 	if err := h.store.registerSRP(body.Username, body.Salt, body.Verifier, body.Kdf); err != nil {
+		if consumed {
+			if restoreErr := h.invites.restore(body.Invite); restoreErr != nil {
+				log.Printf("[auth] could not restore invite after failed registration: %v", restoreErr)
+				jsonErr(w, "registration temporarily unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -576,6 +778,10 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	var body srpChallengeReq
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if !usernameRe.MatchString(body.Username) {
+		jsonErr(w, "invalid parameter", http.StatusBadRequest)
 		return
 	}
 	if ok, wait := h.lockout.allowed(body.Username, middleware.ExtractIP(r)); !ok {
@@ -609,10 +815,18 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, "account error", http.StatusInternalServerError)
 			return
 		}
-		ch, _ = srp.NewChallenge(v)
+		ch, err = srp.NewChallenge(v)
+		if err != nil {
+			jsonErr(w, "account error", http.StatusInternalServerError)
+			return
+		}
 		saltHex, kdf, real = u.Salt, u.Kdf, true
 	} else {
-		saltHex, ch = h.challenges.fakeSaltAndVerifier("real", body.Username)
+		saltHex, ch, err = h.challenges.fakeSaltAndVerifier("real", body.Username)
+		if err != nil {
+			jsonErr(w, "server error", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// Always also emit a SECOND (duress) challenge — a real one if the account has a
@@ -624,22 +838,34 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	realDuress := false
 	if ok && u.hasDuress() {
 		if vd, derr := srp.DecodeVerifier(u.DuressVerifier); derr == nil {
-			chD, _ = srp.NewChallenge(vd)
+			chD, err = srp.NewChallenge(vd)
+			if err != nil {
+				jsonErr(w, "account error", http.StatusInternalServerError)
+				return
+			}
 			saltD, kdfD, realDuress = u.DuressSalt, u.DuressKdf, true
 		}
 	}
 	if chD == nil {
-		saltD, chD = h.challenges.fakeSaltAndVerifier("duress", body.Username)
+		saltD, chD, err = h.challenges.fakeSaltAndVerifier("duress", body.Username)
+		if err != nil {
+			jsonErr(w, "server error", http.StatusInternalServerError)
+			return
+		}
 	}
 	if ch == nil || chD == nil {
 		jsonErr(w, "server error", http.StatusInternalServerError)
 		return
 	}
 
-	token := h.challenges.put(&pendingChallenge{
+	token, err := h.challenges.put(&pendingChallenge{
 		username: body.Username, A: A,
 		ch: ch, real: real, chDuress: chD, realDuress: realDuress,
 	})
+	if err != nil {
+		jsonErr(w, "authentication temporarily unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	jsonOK(w, map[string]any{
 		"token": token,
 		"salt":  saltHex, "B": ch.Bpub.Text(16), "kdf": kdf,
@@ -674,24 +900,34 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
 	}
-	M1, _ := hex.DecodeString(body.M1)
-	M1d, _ := hex.DecodeString(body.M1d)
+	M1, primaryEncodingOK := decodeSRPProof(body.M1)
+	M1d, duressEncodingOK := decodeSRPProof(body.M1d)
 
-	// Try the real proof first, then the duress proof. Exactly one can match,
-	// depending on which password the client used.
-	if M2, _, verr := p.ch.Verify(p.A, M1); verr == nil && p.real {
+	// Always execute both SRP verifications before deciding which credential won.
+	// Invalid encodings are normalized to a full-length zero proof, keeping the
+	// expensive path consistent and avoiding a primary-vs-duress timing oracle.
+	M2, _, primaryErr := p.ch.Verify(p.A, M1)
+	M2d, _, duressErr := p.chDuress.Verify(p.A, M1d)
+	primaryOK := primaryEncodingOK && duressEncodingOK && primaryErr == nil && p.real
+	duressOK := primaryEncodingOK && duressEncodingOK && duressErr == nil && p.realDuress
+
+	if primaryOK {
+		if err := h.setCookieSession(w, r, p.username, false); err != nil {
+			jsonErr(w, "could not create session", http.StatusInternalServerError)
+			return
+		}
 		h.lockout.reset(p.username, ip)
-		h.setCookieSession(w, r, p.username, false)
 		jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "features": sessionFeatures(false)})
 		return
 	}
-	if len(M1d) > 0 && p.realDuress {
-		if M2, _, verr := p.chDuress.Verify(p.A, M1d); verr == nil {
-			h.lockout.reset(p.username, ip)
-			h.setCookieSession(w, r, p.username, true)
-			jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2), "features": sessionFeatures(true)})
+	if duressOK {
+		if err := h.setCookieSession(w, r, p.username, true); err != nil {
+			jsonErr(w, "could not create session", http.StatusInternalServerError)
 			return
 		}
+		h.lockout.reset(p.username, ip)
+		jsonOK(w, map[string]any{"username": p.username, "M2": hex.EncodeToString(M2d), "features": sessionFeatures(true)})
+		return
 	}
 	h.lockout.fail(p.username, ip)
 	jsonErr(w, "invalid credentials", http.StatusUnauthorized)
@@ -708,7 +944,7 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	c, err := r.Cookie("dd_session")
+	c, err := sessionCookie(r)
 	if err != nil {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
@@ -751,7 +987,7 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	c, err := r.Cookie("dd_session")
+	c, err := sessionCookie(r)
 	if err != nil {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
@@ -771,21 +1007,13 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if err := validateDuressUpdate(body.Salt, body.Verifier, body.Kdf); err != nil {
+		jsonErr(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if duress {
 		// A decoy session must not modify duress settings — but answering 403 would
 		// announce "this is the decoy". Validate and report success without writing.
-		if !validSalt(body.Salt) {
-			jsonErr(w, "invalid salt", http.StatusBadRequest)
-			return
-		}
-		if _, err := srp.DecodeVerifier(body.Verifier); err != nil {
-			jsonErr(w, "invalid verifier", http.StatusBadRequest)
-			return
-		}
-		if !validKdf(body.Kdf) {
-			jsonErr(w, "invalid kdf", http.StatusBadRequest)
-			return
-		}
 		jsonOK(w, map[string]string{"status": "ok"})
 		return
 	}
@@ -796,26 +1024,34 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
-// DeleteAccount removes the logged-in user's account and clears the session.
+// DeleteAccount removes an account only from a primary session. A duress session
+// returns the same successful response and logs out, but preserves the real account.
 func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	username := h.currentUser(r)
-	if username == "" {
+	c, err := sessionCookie(r)
+	if err != nil {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	if err := h.store.deleteUser(username); err != nil {
-		jsonErr(w, err.Error(), http.StatusBadRequest)
+	username, duress, ok := h.sess.getMeta(c.Value)
+	if !ok {
+		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	if c, err := r.Cookie("dd_session"); err == nil {
+	if duress {
 		h.sess.delete(c.Value)
+	} else {
+		if err := h.store.deleteUser(username); err != nil {
+			jsonErr(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.sess.deleteUser(username)
+		log.Printf("[auth] account deleted")
 	}
 	h.clearCookie(w, r)
-	log.Printf("[auth] account deleted")
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
@@ -850,42 +1086,44 @@ func (h *Handler) startSession(w http.ResponseWriter, r *http.Request, username 
 	jsonOK(w, map[string]string{"username": username})
 }
 
-func (h *Handler) setCookieSession(w http.ResponseWriter, r *http.Request, username string, duress bool) {
+func (h *Handler) setCookieSession(w http.ResponseWriter, r *http.Request, username string, duress bool) error {
 	token, err := h.sess.create(username, duress)
 	if err != nil {
-		jsonErr(w, "could not create session", http.StatusInternalServerError)
-		return
+		return err
 	}
 	h.setCookie(w, r, token)
+	return nil
 }
 
 func (h *Handler) clearCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
-		Name: "dd_session", Value: "", Path: "/", MaxAge: -1,
+		Name: sessionCookieName(r), Value: "", Path: "/", MaxAge: -1,
 		Expires: time.Unix(1, 0), HttpOnly: true,
 		Secure: middleware.IsSecureRequest(r), SameSite: http.SameSiteStrictMode,
 	})
 }
 
-func randomBytes(n int) []byte {
-	b := make([]byte, n)
-	rand.Read(b)
-	return b
+func decodeSRPProof(encoded string) ([]byte, bool) {
+	proof := make([]byte, sha256.Size)
+	if len(encoded) != sha256.Size*2 {
+		return proof, false
+	}
+	decoded, err := hex.DecodeString(encoded)
+	if err != nil || len(decoded) != sha256.Size {
+		return proof, false
+	}
+	return decoded, true
+}
+
+func validateDuressUpdate(salt, verifier, kdf string) error {
+	if salt == "" && verifier == "" && kdf == "" {
+		return nil
+	}
+	return validateWritableSRPCredential(salt, verifier, kdf)
 }
 
 func hmacSum(key []byte, msg string) []byte {
 	m := hmac.New(sha256.New, key)
 	m.Write([]byte(msg))
 	return m.Sum(nil)
-}
-
-func subtleEqual(a, b string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var d byte
-	for i := 0; i < len(a); i++ {
-		d |= a[i] ^ b[i]
-	}
-	return d == 0
 }

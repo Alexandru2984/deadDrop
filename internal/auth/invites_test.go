@@ -1,6 +1,11 @@
 package auth
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+)
 
 func TestGenerateInvitesBulk(t *testing.T) {
 	dir := t.TempDir()
@@ -44,9 +49,9 @@ func TestImportInvitesDedupAndValidate(t *testing.T) {
 
 	in := []string{
 		existing[0],         // duplicate of a stored code → skip
-		"DD-ABCD-EFGH-JKLM", // new, valid
-		"dd-abcd-efgh-jklm", // same as above once uppercased → skip (within-batch dup)
-		"DD-NEW2-3456-7890", // new, valid
+		"DD-ABCD-EFGH-JKMP", // new, valid
+		"dd-abcd-efgh-jkmp", // same as above once uppercased → skip (within-batch dup)
+		"DD-NEW2-3456-789A", // new, valid
 		"garbage",           // malformed → skip
 		"",                  // empty → skip
 	}
@@ -61,7 +66,11 @@ func TestImportInvitesDedupAndValidate(t *testing.T) {
 		t.Fatalf("want 3 total (1 seed + 2 imported), got %d", len(got))
 	}
 	// An imported code must be consumable by the real registration path.
-	if !newInvites(dir).consume("DD-ABCD-EFGH-JKLM") {
+	consumed, err := newInvites(dir).consume("DD-ABCD-EFGH-JKMP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !consumed {
 		t.Fatal("imported code should be consumable at registration")
 	}
 }
@@ -82,16 +91,102 @@ func TestParseInviteCodes(t *testing.T) {
 }
 
 func TestValidInviteCode(t *testing.T) {
-	good := []string{"DD-ABCD-EFGH-JKLM", "dd-abcd-efgh-jklm", "DD-2345-6789"}
+	good := []string{
+		"DD-ABCD-EFGH-JKMP",
+		"dd-abcd-efgh-jkmp",
+		"DD-ABCD-EFGH-JKMP-NPQR-STUV",
+	}
 	for _, c := range good {
 		if !validInviteCode(c) {
 			t.Errorf("validInviteCode(%q) = false, want true", c)
 		}
 	}
-	bad := []string{"", "garbage", "XX-ABCD", "DD-", "DD-@@@@", "not a code"}
+	bad := []string{
+		"", "garbage", "XX-ABCD", "DD-", "DD-@@@@", "not a code",
+		"DD-2345-6789",              // too short
+		"DD-ABCD-EFGH-IJKL",         // ambiguous I/L
+		"DD-ABCD--EFGH-JKLM",        // malformed grouping
+		"DD-ABCD-EFGH-JKLM-NPQR",    // neither legacy nor current format
+		"DD-ABCD-EFGH-JKLM-NPQR-ST", // truncated final group
+	}
 	for _, c := range bad {
 		if validInviteCode(c) {
 			t.Errorf("validInviteCode(%q) = true, want false", c)
 		}
+	}
+}
+
+func TestInviteStoresCoordinateAcrossInstances(t *testing.T) {
+	dir := t.TempDir()
+	const workers = 8
+	const perWorker = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := newInvites(dir).generateN(perWorker)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	codes, err := ListInvitesForDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(codes) != workers*perWorker {
+		t.Fatalf("concurrent generation lost updates: got %d, want %d", len(codes), workers*perWorker)
+	}
+	seen := make(map[string]bool, len(codes))
+	for _, code := range codes {
+		if seen[code] {
+			t.Fatalf("duplicate invite generated: %s", code)
+		}
+		seen[code] = true
+	}
+}
+
+func TestInviteConsumeSurfacesStoreErrors(t *testing.T) {
+	dir := t.TempDir()
+	iv := newInvites(dir)
+	iv.path = filepath.Join(dir, "store-directory")
+	if err := os.Mkdir(iv.path, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if consumed, err := iv.consume("DD-ABCD-EFGH-JKMP"); err == nil || consumed {
+		t.Fatalf("consume on invalid store: consumed=%v err=%v", consumed, err)
+	}
+}
+
+func TestInviteRestoreIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	iv := newInvites(dir)
+	code, err := iv.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumed, err := iv.consume(code)
+	if err != nil || !consumed {
+		t.Fatalf("consume: consumed=%v err=%v", consumed, err)
+	}
+	if err := iv.restore(code); err != nil {
+		t.Fatal(err)
+	}
+	if err := iv.restore(code); err != nil {
+		t.Fatal(err)
+	}
+	codes, err := iv.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(codes) != 1 || codes[0] != code {
+		t.Fatalf("idempotent restore produced %v", codes)
 	}
 }

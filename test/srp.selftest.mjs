@@ -86,6 +86,20 @@ async function kdfHardening() {
   let threw = false;
   try { await register(username, password, 'argon2id:1'); } catch { threw = true; }
   ok(threw, 'unsupported kdf label is rejected');
+
+  threw = false;
+  try { await register(username, password, 'pbkdf2:5000001'); } catch { threw = true; }
+  ok(threw, 'excessive kdf cost is rejected before WebCrypto work');
+
+  const malformed = new ClientLogin(username, password);
+  malformed.start();
+  threw = false;
+  try { await malformed.finish('00', bigToHex(B), DEFAULT_KDF); } catch { threw = true; }
+  ok(threw, 'non-canonical salt is rejected');
+
+  threw = false;
+  try { await malformed.finish(salt, N.toString(16), DEFAULT_KDF); } catch { threw = true; }
+  ok(threw, 'out-of-range server public value is rejected before SRP math');
 }
 
 async function printVectors() {

@@ -2,7 +2,8 @@
 // SHA-256). It lets a client prove knowledge of a password without ever sending
 // the password — not to the server, and not to any TLS-terminating middlebox
 // (Cloudflare). The server only ever stores a salt and a verifier v = g^x mod N,
-// from which the password cannot be recovered.
+// which does not reveal the password directly but does permit offline dictionary
+// guesses if the verifier database is stolen; the browser-side KDF raises their cost.
 //
 // All group elements are zero-padded to the byte length of N before hashing so the
 // client (web/js/srp.js) and server agree byte-for-byte; the two implementations
@@ -48,17 +49,18 @@ func Verifier(username, password string, salt []byte) *big.Int {
 
 // DecodeVerifier parses a stored hex verifier and checks 0 < v < N.
 func DecodeVerifier(h string) (*big.Int, error) {
-	v, ok := new(big.Int).SetString(h, 16)
+	v, ok := decodeCanonicalElement(h)
 	if !ok || v.Sign() <= 0 || v.Cmp(N) >= 0 {
 		return nil, ErrBadParam
 	}
 	return v, nil
 }
 
-// DecodePublic parses a client public ephemeral A (hex) and checks A mod N != 0.
+// DecodePublic parses a canonical client public ephemeral A. Bounding it before
+// big.Int arithmetic prevents negative/oversized inputs from becoming a CPU DoS.
 func DecodePublic(h string) (*big.Int, error) {
-	a, ok := new(big.Int).SetString(h, 16)
-	if !ok || new(big.Int).Mod(a, N).Sign() == 0 {
+	a, ok := decodeCanonicalElement(h)
+	if !ok || a.Sign() <= 0 || a.Cmp(N) >= 0 {
 		return nil, ErrBadParam
 	}
 	return a, nil
@@ -73,6 +75,9 @@ type Challenge struct {
 
 // NewChallenge picks b and computes B = (k*v + g^b) mod N for a known verifier.
 func NewChallenge(v *big.Int) (*Challenge, error) {
+	if v == nil || v.Sign() <= 0 || v.Cmp(N) >= 0 {
+		return nil, ErrBadParam
+	}
 	for i := 0; i < 16; i++ {
 		b, err := randInt()
 		if err != nil {
@@ -93,8 +98,8 @@ func NewChallenge(v *big.Int) (*Challenge, error) {
 // proof M2 (to send back so the client can authenticate the server) and the shared
 // session key K.
 func (c *Challenge) Verify(A *big.Int, M1 []byte) (M2, K []byte, err error) {
-	if A == nil || new(big.Int).Mod(A, N).Sign() == 0 {
-		return nil, nil, ErrBadParam // A % N == 0 → reject
+	if A == nil || A.Sign() <= 0 || A.Cmp(N) >= 0 || len(M1) != sha256.Size {
+		return nil, nil, ErrBadParam
 	}
 	u := hashInt(pad(A), pad(c.Bpub))
 	if u.Sign() == 0 {
@@ -148,11 +153,29 @@ func hashInt(parts ...[]byte) *big.Int {
 }
 
 func randInt() (*big.Int, error) {
-	b := make([]byte, 32) // 256-bit ephemeral
-	if _, err := rand.Read(b); err != nil {
-		return nil, err
+	for {
+		b := make([]byte, 32) // 256-bit ephemeral
+		if _, err := rand.Read(b); err != nil {
+			return nil, err
+		}
+		n := new(big.Int).SetBytes(b)
+		if n.Sign() > 0 {
+			return n, nil
+		}
 	}
-	return new(big.Int).SetBytes(b), nil
+}
+
+func decodeCanonicalElement(h string) (*big.Int, bool) {
+	if len(h) == 0 || len(h) > nLen*2 {
+		return nil, false
+	}
+	for _, c := range h {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return nil, false
+		}
+	}
+	n, ok := new(big.Int).SetString(h, 16)
+	return n, ok
 }
 
 func mustHex(s string) *big.Int {

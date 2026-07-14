@@ -8,7 +8,7 @@ import { CryptoLayer } from './crypto.js';
 import { PeerConnection } from './peer.js';
 import { MessageManager } from './messages.js';
 import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
-import { register as srpRegister, ClientLogin } from './srp.js';
+import { register as srpRegister, ClientLogin, DEFAULT_KDF } from './srp.js';
 import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
 
@@ -18,6 +18,12 @@ const PEER_ID_RE = /^[0-9a-f]{16}$/;
 const MAX_TEXT_LEN = 16 * 1024;
 const MAX_RENDERED_NODES = 600;
 const ALLOWED_TTLS = new Set([0, 10, 30, 60, 300]);
+const CURRENT_KDF_ITERATIONS = Number(DEFAULT_KDF.split(':')[1]);
+
+function needsKdfUpgrade(kdf) {
+  const match = /^pbkdf2:(\d+)$/.exec(kdf || '');
+  return !match || Number(match[1]) < CURRENT_KDF_ITERATIONS;
+}
 
 class DeadDrop {
   constructor() {
@@ -243,7 +249,6 @@ class DeadDrop {
       if (res.ok) {
         const data = await res.json();
         this.username = data.username;
-        this._restricted = !(data.features || []).includes('settings');
         this._showPage('landing');
       } else {
         this._showPage('auth');
@@ -279,21 +284,22 @@ class DeadDrop {
       }
       const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d });
       if (!auth.ok) { this._showAuthError(auth.data.error || 'Invalid credentials'); return; }
-      // Authenticate the SERVER too — against whichever proof matched. A session
-      // without the "settings" capability means the second (duress) proof won.
-      const restricted = !(auth.data.features || []).includes('settings');
-      const verifier = restricted && clientD ? clientD : client;
-      if (!verifier.verifyServer(auth.data.M2)) {
+      // Authenticate the server too. Which locally-computed M2 matches tells this
+      // browser which credential won; the server response remains identical for
+      // primary and duress sessions, so it carries no observable decoy marker.
+      const primaryOK = client.verifyServer(auth.data.M2);
+      const duressOK = !!clientD && clientD.verifyServer(auth.data.M2);
+      if (!primaryOK && !duressOK) {
         this._showAuthError('Server authentication failed — do not trust this connection.');
         return;
       }
+      const usedDuress = !primaryOK && duressOK;
       this.username = auth.data.username;
-      this._restricted = restricted;
       // Transparent hardening upgrade: if the credential that just logged in
       // predates the PBKDF2 stretch, re-derive it stretched and store the new
       // verifier. The server routes this to the right slot (real vs duress).
-      const usedKdf = restricted ? ch.data.kdf2 : ch.data.kdf;
-      if (!usedKdf) {
+      const usedKdf = usedDuress ? ch.data.kdf2 : ch.data.kdf;
+      if (needsKdfUpgrade(usedKdf)) {
         try {
           const up = await srpRegister(username, password);
           await this._postJSON('/api/account/verifier', up);
@@ -317,7 +323,6 @@ class DeadDrop {
       await this._postJSON('/api/account/verifier', { salt, verifier, kdf });
     } catch { /* upgrade is best-effort; legacy login already succeeded */ }
     this.username = res.data.username;
-    this._restricted = false;
     this._afterAuth();
   }
 
@@ -427,9 +432,7 @@ class DeadDrop {
       case 'landing':
         this.el.landing.classList.remove('hidden');
         this.el.userDisplay.textContent = this.username;
-        // Decoy: a restricted (duress) session hides account settings so the
-        // coercer can't poke at them.
-        this.el.settingsBtn.style.display = this._restricted ? 'none' : '';
+        this.el.settingsBtn.style.display = '';
         if (this._pendingJoin) {
           this.el.roomInput.value = this._pendingJoin;
           this._pendingJoin = null;

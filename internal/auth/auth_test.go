@@ -69,8 +69,8 @@ func TestCookieSecureFlagTrustsOnlyLocalProxy(t *testing.T) {
 	local.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	h.setCookie(w, local, "test-token")
-	if got := w.Result().Cookies()[0]; !got.Secure {
-		t.Fatal("cookie behind the local TLS proxy must be Secure")
+	if got := w.Result().Cookies()[0]; !got.Secure || got.Name != "__Host-dd_session" {
+		t.Fatalf("cookie behind local TLS proxy = %#v, want Secure __Host- cookie", got)
 	}
 
 	public := httptest.NewRequest(http.MethodGet, "http://dead.micutu.com/", nil)
@@ -78,8 +78,8 @@ func TestCookieSecureFlagTrustsOnlyLocalProxy(t *testing.T) {
 	public.Header.Set("X-Forwarded-Proto", "https")
 	w = httptest.NewRecorder()
 	h.setCookie(w, public, "test-token")
-	if got := w.Result().Cookies()[0]; got.Secure {
-		t.Fatal("an untrusted client must not control the cookie Secure decision")
+	if got := w.Result().Cookies()[0]; got.Secure || got.Name != "dd_session" {
+		t.Fatalf("untrusted forwarded proto controlled cookie policy: %#v", got)
 	}
 }
 
@@ -389,6 +389,20 @@ func TestValidKdf(t *testing.T) {
 	for _, k := range invalid {
 		if validKdf(k) {
 			t.Errorf("validKdf(%q) = true, want false", k)
+		}
+	}
+}
+
+func TestWritableKdfCannotBeDowngraded(t *testing.T) {
+	salt, verifier := testSRPCredential("alice", "password")
+	for _, kdf := range []string{"", "pbkdf2:10000", "pbkdf2:599999"} {
+		if err := validateWritableSRPCredential(salt, verifier, kdf); err == nil {
+			t.Errorf("writable credential accepted weak kdf %q", kdf)
+		}
+	}
+	for _, kdf := range []string{defaultKdf, "pbkdf2:1000000", "pbkdf2:5000000"} {
+		if err := validateWritableSRPCredential(salt, verifier, kdf); err != nil {
+			t.Errorf("writable credential rejected kdf %q: %v", kdf, err)
 		}
 	}
 }

@@ -64,13 +64,14 @@ async function srpLogin(username, password, jar) {
   }
   const auth = await post('/api/srp/authenticate', { token: ch.json.token, M1, M1d }, jar);
   srpLogin.lastChallenge = ch.json;
-  // The decoy signal is deliberately opaque: a restricted feature list (no
-  // "settings") means the duress proof matched, never a literal duress flag.
-  const restricted = auth.status === 200 && !(auth.json?.features || []).includes('settings');
-  const verifier = restricted && clientD ? clientD : client;
+  // Detect which credential won only by checking the server proof against the
+  // two local transcripts. The API response and feature list remain identical.
+  const primaryOK = !!auth.json?.M2 && client.verifyServer(auth.json.M2);
+  const duressOK = !!auth.json?.M2 && !!clientD && clientD.verifyServer(auth.json.M2);
+  const usedDuress = !primaryOK && duressOK;
   return {
-    status: auth.status, json: auth.json, restricted,
-    serverOK: auth.json?.M2 ? verifier.verifyServer(auth.json.M2) : false,
+    status: auth.status, json: auth.json, usedDuress,
+    serverOK: primaryOK || duressOK,
   };
 }
 
@@ -96,7 +97,7 @@ async function srpLogin(username, password, jar) {
   const me = await get('/api/me', jar2);
   ok(me.status === 200 && me.json.username === USER, 'session works (/api/me)');
 
-  ok(login.restricted === false, 'real login gets the full feature list');
+  ok(login.usedDuress === false, 'real login authenticates the primary transcript');
   ok(!('duress' in (login.json || {})), 'authenticate response never says "duress"');
   ok(!('duress' in (me.json || {})), '/api/me response never says "duress"');
 
@@ -107,11 +108,13 @@ async function srpLogin(username, password, jar) {
   ok(setD.status === 200, 'set duress password (computed client-side)');
   const djar = {};
   const dlogin = await srpLogin(USER, DURESS, djar);
-  ok(dlogin.status === 200 && dlogin.restricted === true, 'duress password logs into a restricted (decoy) session');
+  ok(dlogin.status === 200 && dlogin.usedDuress === true, 'duress password authenticates the decoy transcript');
   ok(dlogin.serverOK === true, 'server proof verifies on duress login');
   ok(!('duress' in (dlogin.json || {})), 'decoy response carries no telltale duress field');
+  ok(JSON.stringify(dlogin.json?.features) === JSON.stringify(login.json?.features),
+     'primary and duress responses expose identical feature lists');
   const rlogin = await srpLogin(USER, PASS, {});
-  ok(rlogin.status === 200 && rlogin.restricted === false, 'real password still logs in as real');
+  ok(rlogin.status === 200 && rlogin.usedDuress === false, 'real password still logs in as real');
 
   // 3b. Decoy-session hardening.
   //  - "Change password" from the decoy must update the DURESS credential only.
@@ -120,16 +123,27 @@ async function srpLogin(username, password, jar) {
   const chg = await post('/api/account/verifier', { salt: nreg.salt, verifier: nreg.verifier, kdf: nreg.kdf }, djar);
   ok(chg.status === 200, 'password change from decoy session is accepted');
   const rlogin2 = await srpLogin(USER, PASS, {});
-  ok(rlogin2.status === 200 && rlogin2.restricted === false, 'real password unaffected by decoy password change');
+  ok(rlogin2.status === 200 && rlogin2.usedDuress === false, 'real password unaffected by decoy password change');
   const dlogin2 = await srpLogin(USER, NEWDURESS, {});
-  ok(dlogin2.status === 200 && dlogin2.restricted === true, 'decoy password change updated the duress credential');
+  ok(dlogin2.status === 200 && dlogin2.usedDuress === true, 'decoy password change updated the duress credential');
   //  - Setting a duress password from the decoy must fake success (no 403 tell)
   //    without touching anything.
   const xreg = await register(USER, 'probe-from-decoy-1234');
   const probe = await post('/api/account/duress', { salt: xreg.salt, verifier: xreg.verifier, kdf: xreg.kdf }, djar);
   ok(probe.status === 200, 'duress-set from decoy answers 200 (no detectable 403)');
   const dlogin3 = await srpLogin(USER, NEWDURESS, {});
-  ok(dlogin3.status === 200 && dlogin3.restricted === true, 'duress-set from decoy was a no-op');
+  ok(dlogin3.status === 200 && dlogin3.usedDuress === true, 'duress-set from decoy was a no-op');
+
+  // Deleting from a decoy session must look successful without deleting the
+  // primary account. Use a fresh decoy session because delete logs it out.
+  const deleteDecoyJar = {};
+  const deleteDecoyLogin = await srpLogin(USER, NEWDURESS, deleteDecoyJar);
+  const decoyDelete = await post('/api/account/delete', {}, deleteDecoyJar);
+  ok(deleteDecoyLogin.usedDuress === true && decoyDelete.status === 200,
+     'account delete from decoy reports success');
+  const afterDecoyDelete = await srpLogin(USER, PASS, {});
+  ok(afterDecoyDelete.status === 200 && afterDecoyDelete.usedDuress === false,
+     'decoy deletion leaves the primary account intact');
 
   // 4. A third (neither) password must fail.
   const bad = await srpLogin(USER, 'totally-wrong-password', {});
@@ -153,19 +167,15 @@ async function srpLogin(username, password, jar) {
   ok(gch.status === 200 && gch.json.kdf === 'pbkdf2:600000' && gch.json.kdf2 === 'pbkdf2:600000',
      'unknown-user challenge advertises the default kdf');
 
-  // 4c. Pre-stretch SRP accounts (kdf '') still log in, and upgrade in place.
-  const oldReg = await register(USER, PASS, '');
-  const down = await post('/api/account/verifier', { salt: oldReg.salt, verifier: oldReg.verifier, kdf: '' }, jar2);
-  ok(down.status === 200, 'verifier can be replaced with a kdf-less (pre-stretch) one');
-  const oldLogin = await srpLogin(USER, PASS, {});
-  ok(oldLogin.status === 200 && oldLogin.serverOK === true, 'kdf-less account logs in via advertised empty kdf');
-  ok(srpLogin.lastChallenge?.kdf === '', 'challenge advertises the empty kdf for pre-stretch accounts');
-  const upReg = await register(USER, PASS);
-  const up = await post('/api/account/verifier', { salt: upReg.salt, verifier: upReg.verifier, kdf: upReg.kdf }, jar2);
-  ok(up.status === 200, 'account upgrades to the stretched verifier');
-  const upLogin = await srpLogin(USER, PASS, {});
-  ok(upLogin.status === 200 && upLogin.serverOK === true && srpLogin.lastChallenge?.kdf === upReg.kdf,
-     'upgraded account logs in with the PBKDF2 stretch');
+  // 4c. Authenticated clients cannot persistently downgrade the password KDF.
+  // Old kdf-less records remain readable and the browser upgrades them on login,
+  // but all newly written credentials must meet the current minimum.
+  const weakReg = await register(USER, PASS, 'pbkdf2:10000');
+  const down = await post('/api/account/verifier', weakReg, jar2);
+  ok(down.status === 400, 'verifier endpoint rejects a weak KDF downgrade');
+  const afterDown = await srpLogin(USER, PASS, {});
+  ok(afterDown.status === 200 && afterDown.serverOK === true && srpLogin.lastChallenge?.kdf === reg.kdf,
+     'rejected downgrade leaves the stretched credential intact');
 
   // 5. Cleanup: delete the throwaway account.
   const del = await post('/api/account/delete', {}, jar2);

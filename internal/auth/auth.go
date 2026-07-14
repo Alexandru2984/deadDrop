@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -54,21 +55,55 @@ type store struct {
 	dummyHash []byte // valid bcrypt hash for constant-time comparison on unknown users
 }
 
+const (
+	maxUsers        = 10_000
+	maxUsersFileLen = 32 << 20
+)
+
+const legacyBcryptCost = 12
+
 func newStore(dir string) (*store, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return nil, fmt.Errorf("secure auth data directory: %w", err)
+	}
 	// Generate a valid bcrypt hash at startup for constant-time dummy comparison.
 	// This prevents user enumeration via timing — the work is identical whether
 	// the user exists or not. Must be the same cost factor as real hashes.
-	dummy, _ := bcrypt.GenerateFromPassword([]byte("dummy-constant-time"), 12)
+	dummy, err := bcrypt.GenerateFromPassword([]byte("dummy-constant-time"), legacyBcryptCost)
+	if err != nil {
+		return nil, fmt.Errorf("initialize legacy authentication: %w", err)
+	}
 	s := &store{users: make(map[string]user), path: filepath.Join(dir, "users.json"), dummyHash: dummy}
-	if data, err := os.ReadFile(s.path); err == nil {
+	if info, err := os.Lstat(s.path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, errors.New("users.json is not a regular file")
+		}
+		if info.Size() > maxUsersFileLen {
+			return nil, errors.New("users.json exceeds size limit")
+		}
+		data, err := os.ReadFile(s.path)
+		if err != nil {
+			return nil, fmt.Errorf("read users.json: %w", err)
+		}
 		if err := json.Unmarshal(data, &s.users); err != nil {
 			return nil, fmt.Errorf("corrupt users.json: %w", err)
 		}
+		if len(s.users) > maxUsers {
+			return nil, fmt.Errorf("users.json exceeds account limit")
+		}
+		for username, u := range s.users {
+			if err := validateStoredUser(username, u); err != nil {
+				return nil, fmt.Errorf("invalid account %q: %w", username, err)
+			}
+		}
+		if err := os.Chmod(s.path, 0600); err != nil {
+			return nil, fmt.Errorf("secure users.json: %w", err)
+		}
 	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read users.json: %w", err)
+		return nil, fmt.Errorf("inspect users.json: %w", err)
 	}
 	log.Printf("[auth] loaded %d users from %s", len(s.users), s.path)
 	return s, nil
@@ -89,19 +124,23 @@ func (s *store) register(username, password string) error {
 	if _, exists := s.users[username]; exists {
 		return errors.New("username already taken")
 	}
-	hash, err := bcrypt.GenerateFromPassword(prehashPassword(password), 12)
+	if len(s.users) >= maxUsers {
+		return errors.New("account limit reached")
+	}
+	hash, err := bcrypt.GenerateFromPassword(prehashPassword(password), legacyBcryptCost)
 	if err != nil {
 		return err
 	}
-	s.users[username] = user{Hash: string(hash)}
-	return s.save()
+	next := cloneUsers(s.users)
+	next[username] = user{Hash: string(hash)}
+	return s.commit(next)
 }
 
 func (s *store) authenticate(username, password string) error {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	u, ok := s.users[username]
-	if !ok {
+	s.mu.RUnlock()
+	if !ok || u.Hash == "" {
 		// Constant-time work to prevent user-enumeration via timing.
 		// Uses a valid bcrypt hash generated at startup (same cost factor).
 		bcrypt.CompareHashAndPassword(s.dummyHash, prehashPassword(password))
@@ -113,18 +152,44 @@ func (s *store) authenticate(username, password string) error {
 	return nil
 }
 
-// save writes users.json atomically (write to temp file then rename)
-// to prevent corruption if the server crashes mid-write.
-func (s *store) save() error {
-	data, err := json.MarshalIndent(s.users, "", "  ")
-	if err != nil {
+func (s *store) commit(next map[string]user) error {
+	if err := atomicWriteJSON(s.path, next); err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
+	s.users = next
+	return nil
+}
+
+func cloneUsers(src map[string]user) map[string]user {
+	dst := make(map[string]user, len(src)+1)
+	for username, u := range src {
+		dst[username] = u
 	}
-	return os.Rename(tmp, s.path)
+	return dst
+}
+
+func validateStoredUser(username string, u user) error {
+	if !usernameRe.MatchString(username) {
+		return errors.New("invalid username")
+	}
+	if u.Hash != "" {
+		if u.Salt != "" || u.Verifier != "" || u.Kdf != "" {
+			return errors.New("mixed legacy and SRP credentials")
+		}
+		cost, err := bcrypt.Cost([]byte(u.Hash))
+		if err != nil || cost != legacyBcryptCost {
+			return errors.New("invalid bcrypt hash")
+		}
+	} else if err := validateSRPCredential(u.Salt, u.Verifier, u.Kdf); err != nil {
+		return fmt.Errorf("invalid primary credential: %w", err)
+	}
+	if u.DuressSalt == "" && u.DuressVerifier == "" && u.DuressKdf == "" {
+		return nil
+	}
+	if err := validateSRPCredential(u.DuressSalt, u.DuressVerifier, u.DuressKdf); err != nil {
+		return fmt.Errorf("invalid duress credential: %w", err)
+	}
+	return nil
 }
 
 // prehashPassword hashes the password with SHA-256 before bcrypt.
@@ -147,6 +212,8 @@ type sessions struct {
 	m  map[string]*session
 }
 
+const maxSessions = 10_000
+
 func newSessions() *sessions {
 	sm := &sessions{m: make(map[string]*session)}
 	go sm.reap()
@@ -154,14 +221,25 @@ func newSessions() *sessions {
 }
 
 func (sm *sessions) create(username string, duress bool) (string, error) {
-	tok, err := genToken()
-	if err != nil {
-		return "", err
+	for {
+		tok, err := genToken()
+		if err != nil {
+			return "", err
+		}
+		sm.mu.Lock()
+		sm.removeExpiredLocked(time.Now())
+		if len(sm.m) >= maxSessions {
+			sm.mu.Unlock()
+			return "", errors.New("session limit reached")
+		}
+		if _, collision := sm.m[tok]; collision {
+			sm.mu.Unlock()
+			continue
+		}
+		sm.m[tok] = &session{username: username, duress: duress, expiresAt: time.Now().Add(24 * time.Hour)}
+		sm.mu.Unlock()
+		return tok, nil
 	}
-	sm.mu.Lock()
-	sm.m[tok] = &session{username: username, duress: duress, expiresAt: time.Now().Add(24 * time.Hour)}
-	sm.mu.Unlock()
-	return tok, nil
 }
 
 func (sm *sessions) get(token string) (string, bool) {
@@ -185,16 +263,30 @@ func (sm *sessions) delete(token string) {
 	sm.mu.Unlock()
 }
 
+func (sm *sessions) deleteUser(username string) {
+	sm.mu.Lock()
+	for token, s := range sm.m {
+		if s.username == username {
+			delete(sm.m, token)
+		}
+	}
+	sm.mu.Unlock()
+}
+
+func (sm *sessions) removeExpiredLocked(now time.Time) {
+	for token, s := range sm.m {
+		if now.After(s.expiresAt) {
+			delete(sm.m, token)
+		}
+	}
+}
+
 // reap removes expired sessions every 10 minutes.
 func (sm *sessions) reap() {
 	for range time.NewTicker(10 * time.Minute).C {
 		sm.mu.Lock()
 		now := time.Now()
-		for k, s := range sm.m {
-			if now.After(s.expiresAt) {
-				delete(sm.m, k)
-			}
-		}
+		sm.removeExpiredLocked(now)
 		sm.mu.Unlock()
 	}
 }
@@ -223,26 +315,17 @@ func NewHandler(dataDir string) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
+	challenges, err := newChallengeStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
 	return &Handler{
 		store:      st,
 		sess:       newSessions(),
 		invites:    newInvites(dataDir),
 		lockout:    newLockout(),
-		challenges: newChallengeStore(),
+		challenges: challenges,
 	}, nil
-}
-
-// currentUser returns the authenticated username for a request, or "" if none.
-func (h *Handler) currentUser(r *http.Request) string {
-	c, err := r.Cookie("dd_session")
-	if err != nil {
-		return ""
-	}
-	username, ok := h.sess.get(c.Value)
-	if !ok {
-		return ""
-	}
-	return username
 }
 
 const maxAuthBody = 4096 // 4 KB max for auth JSON payloads
@@ -290,10 +373,22 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if !usernameRe.MatchString(body.Username) || len(body.Password) > 128 {
+		jsonErr(w, "invalid credentials", http.StatusUnauthorized)
+		return
+	}
+	ip := middleware.ExtractIP(r)
+	if allowed, wait := h.lockout.allowed(body.Username, ip); !allowed {
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())))
+		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
+		return
+	}
 	if err := h.store.authenticate(body.Username, body.Password); err != nil {
+		h.lockout.fail(body.Username, ip)
 		jsonErr(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	h.lockout.reset(body.Username, ip)
 	token, err := h.sess.create(body.Username, false)
 	if err != nil {
 		log.Printf("[auth] session token error: %v", err)
@@ -309,11 +404,11 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if c, err := r.Cookie("dd_session"); err == nil {
+	if c, err := sessionCookie(r); err == nil {
 		h.sess.delete(c.Value)
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     "dd_session",
+		Name:     sessionCookieName(r),
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
@@ -326,34 +421,30 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie("dd_session")
+	c, err := sessionCookie(r)
 	if err != nil {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	username, duress, ok := h.sess.getMeta(c.Value)
+	username, _, ok := h.sess.getMeta(c.Value)
 	if !ok {
 		jsonErr(w, "session expired", http.StatusUnauthorized)
 		return
 	}
-	jsonOK(w, map[string]any{"username": username, "features": sessionFeatures(duress)})
+	jsonOK(w, map[string]any{"username": username, "features": sessionFeatures(false)})
 }
 
-// sessionFeatures encodes the session kind as a bland capability list instead of a
-// literal duress flag: someone reading API responses over the user's shoulder (or
-// in DevTools) sees a permissions array, not "duress":true announcing the decoy.
-// A real session carries "settings"; a decoy session simply doesn't.
-func sessionFeatures(duress bool) []string {
-	if duress {
-		return []string{}
-	}
+// sessionFeatures is deliberately identical for primary and duress sessions.
+// Different response capabilities would reveal the decoy in DevTools, to browser
+// extensions, or to anyone comparing the two login flows.
+func sessionFeatures(_ bool) []string {
 	return []string{"settings"}
 }
 
 // RequireAuth rejects unauthenticated requests before they reach the next handler.
 func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("dd_session")
+		c, err := sessionCookie(r)
 		if err != nil {
 			jsonErr(w, "not authenticated", http.StatusUnauthorized)
 			return
@@ -369,7 +460,7 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 // setCookie detects HTTPS (via X-Forwarded-Proto from nginx) to set the Secure flag.
 func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     "dd_session",
+		Name:     sessionCookieName(r),
 		Value:    token,
 		Path:     "/",
 		MaxAge:   86400,
@@ -377,6 +468,17 @@ func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string
 		Secure:   middleware.IsSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+func sessionCookieName(r *http.Request) string {
+	if middleware.IsSecureRequest(r) {
+		return "__Host-dd_session"
+	}
+	return "dd_session"
+}
+
+func sessionCookie(r *http.Request) (*http.Cookie, error) {
+	return r.Cookie(sessionCookieName(r))
 }
 
 func jsonOK(w http.ResponseWriter, v any) {
@@ -388,4 +490,10 @@ func jsonErr(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func subtleEqual(a, b string) bool {
+	aSum := sha256.Sum256([]byte(a))
+	bSum := sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(aSum[:], bSum[:]) == 1
 }

@@ -45,13 +45,17 @@ async function stretch(username, password, saltBytes, kdf) {
   if (!kdf) return password;
   const m = /^pbkdf2:(\d+)$/.exec(kdf);
   if (!m) throw new Error('SRP: unsupported KDF ' + kdf);
+  const iterations = Number(m[1]);
+  if (!Number.isSafeInteger(iterations) || iterations < 10_000 || iterations > 5_000_000) {
+    throw new Error('SRP: unsafe KDF cost');
+  }
   const enc = new TextEncoder();
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
   // Bind the stretch to the account and the SRP salt so identical passwords on
   // different accounts (or after a salt rotation) never collide.
   const salt = concat(enc.encode(`deaddrop/srp/kdf/v1:${username}:`), saltBytes);
   const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations: Number(m[1]) }, base, 256,
+    { name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, 256,
   );
   return bytesToHex(new Uint8Array(bits));
 }
@@ -70,7 +74,10 @@ export class ClientLogin {
   constructor(username, password, aOverride) {
     this.username = username;
     this.password = password;
-    this.a = aOverride ?? bytesToBig(crypto.getRandomValues(new Uint8Array(32)));
+    this.a = aOverride ?? randomScalar();
+    if (typeof this.a !== 'bigint' || this.a <= 0n || this.a >= N) {
+      throw new Error('SRP: invalid client ephemeral');
+    }
     this.A = modpow(g, this.a, N);
     this._expectedM2 = null;
     this.K = null;
@@ -83,8 +90,14 @@ export class ClientLogin {
 
   /** Given the server's salt, B and advertised kdf, produce the client proof M1. */
   async finish(saltHex, Bhex, kdf = '') {
+    if (typeof saltHex !== 'string' || !/^[0-9a-f]{32}$/i.test(saltHex)) {
+      throw new Error('SRP: invalid salt');
+    }
+    if (typeof Bhex !== 'string' || Bhex.length < 1 || Bhex.length > N_LEN * 2 || !/^[0-9a-f]+$/i.test(Bhex)) {
+      throw new Error('SRP: invalid server public value');
+    }
     const B = hexToBig(Bhex);
-    if (B % N === 0n) throw new Error('SRP: server sent B ≡ 0');
+    if (B <= 0n || B >= N) throw new Error('SRP: invalid server public value');
     const salt = hexToBytes(saltHex);
     const k = await kParam();
     const stretched = await stretch(this.username, this.password, salt, kdf);
@@ -157,17 +170,28 @@ function bytesToBig(u8) {
   for (const b of u8) h += b.toString(16).padStart(2, '0');
   return h === '' ? 0n : BigInt('0x' + h);
 }
+function randomScalar() {
+  let scalar = 0n;
+  while (scalar === 0n) {
+    scalar = bytesToBig(crypto.getRandomValues(new Uint8Array(32)));
+  }
+  return scalar;
+}
 function bigToHex(x) {
   let h = x.toString(16);
   return h.length & 1 ? '0' + h : h;
 }
-function hexToBig(h) { return BigInt('0x' + h); }
+function hexToBig(h) {
+  if (typeof h !== 'string' || !/^[0-9a-f]+$/i.test(h)) throw new Error('SRP: invalid hex');
+  return BigInt('0x' + h);
+}
 function bytesToHex(u8) {
   let h = '';
   for (const b of u8) h += b.toString(16).padStart(2, '0');
   return h;
 }
 function hexToBytes(h) {
+  if (typeof h !== 'string' || !/^[0-9a-f]*$/i.test(h)) throw new Error('SRP: invalid hex');
   if (h.length & 1) h = '0' + h;
   const u8 = new Uint8Array(h.length >> 1);
   for (let i = 0; i < u8.length; i++) u8[i] = parseInt(h.substr(i * 2, 2), 16);
