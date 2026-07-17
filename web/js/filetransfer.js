@@ -19,6 +19,24 @@ const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 
 export { MAX_FILE_SIZE };
 
+/**
+ * Bind authenticated file metadata to the bytes that were actually received.
+ * A verified but malicious peer must not be able to under-report a Blob's size
+ * and bypass MessageManager's retained-memory budget.
+ */
+export function assertFileSizeBinding(fileSize, encryptedSize, plaintextSize = undefined) {
+  if (!Number.isSafeInteger(fileSize) || fileSize < 0 || fileSize > MAX_FILE_SIZE) {
+    throw new Error('Invalid declared file size');
+  }
+  if (!Number.isSafeInteger(encryptedSize) || encryptedSize !== fileSize + 16) {
+    throw new Error('Encrypted file size does not match metadata');
+  }
+  if (plaintextSize !== undefined
+      && (!Number.isSafeInteger(plaintextSize) || plaintextSize !== fileSize)) {
+    throw new Error('Decrypted file size does not match metadata');
+  }
+}
+
 export class FileTransferManager {
   constructor() {
     this.inbound = new Map();

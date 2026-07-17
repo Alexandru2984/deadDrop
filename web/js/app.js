@@ -7,7 +7,11 @@
 import { CryptoLayer } from './crypto.js';
 import { PeerConnection } from './peer.js';
 import { MessageManager } from './messages.js';
-import { FileTransferManager, MAX_FILE_SIZE } from './filetransfer.js';
+import {
+  FileTransferManager,
+  MAX_FILE_SIZE,
+  assertFileSizeBinding,
+} from './filetransfer.js';
 import { register as srpRegister, ClientLogin, DEFAULT_KDF } from './srp.js';
 import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
@@ -1171,11 +1175,14 @@ class DeadDrop {
     try {
       // Decrypt metadata
       const metaJson = await s.crypto.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch);
-      const meta = this._sanitizeFileMeta(JSON.parse(metaJson));
+      const rawMeta = JSON.parse(metaJson);
+      assertFileSizeBinding(rawMeta?.fileSize, result.ciphertext.byteLength);
+      const meta = this._sanitizeFileMeta(rawMeta);
       if (!meta) throw new Error('Invalid file metadata');
 
       // Decrypt file data
       fileData = await s.crypto.decryptBinary(result.ciphertext, result.fileIv, result.fileEpoch);
+      assertFileSizeBinding(meta.fileSize, result.ciphertext.byteLength, fileData.byteLength);
       const blob    = new Blob([fileData], { type: meta.fileType });
       const blobUrl = URL.createObjectURL(blob);
 
@@ -1814,7 +1821,7 @@ class DeadDrop {
     const fileType = typeof meta.fileType === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(meta.fileType)
       ? meta.fileType.slice(0, 100)
       : 'application/octet-stream';
-    const fileSize = Number.isFinite(meta.fileSize) && meta.fileSize >= 0 && meta.fileSize <= MAX_FILE_SIZE
+    const fileSize = Number.isSafeInteger(meta.fileSize) && meta.fileSize >= 0 && meta.fileSize <= MAX_FILE_SIZE
       ? meta.fileSize
       : 0;
     return { fileName, fileType, fileSize };

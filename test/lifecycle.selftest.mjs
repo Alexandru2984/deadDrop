@@ -1,6 +1,6 @@
 /** Bounded file-transfer and peer-scoped message lifecycle self-test. */
 
-import { FileTransferManager } from '../web/js/filetransfer.js';
+import { FileTransferManager, assertFileSizeBinding } from '../web/js/filetransfer.js';
 import { MessageManager } from '../web/js/messages.js';
 
 let failures = 0;
@@ -11,6 +11,9 @@ const ok = (condition, message) => {
 
 const iv = Buffer.alloc(12).toString('base64');
 const id = () => crypto.randomUUID();
+const rejectsSizeBinding = (...args) => {
+  try { assertFileSizeBinding(...args); return false; } catch { return true; }
+};
 const header = (transferId) => ({
   type: 'file',
   id: transferId,
@@ -59,6 +62,16 @@ ok(manager.handleMessage(header(activeIds[4]), 'peer-a') === null,
 manager.abortScope('peer-a');
 ok(manager.inbound.size === 0 && manager._reservedInboundBytes === 0,
    'disconnecting a peer wipes its reserved ciphertext buffers');
+
+console.log('authenticated file-size binding');
+assertFileSizeBinding(25, 41, 25);
+ok(true, 'matching metadata, ciphertext tag, and plaintext sizes are accepted');
+ok(rejectsSizeBinding(0, 41, 25),
+   'under-reported metadata cannot bypass the retained-Blob memory budget');
+ok(rejectsSizeBinding(25.5, 41, 25),
+   'fractional file sizes are rejected');
+ok(rejectsSizeBinding(25, 41, 24),
+   'decrypted bytes must exactly match authenticated metadata');
 
 console.log('awaited outbound flow');
 const sent = [];
