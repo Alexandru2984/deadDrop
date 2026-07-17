@@ -11,6 +11,9 @@ WorkingDirectory=/home/micu/deaddrop
 ExecStart=/home/micu/deaddrop/deaddrop
 Environment=PORT=8100
 Environment=HOST=127.0.0.1
+# Tor's HiddenServicePort must target ONION_PORT, never PORT: the onion
+# listener refuses proxy-header trust so onion clients cannot spoof X-Real-IP.
+Environment=ONION_PORT=8101
 EnvironmentFile=-/etc/deaddrop.env
 Restart=always
 RestartSec=2

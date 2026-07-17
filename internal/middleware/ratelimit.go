@@ -110,7 +110,14 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 // here: a client reaching the origin directly can supply that header itself.
 // As a safe fallback, use the right-most X-Forwarded-For hop (the one appended
 // by the nearest proxy), never the attacker-controlled left-most hop.
+//
+// Requests behind DirectClientBoundary (the Tor listener) share that
+// boundary's label instead: their loopback peer is an anonymizing forwarder,
+// so neither forwarded headers nor RemoteAddr identify the client.
 func ExtractIP(r *http.Request) string {
+	if label, ok := directClientLabel(r); ok {
+		return label
+	}
 	if isTrustedProxyRequest(r) {
 		if ip, ok := canonicalIP(r.Header.Get("X-Real-IP")); ok {
 			return ip
@@ -133,6 +140,9 @@ func ExtractIP(r *http.Request) string {
 }
 
 func isTrustedProxyRequest(r *http.Request) bool {
+	if _, ok := directClientLabel(r); ok {
+		return false
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr

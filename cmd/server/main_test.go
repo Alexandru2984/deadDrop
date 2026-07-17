@@ -174,6 +174,24 @@ func TestConfiguredListenAddressRequiresPublicOptIn(t *testing.T) {
 	}
 }
 
+func TestConfiguredOnionPortValidation(t *testing.T) {
+	t.Setenv("ONION_PORT", "")
+	if _, enabled, err := configuredOnionPort(8100); err != nil || enabled {
+		t.Fatalf("unset ONION_PORT: enabled=%t err=%v, want disabled", enabled, err)
+	}
+	t.Setenv("ONION_PORT", "8101")
+	port, enabled, err := configuredOnionPort(8100)
+	if err != nil || !enabled || port != 8101 {
+		t.Fatalf("valid ONION_PORT parsed as port=%d enabled=%t err=%v", port, enabled, err)
+	}
+	for _, invalid := range []string{"8100", "0", "70000", "nope"} {
+		t.Setenv("ONION_PORT", invalid)
+		if _, _, err := configuredOnionPort(8100); err == nil {
+			t.Fatalf("ONION_PORT=%q was accepted", invalid)
+		}
+	}
+}
+
 func TestAuthenticatedWebSocketIsRevokedAfterLogout(t *testing.T) {
 	t.Setenv("OPEN_REGISTRATION", "1")
 	authH, err := auth.NewHandler(t.TempDir())

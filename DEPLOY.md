@@ -184,11 +184,18 @@ not resent). Failed logins are throttled per-account (lockout after 5 tries).
 Cloudflare and public DNS from page/API/WebSocket signaling delivery. WebRTC and
 TURN use separate network paths and are not automatically anonymized by this.
 
+Tor must target the dedicated `ONION_PORT` listener (`8101` in the shipped
+unit), **never** the nginx-facing `PORT`. Both proxies connect from loopback,
+but nginx normalizes `X-Real-IP` while tor relays whatever the client wrote —
+on the main port an onion visitor could spoof arbitrary source IPs and rotate
+past rate limits and login lockout. The `ONION_PORT` listener ignores forwarded
+headers entirely and rate-limits all onion traffic as one shared source.
+
 `/etc/tor/torrc`:
 
 ```
 HiddenServiceDir /var/lib/tor/deaddrop/
-HiddenServicePort 80 127.0.0.1:8100
+HiddenServicePort 80 127.0.0.1:8101
 ```
 
 The onion address is in `/var/lib/tor/deaddrop/hostname`. Add it to

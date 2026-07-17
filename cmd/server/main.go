@@ -253,6 +253,11 @@ func main() {
 	}
 	signaling.AllowedOrigins = origins
 
+	onionPort, onionEnabled, err := configuredOnionPort(port)
+	if err != nil {
+		log.Fatalf("invalid onion listener configuration: %v", err)
+	}
+
 	// Auth (username + password only, no email or identifying data)
 	authH, err := auth.NewHandler("data")
 	if err != nil {
@@ -360,6 +365,30 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,
 	}
+	servers := []*http.Server{server}
+
+	// Dedicated loopback listener for the Tor hidden service. Tor connects from
+	// loopback just like nginx, but relays client-written requests verbatim, so
+	// this listener must never inherit the proxy-header trust the nginx port
+	// gets — DirectClientBoundary pins that down per request.
+	if onionEnabled {
+		onionServer := &http.Server{
+			Addr:              listenAddress("127.0.0.1", onionPort),
+			Handler:           middleware.DirectClientBoundary("onion", handler),
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       15 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    32 << 10,
+		}
+		servers = append(servers, onionServer)
+		log.Printf("[onion] direct listener on %s (forwarded headers untrusted)", onionServer.Addr)
+		go func() {
+			if err := onionServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Onion listener failed: %v", err)
+			}
+		}()
+	}
 
 	// Graceful shutdown: drain in-flight requests on SIGINT/SIGTERM instead of
 	// dropping connections mid-flight.
@@ -370,8 +399,10 @@ func main() {
 		log.Printf("[server] shutdown signal received, draining…")
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := server.Shutdown(ctx); err != nil {
-			log.Printf("[server] graceful shutdown error: %v", err)
+		for _, s := range servers {
+			if err := s.Shutdown(ctx); err != nil {
+				log.Printf("[server] graceful shutdown error: %v", err)
+			}
 		}
 	}()
 
@@ -415,8 +446,30 @@ func checkRuntimeConfiguration() error {
 	if err != nil {
 		return err
 	}
+	if _, _, err := configuredOnionPort(port); err != nil {
+		return err
+	}
 	_, _, err = validateRuntimeEnvironment(port)
 	return err
+}
+
+// configuredOnionPort reads ONION_PORT, the loopback-only listener the Tor
+// hidden service should target instead of the nginx-facing PORT. It is
+// loopback by construction (no HOST/ALLOW_PUBLIC_BIND override) because its
+// whole purpose is separating local-forwarder traffic from proxied traffic.
+func configuredOnionPort(mainPort int) (int, bool, error) {
+	raw := strings.TrimSpace(os.Getenv("ONION_PORT"))
+	if raw == "" {
+		return 0, false, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 || value > 65535 {
+		return 0, false, fmt.Errorf("invalid ONION_PORT %q", raw)
+	}
+	if value == mainPort {
+		return 0, false, fmt.Errorf("ONION_PORT must differ from PORT (%d): the Tor listener exists to drop proxy-header trust", mainPort)
+	}
+	return value, true, nil
 }
 
 func configuredListenAddress() (port int, pinned bool, host string, err error) {

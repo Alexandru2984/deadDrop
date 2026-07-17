@@ -193,6 +193,51 @@ func TestExtractIP(t *testing.T) {
 	}
 }
 
+func TestDirectClientBoundaryNeutralizesForwardedHeaders(t *testing.T) {
+	var gotIP string
+	var gotSecure bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIP = ExtractIP(r)
+		gotSecure = IsSecureRequest(r)
+	})
+
+	// A Tor visitor writes the request themselves: loopback peer plus fully
+	// attacker-chosen forwarded headers.
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:4321"
+	req.Header.Set("X-Real-IP", "203.0.113.7")
+	req.Header.Set("X-Forwarded-For", "198.51.100.20, 203.0.113.8")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	DirectClientBoundary("onion", inner).ServeHTTP(httptest.NewRecorder(), req)
+
+	if gotIP != "onion" {
+		t.Errorf("ExtractIP behind boundary = %q, want label %q", gotIP, "onion")
+	}
+	if gotSecure {
+		t.Error("spoofed X-Forwarded-Proto was trusted behind the direct-client boundary")
+	}
+}
+
+func TestDirectClientBoundarySharesOneRateBucket(t *testing.T) {
+	rl := NewRateLimiter(1, 1, time.Minute)
+	limited := DirectClientBoundary("onion", rl.Wrap(func(w http.ResponseWriter, r *http.Request) {}))
+
+	// Rotating spoofed identities must not mint fresh buckets on this listener.
+	for i, spoofed := range []string{"203.0.113.1", "203.0.113.2"} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.RemoteAddr = "127.0.0.1:4321"
+		req.Header.Set("X-Real-IP", spoofed)
+		rec := httptest.NewRecorder()
+		limited.ServeHTTP(rec, req)
+		if i == 0 && rec.Code != http.StatusOK {
+			t.Fatalf("first request = %d, want 200", rec.Code)
+		}
+		if i == 1 && rec.Code != http.StatusTooManyRequests {
+			t.Fatalf("second request with rotated X-Real-IP = %d, want 429", rec.Code)
+		}
+	}
+}
+
 func TestRequireSameOrigin(t *testing.T) {
 	called := false
 	handler := RequireSameOrigin(func(w http.ResponseWriter, r *http.Request) {
