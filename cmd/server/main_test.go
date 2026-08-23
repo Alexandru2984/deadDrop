@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -329,5 +330,29 @@ func TestAllowedOriginsRejectsUnsafeValues(t *testing.T) {
 				t.Fatalf("unsafe origin %q accepted", value)
 			}
 		})
+	}
+}
+
+// The invite gate is the only thing standing between a reachable origin and
+// unlimited account creation, so the flag that disables it must never be able to
+// take effect quietly.
+func TestOpenRegistrationIsAnnouncedAtStartup(t *testing.T) {
+	capture := func() string {
+		var out bytes.Buffer
+		restore := log.Writer()
+		log.SetOutput(&out)
+		defer log.SetOutput(restore)
+		warnIfRegistrationIsOpen()
+		return out.String()
+	}
+
+	t.Setenv("OPEN_REGISTRATION", "1")
+	if got := capture(); !strings.Contains(got, "WARNING: OPEN_REGISTRATION=1") {
+		t.Fatalf("open registration was not announced: %q", got)
+	}
+
+	t.Setenv("OPEN_REGISTRATION", "0")
+	if got := capture(); got != "" {
+		t.Fatalf("invite-gated startup logged a spurious warning: %q", got)
 	}
 }

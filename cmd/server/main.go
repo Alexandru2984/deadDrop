@@ -264,6 +264,8 @@ func main() {
 		log.Fatalf("auth init: %v", err)
 	}
 
+	warnIfRegistrationIsOpen()
+
 	hub := signaling.NewHub()
 	go hub.Run()
 
@@ -436,6 +438,15 @@ func embeddedWebHandler(files fs.FS) http.Handler {
 		}
 		server.ServeHTTP(w, r)
 	})
+}
+
+// warnIfRegistrationIsOpen reports the disabled invite gate on every start, so a
+// development flag left behind in an environment file cannot quietly become the
+// production posture.
+func warnIfRegistrationIsOpen() {
+	if auth.OpenRegistration() {
+		log.Printf("[auth] WARNING: OPEN_REGISTRATION=1 — anyone who can reach this server can create an account; invite codes are ignored")
+	}
 }
 
 func checkRuntimeConfiguration() error {
