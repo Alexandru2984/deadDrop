@@ -273,10 +273,6 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Legacy bcrypt login — kept ONLY so pre-SRP accounts are not locked out; the
-	// client auto-upgrades them to SRP on first login. Open bcrypt registration is
-	// gone; new accounts use SRP + an invite code.
-	mux.HandleFunc("/api/login", authRL.Wrap(middleware.RequireSameOrigin(authH.Login)))
 	mux.HandleFunc("/api/logout", authRL.Wrap(middleware.RequireSameOrigin(authH.Logout)))
 	mux.HandleFunc("/api/me", authH.Me)
 
@@ -290,8 +286,9 @@ func main() {
 		fmt.Fprintf(w, `{"openRegistration":%t}`, auth.OpenRegistration())
 	})
 
-	// SRP-6a authentication — these routes receive a verifier or proofs, not the
-	// password. The separate legacy endpoint exists only for one-time migration.
+	// SRP-6a authentication — these routes receive a verifier or proofs. There is
+	// no endpoint anywhere that accepts a password, so no server response can talk
+	// a client into sending one.
 	mux.HandleFunc("/api/srp/register", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPRegister)))
 	mux.HandleFunc("/api/srp/challenge", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPChallenge)))
 	mux.HandleFunc("/api/srp/authenticate", authRL.Wrap(middleware.RequireSameOrigin(authH.SRPAuthenticate)))

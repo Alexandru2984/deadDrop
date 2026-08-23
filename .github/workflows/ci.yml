@@ -51,7 +51,7 @@ jobs:
         run: node test/lifecycle.selftest.mjs
       - name: Vendored ML-KEM-768
         run: node test/mlkem.selftest.mjs
-      - name: SRP client↔server (legacy + PBKDF2 kdf)
+      - name: SRP client↔server (PBKDF2 kdf)
         run: node test/srp.selftest.mjs
       - name: DTLS fingerprint media-path check
         run: node test/fingerprint.selftest.mjs
@@ -77,13 +77,6 @@ jobs:
       - name: Build server
         run: go build -o deaddrop ./cmd/server/
 
-      # Seed one valid cost-12 bcrypt (non-SRP) account so the legacy→SRP
-      # upgrade path is covered and startup credential validation also runs.
-      - name: Seed a legacy account
-        run: |
-          mkdir -p data
-          printf '{"Micu":{"hash":"$2a$12$tdjBzotGSk67bb6OGKGpkOtaOdt3yHNkO86tXY.xnZHnRQxhy7R1m"}}' > data/users.json
-
       - name: Start server
         run: |
           PORT=8100 HOST=127.0.0.1 ./deaddrop > server.log 2>&1 &
@@ -104,7 +97,6 @@ jobs:
         env:
           DD_URL: http://127.0.0.1:8100
           DD_INVITE: ${{ steps.invite.outputs.code }}
-          DD_LEGACY_USER: Micu
         run: node test/srp.e2e.mjs
 
       - name: Server log (on failure)

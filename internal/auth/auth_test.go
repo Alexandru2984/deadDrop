@@ -20,45 +20,58 @@ func newTestHandler(t *testing.T) *Handler {
 	return h
 }
 
-func TestRegisterAndLogin(t *testing.T) {
-	h := newTestHandler(t)
-
-	// Register
-	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "securepass1"})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+// srpRoundTrip drives /api/srp/challenge + /api/srp/authenticate exactly as the
+// browser does and returns the authenticate response.
+func srpRoundTrip(t *testing.T, h *Handler, username, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	a, A := testClientA(t)
+	body, _ := json.Marshal(map[string]string{"username": username, "A": A.Text(16)})
+	req := httptest.NewRequest(http.MethodPost, "/api/srp/challenge", bytes.NewReader(body))
 	w := httptest.NewRecorder()
-	h.Register(w, req)
-
+	h.SRPChallenge(w, req)
 	if w.Code != http.StatusOK {
-		t.Fatalf("register expected 200, got %d: %s", w.Code, w.Body.String())
+		t.Fatalf("challenge: got %d: %s", w.Code, w.Body.String())
 	}
-
-	// Login
-	body, _ = json.Marshal(map[string]string{"username": "alice", "password": "securepass1"})
-	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	var ch struct {
+		Token, Salt, B, Salt2, B2 string
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &ch); err != nil {
+		t.Fatalf("challenge body: %v", err)
+	}
+	m1, _ := testClientProof(t, a, A, username, password, ch.Salt, ch.B)
+	m1d, _ := testClientProof(t, a, A, username, password, ch.Salt2, ch.B2)
+	body, _ = json.Marshal(map[string]string{"token": ch.Token, "M1": m1, "M1d": m1d})
+	req = httptest.NewRequest(http.MethodPost, "/api/srp/authenticate", bytes.NewReader(body))
 	w = httptest.NewRecorder()
-	h.Login(w, req)
+	h.SRPAuthenticate(w, req)
+	return w
+}
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("login expected 200, got %d: %s", w.Code, w.Body.String())
+func registerTestAccount(t *testing.T, h *Handler, username, password string) {
+	t.Helper()
+	salt, verifier := testSRPCredential(username, password)
+	if err := h.store.registerSRP(username, salt, verifier, defaultKdf); err != nil {
+		t.Fatalf("registerSRP: %v", err)
 	}
+}
 
-	// Verify session cookie set
-	cookies := w.Result().Cookies()
-	found := false
-	for _, c := range cookies {
+func TestSRPLoginSetsStrictSessionCookie(t *testing.T) {
+	h := newTestHandler(t)
+	registerTestAccount(t, h, "alice", "correct horse battery staple")
+
+	w := srpRoundTrip(t, h, "alice", "correct horse battery staple")
+	if w.Code != http.StatusOK {
+		t.Fatalf("authenticate: got %d: %s", w.Code, w.Body.String())
+	}
+	for _, c := range w.Result().Cookies() {
 		if c.Name == "dd_session" && c.Value != "" {
-			found = true
-			if c.SameSite != http.SameSiteStrictMode {
-				t.Errorf("session SameSite = %v, want Strict", c.SameSite)
+			if c.SameSite != http.SameSiteStrictMode || !c.HttpOnly {
+				t.Fatalf("session cookie = %#v, want HttpOnly + SameSite=Strict", c)
 			}
+			return
 		}
 	}
-	if !found {
-		t.Fatal("expected dd_session cookie")
-	}
+	t.Fatal("expected a dd_session cookie")
 }
 
 func TestCookieSecureFlagTrustsOnlyLocalProxy(t *testing.T) {
@@ -95,87 +108,64 @@ func TestGenerateInviteRequiresPost(t *testing.T) {
 	}
 }
 
-func TestPasswordTooShort(t *testing.T) {
-	h := newTestHandler(t)
-
-	body, _ := json.Marshal(map[string]string{"username": "bob", "password": "short"})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Register(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for short password, got %d", w.Code)
-	}
-}
-
-func TestPasswordTooLong(t *testing.T) {
-	h := newTestHandler(t)
-
-	long := make([]byte, 129)
-	for i := range long {
-		long[i] = 'a'
-	}
-	body, _ := json.Marshal(map[string]string{"username": "bob", "password": string(long)})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Register(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for long password, got %d", w.Code)
-	}
-}
-
 func TestDuplicateUsername(t *testing.T) {
 	h := newTestHandler(t)
-
-	for i := 0; i < 2; i++ {
-		body, _ := json.Marshal(map[string]string{"username": "alice", "password": "securepass1"})
-		req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-		h.Register(w, req)
-
-		if i == 1 && w.Code != http.StatusBadRequest {
-			t.Fatalf("expected 400 for duplicate, got %d", w.Code)
-		}
+	salt, verifier := testSRPCredential("alice", "correct horse battery staple")
+	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err == nil {
+		t.Fatal("expected a duplicate registration to be rejected")
 	}
 }
 
 func TestWrongPassword(t *testing.T) {
 	h := newTestHandler(t)
-
-	// Register
-	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "securepass1"})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Register(w, req)
-
-	// Login with wrong password
-	body, _ = json.Marshal(map[string]string{"username": "alice", "password": "wrongpassword"})
-	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	registerTestAccount(t, h, "alice", "correct horse battery staple")
+	if w := srpRoundTrip(t, h, "alice", "wrong password entirely"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
-func TestNonexistentUser(t *testing.T) {
+// An unknown handle must receive a complete, plausible challenge and then a
+// plain 401 — never a distinct field or status that confirms it does not exist.
+func TestNonexistentUserIsIndistinguishable(t *testing.T) {
 	h := newTestHandler(t)
+	registerTestAccount(t, h, "alice", "correct horse battery staple")
 
-	body, _ := json.Marshal(map[string]string{"username": "ghost", "password": "doesntmatter"})
-	req := httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Login(w, req)
+	shape := func(username string) map[string]any {
+		t.Helper()
+		_, A := testClientA(t)
+		body, _ := json.Marshal(map[string]string{"username": username, "A": A.Text(16)})
+		req := httptest.NewRequest(http.MethodPost, "/api/srp/challenge", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		h.SRPChallenge(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("challenge for %q: got %d", username, w.Code)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
+	real, ghost := shape("alice"), shape("ghost")
+	if len(real) != len(ghost) {
+		t.Fatalf("challenge shapes differ: real=%v ghost=%v", real, ghost)
+	}
+	for key := range real {
+		if _, ok := ghost[key]; !ok {
+			t.Fatalf("unknown-user challenge is missing %q", key)
+		}
+	}
+	for _, forbidden := range []string{"legacy", "exists", "error"} {
+		if _, ok := ghost[forbidden]; ok {
+			t.Fatalf("challenge leaks account state via %q", forbidden)
+		}
+	}
+	if w := srpRoundTrip(t, h, "ghost", "doesntmatter"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown user authenticate: got %d, want 401", w.Code)
 	}
 }
 
@@ -208,18 +198,13 @@ func TestRequireAuth(t *testing.T) {
 
 func TestBodySizeLimit(t *testing.T) {
 	h := newTestHandler(t)
-
-	// Send a very large body (>4096 bytes)
-	big := make([]byte, 8192)
+	big := make([]byte, 32*1024)
 	for i := range big {
 		big[i] = 'x'
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(big))
-	req.Header.Set("Content-Type", "application/json")
+	req := httptest.NewRequest(http.MethodPost, "/api/srp/register", bytes.NewReader(big))
 	w := httptest.NewRecorder()
-	h.Register(w, req)
-
-	// Should fail (bad JSON or body too large), not crash
+	h.SRPRegister(w, req)
 	if w.Code == http.StatusOK {
 		t.Fatal("expected rejection for oversized body")
 	}
@@ -238,72 +223,32 @@ func TestCorruptUsersJSON(t *testing.T) {
 	}
 }
 
-func TestBcryptPrehash(t *testing.T) {
-	h := newTestHandler(t)
-
-	// Register with a 100-char password (exceeds bcrypt's 72-byte limit without prehash)
-	longPass := "abcdefghij" // 10 chars
-	for len(longPass) < 100 {
-		longPass += "abcdefghij"
-	}
-	body, _ := json.Marshal(map[string]string{"username": "longy", "password": longPass})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Register(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("register with long password: expected 200, got %d", w.Code)
-	}
-
-	// Login with correct long password
-	body, _ = json.Marshal(map[string]string{"username": "longy", "password": longPass})
-	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("login with correct long password: expected 200, got %d", w.Code)
-	}
-
-	// Login with truncated version should FAIL (proves prehash works)
-	body, _ = json.Marshal(map[string]string{"username": "longy", "password": longPass[:72]})
-	req = httptest.NewRequest(http.MethodPost, "/api/login", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w = httptest.NewRecorder()
-	h.Login(w, req)
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("login with truncated password: expected 401, got %d", w.Code)
-	}
-}
-
 func TestLogoutRequiresPost(t *testing.T) {
 	h := newTestHandler(t)
+	registerTestAccount(t, h, "alice", "correct horse battery staple")
+	token, err := h.sess.create("alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: "dd_session", Value: token}
 
-	// Register and login to get a session
-	body, _ := json.Marshal(map[string]string{"username": "alice", "password": "securepass1"})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Register(w, req)
-
-	cookie := w.Result().Cookies()[0]
-
-	// GET logout should be rejected (CSRF protection)
-	req = httptest.NewRequest(http.MethodGet, "/api/logout", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/logout", nil)
 	req.AddCookie(cookie)
-	w = httptest.NewRecorder()
+	w := httptest.NewRecorder()
 	h.Logout(w, req)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET logout: expected 405, got %d", w.Code)
 	}
 
-	// POST logout should work
 	req = httptest.NewRequest(http.MethodPost, "/api/logout", nil)
 	req.AddCookie(cookie)
 	w = httptest.NewRecorder()
 	h.Logout(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("POST logout: expected 200, got %d", w.Code)
+	}
+	if _, ok := h.sess.get(token); ok {
+		t.Fatal("logout did not invalidate the session")
 	}
 }
 
@@ -314,14 +259,9 @@ func TestAtomicSave(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	// Register a user (triggers save)
-	body, _ := json.Marshal(map[string]string{"username": "bob", "password": "securepass1"})
-	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	h.Register(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("register: expected 200, got %d", w.Code)
+	salt, verifier := testSRPCredential("bob", "correct horse battery staple")
+	if err := h.store.registerSRP("bob", salt, verifier, defaultKdf); err != nil {
+		t.Fatalf("registerSRP: %v", err)
 	}
 
 	// Verify users.json exists and no .tmp file lingers

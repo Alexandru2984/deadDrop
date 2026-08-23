@@ -4,8 +4,8 @@
  *   DD_URL=http://127.0.0.1:8100 DD_INVITE=DD-XXXX-XXXX-XXXX node test/srp.e2e.mjs
  *
  * Registers a throwaway SRP account, logs in (zero-knowledge), checks mutual auth
- * and the session, verifies wrong-password and legacy-account paths, then deletes
- * the throwaway account. Exits non-zero on any failure.
+ * and the session, verifies the wrong-password and duress paths, then deletes the
+ * throwaway account. Exits non-zero on any failure.
  */
 
 import { register, ClientLogin } from '../web/js/srp.js';
@@ -53,7 +53,6 @@ async function get(path, jar) {
 async function srpLogin(username, password, jar) {
   const client = new ClientLogin(username, password);
   const ch = await post('/api/srp/challenge', { username, A: client.start().A }, null);
-  if (ch.json?.legacy) return { legacy: true };
   if (ch.status !== 200) return { status: ch.status };
   const { M1 } = await client.finish(ch.json.salt, ch.json.B, ch.json.kdf);
   let M1d = '', clientD = null;
@@ -149,15 +148,18 @@ async function srpLogin(username, password, jar) {
   const bad = await srpLogin(USER, 'totally-wrong-password', {});
   ok(bad.status === 401, 'wrong password rejected (401)');
 
-  // 4. Legacy account detection. Needs a pre-existing bcrypt (non-SRP) account;
-  //    name it via DD_LEGACY_USER (CI seeds one). Skipped when unset so the suite
-  //    never silently depends on whatever happens to sit in a dev's data/.
-  const legacyUser = process.env.DD_LEGACY_USER;
-  if (legacyUser) {
-    const legacy = await srpLogin(legacyUser, 'whatever', {});
-    ok(legacy.legacy === true, 'legacy bcrypt account flagged for fallback');
-  } else {
-    console.log('  · skipped legacy-account check (set DD_LEGACY_USER to enable)');
+  // 4. There is no password-carrying endpoint left for a hostile server to
+  //    downgrade a client to. Both removed routes must fall through to the static
+  //    handler (405/404) rather than reaching any auth code.
+  for (const path of ['/api/login', '/api/register']) {
+    const res = await fetch(BASE + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: USER, password: PASS }),
+    });
+    const body = await res.text();
+    ok([404, 405].includes(res.status) && !body.includes('"username"'),
+      `${path} accepts no password (${res.status})`);
   }
 
   // 4b. Anti-enumeration: an unknown username gets a challenge that looks exactly

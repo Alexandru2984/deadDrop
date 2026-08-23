@@ -141,10 +141,9 @@ turnutils_uclient -y -u "$U" -w "$P" -p 3478 -n 2 <PUBLIC_IP>   # expect 0 lost 
 
 ## 5. Accounts (SRP) & invites
 
-New and upgraded accounts use SRP-6a: normal login sends proofs instead of the
-password. A legacy bcrypt account still sends its password once to the Go origin
-(through Cloudflare on clearnet), then upgrades. Registration requires a
-single-use invite code by default.
+Accounts use SRP-6a: login sends proofs, never the password. No endpoint accepts
+a password, so neither the origin nor Cloudflare ever sees one. Registration
+requires a single-use invite code by default.
 
 Mint invites from the CLI (codes go to stdout, status to stderr, so they pipe cleanly):
 
@@ -174,9 +173,9 @@ empty list, registration is effectively closed. The running server re-reads the 
 on each registration, so codes minted/imported by the CLI are usable immediately —
 no restart needed.
 
-Pre-SRP (bcrypt) accounts still log in via the legacy path and are transparently
-upgraded to SRP on first login (the verifier is computed locally; the password is
-not resent). Failed logins are throttled per-account (lockout after 5 tries).
+A users.json carrying a pre-SRP bcrypt credential is refused at startup: delete
+the account and re-register it. Failed logins are throttled per account and
+source IP (lockout after 5 tries).
 
 ## 6. Tor onion service (Cloudflare-free access)
 

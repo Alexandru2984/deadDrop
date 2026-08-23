@@ -118,9 +118,8 @@ func (s *store) registerSRP(username, saltHex, verifierHex, kdf string) error {
 	return s.commit(next)
 }
 
-// setVerifier installs a new SRP salt+verifier for an existing account (used for
-// legacy→SRP upgrade and password change). Clears any legacy bcrypt hash but
-// keeps the duress credential.
+// setVerifier installs a new SRP salt+verifier for an existing account (password
+// change, or a KDF hardening upgrade). Keeps the duress credential.
 func (s *store) setVerifier(username, saltHex, verifierHex, kdf string) error {
 	if err := validateWritableSRPCredential(saltHex, verifierHex, kdf); err != nil {
 		return err
@@ -795,9 +794,10 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 
 	u, ok := h.store.getUser(body.Username)
 	if ok && !u.isSRP() {
-		// Legacy bcrypt account — client must fall back to password login (then upgrade).
-		jsonOK(w, map[string]any{"legacy": true})
-		return
+		// A stored credential with no verifier cannot answer a proof. Treat it as
+		// unknown so it receives the same dummy challenge — never a distinct reply
+		// that would confirm the handle exists.
+		ok = false
 	}
 
 	// Build the real challenge (real verifier, or an anti-enumeration dummy).

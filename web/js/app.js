@@ -283,11 +283,9 @@ class DeadDrop {
     try {
       const client = new ClientLogin(username, password);
       const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A });
-      if (ch.data.legacy) { await this._legacyLogin(username, password); return; }
       if (!ch.ok) { this._showAuthError(ch.data.error || 'Login failed'); return; }
 
-      // The challenge advertises each credential's password-stretch KDF
-      // ('' = legacy account from before the PBKDF2 hardening).
+      // The challenge advertises each credential's password-stretch KDF.
       const { M1 } = await client.finish(ch.data.salt, ch.data.B, ch.data.kdf);
       // Second proof against the duress challenge, reusing the same ephemeral `a`.
       // Exactly one of the two proofs matches server-side (real vs duress password).
@@ -326,19 +324,6 @@ class DeadDrop {
     } finally {
       this._setAuthBusy(false);
     }
-  }
-
-  // Legacy bcrypt accounts: log in the old way, then transparently upgrade to SRP
-  // (the verifier is computed locally; the password is not resent).
-  async _legacyLogin(username, password) {
-    const res = await this._postJSON('/api/login', { username, password });
-    if (!res.ok) { this._showAuthError(res.data.error || 'Invalid credentials'); return; }
-    try {
-      const { salt, verifier, kdf } = await srpRegister(username, password);
-      await this._postJSON('/api/account/verifier', { salt, verifier, kdf });
-    } catch { /* upgrade is best-effort; legacy login already succeeded */ }
-    this.username = res.data.username;
-    this._afterAuth();
   }
 
   async _register() {

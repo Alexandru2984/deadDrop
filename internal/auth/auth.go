@@ -18,21 +18,19 @@ import (
 	"time"
 
 	"deaddrop/internal/middleware"
-	"deaddrop/internal/strictjson"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 var usernameRe = regexp.MustCompile(`^[a-zA-Z0-9_]{3,20}$`)
 
 /* ── User Store (file-backed) ── */
 
-// user holds either a legacy bcrypt hash (kept so existing accounts are never
-// locked out) or an SRP verifier+salt. SRP login sends proofs rather than the
-// password. New accounts are SRP-only; legacy accounts send their password once
-// to the legacy endpoint and auto-upgrade on that login.
+// user holds an SRP verifier+salt. Login sends proofs, never the password.
+//
+// Hash is retained for detection only: it names the removed bcrypt credential
+// so a users.json written by an older build fails loudly at startup instead of
+// silently decoding into an account that can never authenticate.
 type user struct {
-	Hash     string `json:"hash,omitempty"`     // legacy bcrypt over SHA-256(password)
+	Hash     string `json:"hash,omitempty"`     // removed bcrypt credential — rejected on load
 	Salt     string `json:"salt,omitempty"`     // SRP salt (hex)
 	Verifier string `json:"verifier,omitempty"` // SRP verifier v = g^x mod N (hex)
 	// Kdf names the client-side password stretch applied before the SRP x
@@ -52,18 +50,15 @@ func (u user) isSRP() bool     { return u.Verifier != "" }
 func (u user) hasDuress() bool { return u.DuressVerifier != "" }
 
 type store struct {
-	mu        sync.RWMutex
-	users     map[string]user
-	path      string
-	dummyHash []byte // valid bcrypt hash for constant-time comparison on unknown users
+	mu    sync.RWMutex
+	users map[string]user
+	path  string
 }
 
 const (
 	maxUsers        = 10_000
 	maxUsersFileLen = 32 << 20
 )
-
-const legacyBcryptCost = 12
 
 func newStore(dir string) (*store, error) {
 	path := filepath.Join(dir, "users.json")
@@ -72,14 +67,7 @@ func newStore(dir string) (*store, error) {
 		return nil, fmt.Errorf("secure auth data directory: %w", err)
 	}
 	defer root.Close()
-	// Generate a valid bcrypt hash at startup for constant-time dummy comparison.
-	// This prevents user enumeration via timing — the work is identical whether
-	// the user exists or not. Must be the same cost factor as real hashes.
-	dummy, err := bcrypt.GenerateFromPassword([]byte("dummy-constant-time"), legacyBcryptCost)
-	if err != nil {
-		return nil, fmt.Errorf("initialize legacy authentication: %w", err)
-	}
-	s := &store{users: make(map[string]user), path: path, dummyHash: dummy}
+	s := &store{users: make(map[string]user), path: path}
 	if info, err := root.Lstat(name); err == nil {
 		if !info.Mode().IsRegular() {
 			return nil, errors.New("users.json is not a regular file")
@@ -122,49 +110,6 @@ func newStore(dir string) (*store, error) {
 	return s, nil
 }
 
-func (s *store) register(username, password string) error {
-	if !usernameRe.MatchString(username) {
-		return errors.New("username: 3–20 chars, letters/numbers/underscores")
-	}
-	if len(password) < 8 {
-		return errors.New("password must be at least 8 characters")
-	}
-	if len(password) > 128 {
-		return errors.New("password must be at most 128 characters")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, exists := s.users[username]; exists {
-		return errors.New("username already taken")
-	}
-	if len(s.users) >= maxUsers {
-		return errors.New("account limit reached")
-	}
-	hash, err := bcrypt.GenerateFromPassword(prehashPassword(password), legacyBcryptCost)
-	if err != nil {
-		return err
-	}
-	next := cloneUsers(s.users)
-	next[username] = user{Hash: string(hash)}
-	return s.commit(next)
-}
-
-func (s *store) authenticate(username, password string) error {
-	s.mu.RLock()
-	u, ok := s.users[username]
-	s.mu.RUnlock()
-	if !ok || u.Hash == "" {
-		// Constant-time work to prevent user-enumeration via timing.
-		// Uses a valid bcrypt hash generated at startup (same cost factor).
-		_ = bcrypt.CompareHashAndPassword(s.dummyHash, prehashPassword(password))
-		return errors.New("invalid credentials")
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.Hash), prehashPassword(password)); err != nil {
-		return errors.New("invalid credentials")
-	}
-	return nil
-}
-
 func (s *store) commit(next map[string]user) error {
 	if err := atomicWriteJSON(s.path, next); err != nil {
 		return err
@@ -186,14 +131,9 @@ func validateStoredUser(username string, u user) error {
 		return errors.New("invalid username")
 	}
 	if u.Hash != "" {
-		if u.Salt != "" || u.Verifier != "" || u.Kdf != "" {
-			return errors.New("mixed legacy and SRP credentials")
-		}
-		cost, err := bcrypt.Cost([]byte(u.Hash))
-		if err != nil || cost != legacyBcryptCost {
-			return errors.New("invalid bcrypt hash")
-		}
-	} else if err := validateSRPCredential(u.Salt, u.Verifier, u.Kdf); err != nil {
+		return errors.New("bcrypt credential is no longer supported; delete the account and re-register with SRP")
+	}
+	if err := validateSRPCredential(u.Salt, u.Verifier, u.Kdf); err != nil {
 		return fmt.Errorf("invalid primary credential: %w", err)
 	}
 	if u.DuressSalt == "" && u.DuressVerifier == "" && u.DuressKdf == "" {
@@ -203,13 +143,6 @@ func validateStoredUser(username string, u user) error {
 		return fmt.Errorf("invalid duress credential: %w", err)
 	}
 	return nil
-}
-
-// prehashPassword hashes the password with SHA-256 before bcrypt.
-// This prevents bcrypt's 72-byte truncation — passwords of any length are fully compared.
-func prehashPassword(password string) []byte {
-	h := sha256.Sum256([]byte(password))
-	return []byte(hex.EncodeToString(h[:]))
 }
 
 /* ── Sessions (in-memory, ephemeral — lost on restart by design) ── */
@@ -360,75 +293,6 @@ func NewHandler(dataDir string) (*Handler, error) {
 }
 
 const maxAuthBody = 4096 // 4 KB max for auth JSON payloads
-
-func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBody)
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
-		jsonErr(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if err := h.store.register(body.Username, body.Password); err != nil {
-		jsonErr(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	token, err := h.sess.create(body.Username, false)
-	if err != nil {
-		log.Printf("[auth] session token error: %v", err)
-		jsonErr(w, "could not create session", http.StatusInternalServerError)
-		return
-	}
-	log.Printf("[auth] new account registered")
-	h.setCookie(w, r, token)
-	jsonOK(w, map[string]string{"username": body.Username})
-}
-
-func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBody)
-	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
-		jsonErr(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if !usernameRe.MatchString(body.Username) || len(body.Password) > 128 {
-		jsonErr(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	ip := middleware.ExtractIP(r)
-	if allowed, wait := h.lockout.allowed(body.Username, ip); !allowed {
-		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())))
-		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
-		return
-	}
-	if err := h.store.authenticate(body.Username, body.Password); err != nil {
-		h.lockout.fail(body.Username, ip)
-		jsonErr(w, err.Error(), http.StatusUnauthorized)
-		return
-	}
-	h.lockout.reset(body.Username, ip)
-	token, err := h.sess.create(body.Username, false)
-	if err != nil {
-		log.Printf("[auth] session token error: %v", err)
-		jsonErr(w, "could not create session", http.StatusInternalServerError)
-		return
-	}
-	h.setCookie(w, r, token)
-	jsonOK(w, map[string]string{"username": body.Username})
-}
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

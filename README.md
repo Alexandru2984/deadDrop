@@ -103,11 +103,11 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
 
 ### Authentication and duress
 
-New accounts use SRP-6a with PBKDF2-SHA256 (currently 600,000 iterations), so the
-password is not sent during normal authentication. A stolen verifier still permits
-offline password guesses; PBKDF2 raises their cost but does not make weak passwords
-safe. Legacy bcrypt accounts send their password once to the Go origin (through
-the TLS proxy/Cloudflare on clearnet) and are upgraded to SRP after that login.
+Accounts use SRP-6a with PBKDF2-SHA256 (currently 600,000 iterations), so the
+password is never sent — there is no endpoint that accepts one, which means no
+server response can talk a client into revealing it. A stolen verifier still
+permits offline password guesses; PBKDF2 raises their cost but does not make weak
+passwords safe.
 
 The optional duress password gives a normal-looking decoy session to the person
 using the browser. The server necessarily knows whether a successful proof opened

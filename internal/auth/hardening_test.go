@@ -30,10 +30,22 @@ func TestSessionFeaturesDoNotRevealDuress(t *testing.T) {
 	}
 }
 
-func TestLegacyFixtureUsesRequiredBcryptCost(t *testing.T) {
+// The bcrypt login path is gone. A users.json carrying one must stop the server
+// rather than decode into an account that can never authenticate — and rather
+// than reintroduce a credential the client could be told to send in the clear.
+func TestStoredBcryptCredentialIsRejected(t *testing.T) {
 	const fixture = "$2a$12$tdjBzotGSk67bb6OGKGpkOtaOdt3yHNkO86tXY.xnZHnRQxhy7R1m"
-	if err := validateStoredUser("Micu", user{Hash: fixture}); err != nil {
-		t.Fatalf("CI legacy fixture rejected: %v", err)
+	if err := validateStoredUser("Micu", user{Hash: fixture}); err == nil {
+		t.Fatal("a stored bcrypt credential was accepted")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "users.json"),
+		[]byte(`{"Micu":{"hash":"`+fixture+`"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewHandler(dir); err == nil {
+		t.Fatal("NewHandler accepted a users.json with a bcrypt credential")
 	}
 }
 
