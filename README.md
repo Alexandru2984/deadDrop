@@ -125,9 +125,11 @@ this is not a cryptographically deniable-authentication protocol.
 
 ## Build and local test
 
-Prerequisites: Go 1.25.12+ and Node 22+ for the browser self-tests. The minimum
+Prerequisites: Go 1.26.7+ and Node 22+ for the browser self-tests. The minimum
 Go patch level is security-sensitive because the server uses the standard
-library for HTTP, cookies, cryptography, and rooted private-file operations.
+library for HTTP, cookies, cryptography, and rooted private-file operations —
+`os.Root` containment in particular has had escapes fixed across 1.26 patches,
+so `govulncheck` is a release gate rather than an advisory.
 
 ```bash
 go build -o deaddrop ./cmd/server/
