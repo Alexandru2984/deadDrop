@@ -143,6 +143,10 @@ async function srpLogin(username, password, jar) {
   const afterDecoyDelete = await srpLogin(USER, PASS, {});
   ok(afterDecoyDelete.status === 200 && afterDecoyDelete.usedDuress === false,
      'decoy deletion leaves the primary account intact');
+  // …and the password the coerced user surrendered must genuinely stop working,
+  // or retrying it exposes the deletion as theatre.
+  const decoyAfterDelete = await srpLogin(USER, NEWDURESS, {});
+  ok(decoyAfterDelete.status === 401, 'decoy deletion consumes the duress password');
 
   // 4. A third (neither) password must fail.
   const bad = await srpLogin(USER, 'totally-wrong-password', {});

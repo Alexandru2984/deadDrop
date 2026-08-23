@@ -1028,7 +1028,9 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteAccount removes an account only from a primary session. A duress session
-// returns the same successful response and logs out, but preserves the real account.
+// preserves the real account but consumes the duress credential, so the password
+// the coerced user surrendered genuinely stops working: a coercer who watches the
+// deletion and then retries that password must not find the account still alive.
 func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1045,6 +1047,12 @@ func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if duress {
+		// A write failure here must not change the response. Reporting an error
+		// where a primary session reports success would itself expose the decoy,
+		// which is a worse outcome than a duress password that outlives the wipe.
+		if err := h.store.setDuress(username, "", "", ""); err != nil {
+			log.Printf("[auth] could not clear duress credential on decoy delete: %v", err)
+		}
 		h.sess.deleteUserKind(username, true)
 	} else {
 		if err := h.store.deleteUser(username); err != nil {

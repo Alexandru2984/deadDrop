@@ -442,3 +442,41 @@ func TestFailedRegistrationRestoresConsumedInvite(t *testing.T) {
 		t.Fatalf("failed registration did not restore invite: %v", remaining)
 	}
 }
+
+// A coercer who watches the account get "deleted" from the decoy session will
+// retry the password they were handed. It has to stop working, or the deletion
+// is visibly theatre and the decoy is blown.
+func TestDeleteAccountFromDecoyConsumesTheDuressCredential(t *testing.T) {
+	h := newTestHandler(t)
+	salt, verifier := testSRPCredential("alice", "the real password")
+	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	duressSalt, duressVerifier := testSRPCredential("alice", "the decoy password")
+	if err := h.store.setDuress("alice", duressSalt, duressVerifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+
+	duressToken, err := h.sess.create("alice", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/account/delete", nil)
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: duressToken})
+	w := httptest.NewRecorder()
+	h.DeleteAccount(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("decoy delete: got %d: %s", w.Code, w.Body.String())
+	}
+
+	u, ok := h.store.getUser("alice")
+	if !ok {
+		t.Fatal("decoy delete removed the real account")
+	}
+	if u.hasDuress() {
+		t.Fatal("the surrendered duress password still works after a decoy delete")
+	}
+	if u.Verifier != verifier || u.Salt != salt {
+		t.Fatal("decoy delete altered the primary credential")
+	}
+}
