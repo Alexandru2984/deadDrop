@@ -125,7 +125,7 @@ func TestCredentialChangesRevokeTheRightSessions(t *testing.T) {
 	duressOther := createTestSession(t, h, "alice", true)
 
 	newSalt, newVerifier := testSRPCredential("alice", "new primary password")
-	callVerifierUpdate(t, h, primaryKeep, newSalt, newVerifier)
+	callVerifierUpdate(t, h, primaryKeep, "alice", "primary password", newSalt, newVerifier)
 	assertSession(t, h, primaryKeep, true, "current primary session")
 	assertSession(t, h, primaryOther, false, "other primary session")
 	assertSession(t, h, duressOther, false, "existing duress session")
@@ -134,7 +134,7 @@ func TestCredentialChangesRevokeTheRightSessions(t *testing.T) {
 	duressKeep := createTestSession(t, h, "alice", true)
 	duressOther = createTestSession(t, h, "alice", true)
 	newDuressSalt, newDuressVerifier := testSRPCredential("alice", "new decoy password")
-	callVerifierUpdate(t, h, duressKeep, newDuressSalt, newDuressVerifier)
+	callVerifierUpdate(t, h, duressKeep, "alice", "decoy password", newDuressSalt, newDuressVerifier)
 	assertSession(t, h, duressKeep, true, "current duress session")
 	assertSession(t, h, duressOther, false, "other duress session")
 	assertSession(t, h, primaryKeep, true, "unrelated primary session")
@@ -157,17 +157,95 @@ func TestCredentialChangesRevokeTheRightSessions(t *testing.T) {
 	assertSession(t, h, primaryKeep, true, "primary session after duress change")
 }
 
-func callVerifierUpdate(t *testing.T, h *Handler, token, salt, verifier string) {
+// freshProof mints a real challenge and answers it, the way the browser does
+// before a credential change.
+func freshProof(t *testing.T, h *Handler, username, password string) map[string]string {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{
-		"salt": salt, "verifier": verifier, "kdf": defaultKdf,
-	})
+	a, A := testClientA(t)
+	body, _ := json.Marshal(map[string]string{"username": username, "A": A.Text(16)})
+	req := httptest.NewRequest(http.MethodPost, "/api/srp/challenge", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.SRPChallenge(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("challenge: %d %s", w.Code, w.Body.String())
+	}
+	var ch struct{ Token, Salt, B, Salt2, B2 string }
+	if err := json.Unmarshal(w.Body.Bytes(), &ch); err != nil {
+		t.Fatal(err)
+	}
+	m1, _ := testClientProof(t, a, A, username, password, ch.Salt, ch.B)
+	m1d, _ := testClientProof(t, a, A, username, password, ch.Salt2, ch.B2)
+	return map[string]string{"token": ch.Token, "M1": m1, "M1d": m1d}
+}
+
+func verifierUpdateRequest(t *testing.T, h *Handler, token, username, password, salt, verifier string) *httptest.ResponseRecorder {
+	t.Helper()
+	payload := freshProof(t, h, username, password)
+	payload["salt"], payload["verifier"], payload["kdf"] = salt, verifier, defaultKdf
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/account/verifier", bytes.NewReader(body))
 	req.AddCookie(&http.Cookie{Name: "dd_session", Value: token})
 	w := httptest.NewRecorder()
 	h.SetVerifier(w, req)
-	if w.Code != http.StatusOK {
+	return w
+}
+
+func callVerifierUpdate(t *testing.T, h *Handler, token, username, password, salt, verifier string) {
+	t.Helper()
+	if w := verifierUpdateRequest(t, h, token, username, password, salt, verifier); w.Code != http.StatusOK {
 		t.Fatalf("SetVerifier status=%d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A session cookie must not be enough on its own: a borrowed session would
+// otherwise be a permanent account takeover, and would defeat the duress design
+// along with it.
+func TestSetVerifierRequiresAFreshProof(t *testing.T) {
+	h := newTestHandler(t)
+	salt, verifier := testSRPCredential("alice", "primary password")
+	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	duressSalt, duressVerifier := testSRPCredential("alice", "decoy password")
+	if err := h.store.setDuress("alice", duressSalt, duressVerifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	newSalt, newVerifier := testSRPCredential("alice", "attacker password")
+
+	// No proof at all.
+	body, _ := json.Marshal(map[string]string{"salt": newSalt, "verifier": newVerifier, "kdf": defaultKdf})
+	req := httptest.NewRequest(http.MethodPost, "/api/account/verifier", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: createTestSession(t, h, "alice", false)})
+	w := httptest.NewRecorder()
+	h.SetVerifier(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("cookie-only verifier change: got %d, want 401", w.Code)
+	}
+
+	// A proof of the wrong password.
+	w = verifierUpdateRequest(t, h, createTestSession(t, h, "alice", false),
+		"alice", "not the password", newSalt, newVerifier)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong-password verifier change: got %d, want 401", w.Code)
+	}
+
+	// A decoy session cannot re-prove the PRIMARY password to reach the real
+	// credential; only the duress one it was opened with.
+	w = verifierUpdateRequest(t, h, createTestSession(t, h, "alice", true),
+		"alice", "primary password", newSalt, newVerifier)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("decoy session proving the primary password: got %d, want 401", w.Code)
+	}
+
+	if u, _ := h.store.getUser("alice"); u.Verifier != verifier || u.DuressVerifier != duressVerifier {
+		t.Fatal("a rejected change still modified stored credentials")
+	}
+
+	// The genuine article still works.
+	callVerifierUpdate(t, h, createTestSession(t, h, "alice", false),
+		"alice", "primary password", newSalt, newVerifier)
+	if u, _ := h.store.getUser("alice"); u.Verifier != newVerifier {
+		t.Fatal("a correctly proved change was not applied")
 	}
 }
 

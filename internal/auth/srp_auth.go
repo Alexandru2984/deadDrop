@@ -898,16 +898,7 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
 	}
-	M1, primaryEncodingOK := decodeSRPProof(body.M1)
-	M1d, duressEncodingOK := decodeSRPProof(body.M1d)
-
-	// Always execute both SRP verifications before deciding which credential won.
-	// Invalid encodings are normalized to a full-length zero proof, keeping the
-	// expensive path consistent and avoiding a primary-vs-duress timing oracle.
-	M2, _, primaryErr := p.ch.Verify(p.A, M1)
-	M2d, _, duressErr := p.chDuress.Verify(p.A, M1d)
-	primaryOK := primaryEncodingOK && duressEncodingOK && primaryErr == nil && p.real
-	duressOK := primaryEncodingOK && duressEncodingOK && duressErr == nil && p.realDuress
+	primaryOK, duressOK, M2, M2d := verifyChallengeProofs(p, body.M1, body.M1d)
 
 	if primaryOK {
 		if err := h.setCookieSession(w, r, p.username, false); err != nil {
@@ -931,8 +922,11 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 	jsonErr(w, "invalid credentials", http.StatusUnauthorized)
 }
 
-// SetVerifier installs a new salt+verifier for the logged-in user (legacy upgrade
-// or password change). In a duress (decoy) session it updates the DURESS
+// SetVerifier installs a new salt+verifier for the logged-in user. It requires a
+// fresh SRP proof of the credential the session was opened with, so possession of
+// a session cookie is not by itself enough to rekey the account.
+//
+// In a duress (decoy) session it updates the DURESS
 // credential instead: "change password" behaves exactly as a coercer would expect
 // (the password they know keeps working, with its new value), while the real
 // verifier — derived from a password the decoy user never typed — stays untouched
@@ -957,9 +951,16 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		Salt     string `json:"salt"`
 		Verifier string `json:"verifier"`
 		Kdf      string `json:"kdf"`
+		Token    string `json:"token"`
+		M1       string `json:"M1"`
+		M1d      string `json:"M1d"`
 	}
 	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if !h.requireFreshProof(r, username, duress, body.Token, body.M1, body.M1d) {
+		jsonErr(w, "re-authentication required", http.StatusUnauthorized)
 		return
 	}
 	if duress {
@@ -1112,6 +1113,48 @@ func (h *Handler) clearCookie(w http.ResponseWriter, r *http.Request) {
 		Expires: time.Unix(1, 0), HttpOnly: true,
 		Secure: middleware.IsSecureRequest(r), SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// verifyChallengeProofs always executes both SRP verifications before deciding
+// which credential won. Invalid encodings are normalized to a full-length zero
+// proof, keeping the expensive path consistent and avoiding a primary-vs-duress
+// timing oracle.
+func verifyChallengeProofs(p *pendingChallenge, m1Hex, m1dHex string) (primaryOK, duressOK bool, m2, m2d []byte) {
+	M1, primaryEncodingOK := decodeSRPProof(m1Hex)
+	M1d, duressEncodingOK := decodeSRPProof(m1dHex)
+	m2, _, primaryErr := p.ch.Verify(p.A, M1)
+	m2d, _, duressErr := p.chDuress.Verify(p.A, M1d)
+	encodingOK := primaryEncodingOK && duressEncodingOK
+	primaryOK = encodingOK && primaryErr == nil && p.real
+	duressOK = encodingOK && duressErr == nil && p.realDuress
+	return primaryOK, duressOK, m2, m2d
+}
+
+// requireFreshProof re-authenticates the caller of a credential-changing
+// endpoint. A session cookie alone must not be enough to rekey an account:
+// otherwise a borrowed session — an unlocked browser, a hostile extension — is a
+// permanent takeover. The proof has to match the session's own credential, so a
+// decoy session can only re-prove the duress password.
+func (h *Handler) requireFreshProof(r *http.Request, username string, duress bool, token, m1, m1d string) bool {
+	p, ok := h.challenges.take(token)
+	if !ok || p.username != username {
+		return false
+	}
+	ip := middleware.ExtractIP(r)
+	if allowed, _ := h.lockout.allowed(username, ip); !allowed {
+		return false
+	}
+	primaryOK, duressOK, _, _ := verifyChallengeProofs(p, m1, m1d)
+	proved := primaryOK
+	if duress {
+		proved = duressOK
+	}
+	if !proved {
+		h.lockout.fail(username, ip)
+		return false
+	}
+	h.lockout.reset(username, ip)
+	return true
 }
 
 func decodeSRPProof(encoded string) ([]byte, bool) {

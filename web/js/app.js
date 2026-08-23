@@ -315,7 +315,8 @@ class DeadDrop {
       if (needsKdfUpgrade(usedKdf)) {
         try {
           const up = await srpRegister(username, password);
-          await this._postJSON('/api/account/verifier', up);
+          await this._postJSON('/api/account/verifier',
+            { ...up, ...(await this._reauthProof(username, password)) });
         } catch { /* best-effort; login already succeeded */ }
       }
       this._afterAuth();
@@ -324,6 +325,23 @@ class DeadDrop {
     } finally {
       this._setAuthBusy(false);
     }
+  }
+
+  /** Prove the current password again for a credential change. A session cookie
+   *  alone must not be able to rekey the account, so the server re-runs the SRP
+   *  verification against whichever credential this session was opened with. */
+  async _reauthProof(username, password) {
+    const client = new ClientLogin(username, password);
+    const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A });
+    if (!ch.ok) throw new Error('re-authentication challenge failed');
+    const { M1 } = await client.finish(ch.data.salt, ch.data.B, ch.data.kdf);
+    let M1d = '';
+    if (ch.data.salt2 && ch.data.B2) {
+      const clientD = new ClientLogin(username, password, client.a);
+      clientD.start();
+      M1d = (await clientD.finish(ch.data.salt2, ch.data.B2, ch.data.kdf2)).M1;
+    }
+    return { token: ch.data.token, M1, M1d };
   }
 
   async _register() {

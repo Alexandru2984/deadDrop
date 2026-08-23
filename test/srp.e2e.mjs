@@ -50,6 +50,22 @@ async function get(path, jar) {
   return { status: res.status, json };
 }
 
+// Mirrors app.js _reauthProof: credential changes need a fresh proof of the
+// password the session was opened with, not just its cookie.
+async function reauthProof(username, password) {
+  const client = new ClientLogin(username, password);
+  const ch = await post('/api/srp/challenge', { username, A: client.start().A }, null);
+  if (ch.status !== 200) throw new Error('re-auth challenge failed');
+  const { M1 } = await client.finish(ch.json.salt, ch.json.B, ch.json.kdf);
+  let M1d = '';
+  if (ch.json.salt2 && ch.json.B2) {
+    const clientD = new ClientLogin(username, password, client.a);
+    clientD.start();
+    M1d = (await clientD.finish(ch.json.salt2, ch.json.B2, ch.json.kdf2)).M1;
+  }
+  return { token: ch.json.token, M1, M1d };
+}
+
 async function srpLogin(username, password, jar) {
   const client = new ClientLogin(username, password);
   const ch = await post('/api/srp/challenge', { username, A: client.start().A }, null);
@@ -119,7 +135,8 @@ async function srpLogin(username, password, jar) {
   //  - "Change password" from the decoy must update the DURESS credential only.
   const NEWDURESS = 'coercer-changed-pass-1';
   const nreg = await register(USER, NEWDURESS);
-  const chg = await post('/api/account/verifier', { salt: nreg.salt, verifier: nreg.verifier, kdf: nreg.kdf }, djar);
+  const chg = await post('/api/account/verifier',
+    { salt: nreg.salt, verifier: nreg.verifier, kdf: nreg.kdf, ...(await reauthProof(USER, DURESS)) }, djar);
   ok(chg.status === 200, 'password change from decoy session is accepted');
   const rlogin2 = await srpLogin(USER, PASS, {});
   ok(rlogin2.status === 200 && rlogin2.usedDuress === false, 'real password unaffected by decoy password change');
@@ -177,8 +194,15 @@ async function srpLogin(username, password, jar) {
   // Old kdf-less records remain readable and the browser upgrades them on login,
   // but all newly written credentials must meet the current minimum.
   const weakReg = await register(USER, PASS, 'pbkdf2:10000');
-  const down = await post('/api/account/verifier', weakReg, jar2);
+  const down = await post('/api/account/verifier',
+    { ...weakReg, ...(await reauthProof(USER, PASS)) }, jar2);
   ok(down.status === 400, 'verifier endpoint rejects a weak KDF downgrade');
+
+  // 4d. A session cookie alone must not be able to rekey the account.
+  const noProof = await post('/api/account/verifier', await register(USER, 'stolen-session-pass-1'), jar2);
+  ok(noProof.status === 401, 'verifier change without a fresh proof is refused');
+  const stillMine = await srpLogin(USER, PASS, {});
+  ok(stillMine.status === 200, 'refused cookie-only change left the password alone');
   const afterDown = await srpLogin(USER, PASS, {});
   ok(afterDown.status === 200 && afterDown.serverOK === true && srpLogin.lastChallenge?.kdf === reg.kdf,
      'rejected downgrade leaves the stretched credential intact');

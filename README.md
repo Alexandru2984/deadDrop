@@ -109,6 +109,10 @@ server response can talk a client into revealing it. A stolen verifier still
 permits offline password guesses; PBKDF2 raises their cost but does not make weak
 passwords safe.
 
+Changing a credential requires a fresh SRP proof of the password the session was
+opened with, so a borrowed session cookie cannot by itself rekey an account and
+lock its owner out. A decoy session can only re-prove the duress password.
+
 The optional duress password gives a normal-looking decoy session to the person
 using the browser. The server necessarily knows whether a successful proof opened
 a primary or duress session, and active coercion/forensics can defeat the illusion;
