@@ -131,6 +131,13 @@ async function computeX(saltBytes, username, password) {
   return bytesToBig(await sha256(concat(saltBytes, inner)));
 }
 
+// Square-and-multiply with a data-dependent branch on the exponent, which here
+// contains a + u*x — and x derives from the password. This is not constant-time.
+// JavaScript BigInt exposes no constant-time primitives, so there is no fix in
+// pure JS; every browser SRP implementation shares the property. Exploiting it
+// needs a timing-observation position inside the victim's own browser, which
+// already implies better attacks. Recorded as a known limitation, not an
+// oversight — see the security-model notes in README.md.
 function modpow(base, exp, mod) {
   base %= mod;
   if (base < 0n) base += mod;

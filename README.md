@@ -109,6 +109,11 @@ server response can talk a client into revealing it. A stolen verifier still
 permits offline password guesses; PBKDF2 raises their cost but does not make weak
 passwords safe.
 
+The browser's SRP exponentiation uses JavaScript BigInt, which offers no
+constant-time primitives; the modular exponentiation is therefore not
+constant-time with respect to the password-derived exponent. Observing that
+requires code already running in the victim's browser.
+
 Changing a credential requires a fresh SRP proof of the password the session was
 opened with, so a borrowed session cookie cannot by itself rekey an account and
 lock its owner out. A decoy session can only re-prove the duress password.
