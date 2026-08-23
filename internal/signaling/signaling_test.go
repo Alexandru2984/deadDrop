@@ -2,6 +2,8 @@ package signaling
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -601,5 +603,48 @@ func TestOpenWebSocketIsRevokedWithSession(t *testing.T) {
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, _, err := conn.ReadMessage(); err == nil {
 		t.Fatal("revoked session kept its WebSocket open")
+	}
+}
+
+// A full room and a server at its global room cap must be indistinguishable to
+// the client. The second is state about how busy the instance is, so a distinct
+// reply would let any account poll other people's activity.
+func TestCapacityErrorsDoNotDistinguishRoomFromServerLimit(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	newPeer := func(id string) *Peer {
+		return &Peer{ID: id, hub: hub, send: make(chan []byte, sendQueueSize)}
+	}
+	code := func(n int) string { return fmt.Sprintf("%0*x", RoomCodeHexLen, n) }
+
+	// Fill one room to MaxPeersPerRoom, then attempt one more join.
+	full := code(1)
+	for i := 0; i < MaxPeersPerRoom; i++ {
+		if _, err := hub.JoinRoom(full, newPeer(fmt.Sprintf("%0*x", PeerIDHexLen, i))); err != nil {
+			t.Fatalf("seed join %d: %v", i, err)
+		}
+	}
+	_, roomFullErr := hub.JoinRoom(full, newPeer(fmt.Sprintf("%0*x", PeerIDHexLen, 999)))
+	if roomFullErr == nil {
+		t.Fatal("expected the over-full room join to fail")
+	}
+
+	// Fill the server to MaxRooms, then attempt a join into a fresh room.
+	for i := 2; i <= MaxRooms; i++ {
+		if _, err := hub.JoinRoom(code(i), newPeer(fmt.Sprintf("%0*x", PeerIDHexLen, 1000+i))); err != nil {
+			t.Fatalf("seed room %d: %v", i, err)
+		}
+	}
+	_, serverFullErr := hub.JoinRoom(code(MaxRooms+1), newPeer(fmt.Sprintf("%0*x", PeerIDHexLen, 5000)))
+	if serverFullErr == nil {
+		t.Fatal("expected the join past the server room cap to fail")
+	}
+
+	if roomFullErr.Error() != serverFullErr.Error() {
+		t.Fatalf("capacity errors are distinguishable: room=%q server=%q",
+			roomFullErr, serverFullErr)
+	}
+	if !errors.Is(serverFullErr, errRoomUnavailable) {
+		t.Fatalf("server cap error = %v, want errRoomUnavailable", serverFullErr)
 	}
 }

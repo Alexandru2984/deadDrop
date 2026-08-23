@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -20,6 +21,13 @@ const (
 	RoomCodeHexLen             = 24 // 96-bit ephemeral rendezvous capability
 	PeerIDHexLen               = 32 // 128-bit connection identifier
 )
+
+// errRoomUnavailable is deliberately identical for a full room and for the
+// server-wide room cap. The first is state about a room the caller already holds
+// the code for; the second is state about how busy the instance is — that is
+// other people's activity, and a distinguishable reply would let any account
+// poll it. The specific reason goes to the log instead.
+var errRoomUnavailable = errors.New("room unavailable")
 
 // Hub manages chat rooms and routes signaling messages between peers.
 // Uses channels instead of mutexes for idiomatic Go concurrency.
@@ -141,7 +149,7 @@ func (h *Hub) Run() {
 				}
 				if len(room.Peers) >= MaxPeersPerRoom {
 					req.response <- nil
-					req.err <- fmt.Errorf("room is full")
+					req.err <- errRoomUnavailable
 					continue
 				}
 			} else {
@@ -150,8 +158,9 @@ func (h *Hub) Run() {
 					effectiveRooms-- // moving will remove the peer's empty old room
 				}
 				if effectiveRooms >= MaxRooms {
+					log.Printf("[hub] server-wide room capacity reached (%d rooms)", len(h.rooms))
 					req.response <- nil
-					req.err <- fmt.Errorf("server room limit reached")
+					req.err <- errRoomUnavailable
 					continue
 				}
 			}
@@ -243,7 +252,8 @@ func (h *Hub) removeFromRoom(peer *Peer, notify bool) {
 
 // JoinRoom adds a peer to a room (creates if needed). Thread-safe via channel.
 // Peer notifications are now sent from the Hub goroutine (no race).
-// Returns an error if the room is full or the server hit its room limit.
+// Capacity failures return errRoomUnavailable without distinguishing which cap
+// was hit.
 func (h *Hub) JoinRoom(code string, peer *Peer) (*Room, error) {
 	resp := make(chan *Room, 1)
 	errCh := make(chan error, 1)
