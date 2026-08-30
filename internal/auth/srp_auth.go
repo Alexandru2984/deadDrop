@@ -279,11 +279,12 @@ func (cs *challengeStore) fakeSaltAndVerifier(kind, username string) (string, *s
 	return hex.EncodeToString(salt), ch, err
 }
 
-/* ── login lockout, keyed by username+IP ──
+/* ── login lockout, keyed by username + client tag ──
  * Keying by username alone would let anyone lock a victim's account with a few
- * deliberately wrong proofs. Including the client IP means an attacker only locks
- * *their own* view of the account; the per-IP rate limiter throttles anything
- * distributed. */
+ * deliberately wrong proofs. Including the client's tag means an attacker only
+ * locks *their own* view of the account; the per-client rate limiter throttles
+ * anything distributed. The tag is an HMAC of the source address, so this map
+ * never holds the addresses themselves. */
 
 type lockEntry struct {
 	fails    int
@@ -781,7 +782,7 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid parameter", http.StatusBadRequest)
 		return
 	}
-	if ok, wait := h.lockout.allowed(body.Username, middleware.ExtractIP(r)); !ok {
+	if ok, wait := h.lockout.allowed(body.Username, middleware.ClientTag(r)); !ok {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())))
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
@@ -893,7 +894,7 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	ip := middleware.ExtractIP(r)
+	ip := middleware.ClientTag(r)
 	if allowed, _ := h.lockout.allowed(p.username, ip); !allowed {
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
@@ -1140,7 +1141,7 @@ func (h *Handler) requireFreshProof(r *http.Request, username string, duress boo
 	if !ok || p.username != username {
 		return false
 	}
-	ip := middleware.ExtractIP(r)
+	ip := middleware.ClientTag(r)
 	if allowed, _ := h.lockout.allowed(username, ip); !allowed {
 		return false
 	}

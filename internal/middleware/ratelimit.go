@@ -43,7 +43,8 @@ func NewRateLimiter(rate, burst int, interval time.Duration) *RateLimiter {
 	return rl
 }
 
-// Allow checks whether the IP has tokens remaining.
+// Allow checks whether the given client key has tokens remaining. Callers pass
+// an opaque ClientTag, not an address — see clienttag.go.
 func (rl *RateLimiter) Allow(ip string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
@@ -86,8 +87,7 @@ func (rl *RateLimiter) Allow(ip string) bool {
 // Wrap returns HTTP middleware that rejects over-limit requests with 429.
 func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := ExtractIP(r)
-		if !rl.Allow(ip) {
+		if !rl.Allow(ClientTag(r)) {
 			w.Header().Set("Content-Type", "application/json")
 			retryAfter := int(math.Ceil(rl.interval.Seconds()))
 			if retryAfter < 1 {

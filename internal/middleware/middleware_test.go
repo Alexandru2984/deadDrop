@@ -349,3 +349,52 @@ func TestRequireSameOriginHonoursSecFetchMetadata(t *testing.T) {
 		})
 	}
 }
+
+// The rate limiter and login lockout must be able to tell clients apart without
+// their maps becoming a standing list of who used the service.
+func TestClientTagIsStableOpaqueAndPerSource(t *testing.T) {
+	req := func(remote, realIP string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remote
+		if realIP != "" {
+			r.Header.Set("X-Real-IP", realIP)
+		}
+		return r
+	}
+
+	a := ClientTag(req("203.0.113.7:1111", ""))
+	again := ClientTag(req("203.0.113.7:2222", ""))
+	if a != again {
+		t.Fatal("tag is not stable for the same source address")
+	}
+	if b := ClientTag(req("203.0.113.8:1111", "")); a == b {
+		t.Fatal("two different sources share a tag")
+	}
+	if strings.Contains(a, "203.0.113") || strings.Contains(a, "113.7") {
+		t.Fatalf("tag leaks the address it was derived from: %q", a)
+	}
+	if len(a) != 32 {
+		t.Fatalf("tag length = %d, want 32 hex chars", len(a))
+	}
+
+	// The proxy boundary still decides which address is tagged.
+	viaProxy := ClientTag(req("127.0.0.1:9", "198.51.100.4"))
+	direct := ClientTag(req("198.51.100.4:9", ""))
+	if viaProxy != direct {
+		t.Fatal("a trusted proxy's forwarded address produced a different tag")
+	}
+
+	// Requests behind the onion boundary share one tag by design.
+	onionReq := req("127.0.0.1:9", "203.0.113.99")
+	var onionA, onionB string
+	DirectClientBoundary("onion", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		onionA = ClientTag(r)
+	})).ServeHTTP(httptest.NewRecorder(), onionReq)
+	other := req("127.0.0.1:9", "203.0.113.1")
+	DirectClientBoundary("onion", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		onionB = ClientTag(r)
+	})).ServeHTTP(httptest.NewRecorder(), other)
+	if onionA != onionB {
+		t.Fatal("onion clients did not share a single tag")
+	}
+}

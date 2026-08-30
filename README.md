@@ -94,6 +94,10 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   browser/OS forensic traces, or anything already copied.
 - “Relay-only” hides each endpoint's network address from the other peer when
   TURN works. The TURN/VPS operator still sees both endpoint IPs and timing.
+- Rate limiting and login lockout key on an HMAC of the source address under a
+  per-process secret that is never persisted, so those in-memory maps are not a
+  standing list of who used the service. This is not a defence against an
+  attacker who already holds full process memory.
 - The Go application deliberately omits handles, room codes, peer IDs, and
   message content from its logs. nginx, systemd/journald, Cloudflare, coturn, the
   VPS host, and upstream networks may still record IP/request/traffic metadata.
