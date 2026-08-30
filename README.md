@@ -83,6 +83,9 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
 
 ## Data and privacy
 
+- Sessions live in memory only and die at whichever bound comes first: 30 minutes
+  idle, or 12 hours absolute. A primary password change closes every session for
+  the account and rotates the changing browser's own token.
 - The server persists handles, SRP salts/verifiers/KDF labels, optional duress
   verifiers, invites, and one local anti-enumeration secret. It does not persist
   rooms, peer IDs, chat messages, files, calls, or session cookies across restart.

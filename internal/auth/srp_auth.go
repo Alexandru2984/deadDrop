@@ -977,9 +977,14 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// A primary password change is the account owner's revocation event: keep
-	// only this browser and close both primary and decoy sessions elsewhere.
-	h.sess.deleteUserExcept(username, c.Value)
+	// A primary password change is the account owner's revocation event: close
+	// every other session, primary and decoy alike, and rotate this browser's own
+	// token so the pre-change value stops being an authenticator too.
+	h.sess.deleteUser(username)
+	if err := h.setCookieSession(w, r, username, false); err != nil {
+		jsonErr(w, "could not refresh session", http.StatusInternalServerError)
+		return
+	}
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 

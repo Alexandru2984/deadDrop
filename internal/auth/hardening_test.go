@@ -128,10 +128,13 @@ func TestCredentialChangesRevokeTheRightSessions(t *testing.T) {
 
 	newSalt, newVerifier := testSRPCredential("alice", "new primary password")
 	callVerifierUpdate(t, h, primaryKeep, "alice", "primary password", newSalt, newVerifier)
-	assertSession(t, h, primaryKeep, true, "current primary session")
+	assertSession(t, h, primaryKeep, false, "pre-change token after rotation")
 	assertSession(t, h, primaryOther, false, "other primary session")
 	assertSession(t, h, duressOther, false, "existing duress session")
 
+	// The rotation invalidated every token including this browser's, so the rest
+	// of the walk-through needs freshly issued ones.
+	primaryKeep = createTestSession(t, h, "alice", false)
 	primaryOther = createTestSession(t, h, "alice", false)
 	duressKeep := createTestSession(t, h, "alice", true)
 	duressOther = createTestSession(t, h, "alice", true)
@@ -360,7 +363,9 @@ func TestChallengeAndSessionCapsReapExpiredEntries(t *testing.T) {
 
 	sm := &sessions{m: make(map[string]*session)}
 	for i := 0; i < maxSessions; i++ {
-		sm.m[fmt.Sprintf("session-%d", i)] = &session{username: "alice", expiresAt: time.Now().Add(time.Hour)}
+		entry := &session{username: "alice", expiresAt: time.Now().Add(time.Hour)}
+		entry.lastSeen.Store(time.Now().UnixNano()) // otherwise the idle bound reaps it
+		sm.m[fmt.Sprintf("session-%d", i)] = entry
 	}
 	if _, err := sm.create("alice", false); err == nil {
 		t.Fatal("session store accepted an entry beyond its cap")
@@ -701,4 +706,53 @@ func TestAccountActionsRequireAFreshProof(t *testing.T) {
 			t.Fatal("the decoy duress-set was not a no-op")
 		}
 	})
+}
+
+// A session dies at whichever bound arrives first, and activity refreshes only
+// the idle one — an active chat must never be able to outlive the absolute cap.
+func TestSessionsExpireOnIdleAndAbsoluteBounds(t *testing.T) {
+	sm := &sessions{m: make(map[string]*session)}
+
+	token, err := sm.create("alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := sm.get(token); !ok {
+		t.Fatal("a fresh session is not valid")
+	}
+
+	// Idle past the bound.
+	sm.m[token].lastSeen.Store(time.Now().Add(-sessionIdleTimeout - time.Second).UnixNano())
+	if _, ok := sm.get(token); ok {
+		t.Fatal("an idle session stayed valid")
+	}
+
+	// Activity refreshes the idle bound.
+	fresh, err := sm.create("bob", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm.m[fresh].lastSeen.Store(time.Now().Add(-sessionIdleTimeout + time.Minute).UnixNano())
+	if _, ok := sm.get(fresh); !ok {
+		t.Fatal("a session inside the idle window was rejected")
+	}
+	if _, ok := sm.get(fresh); !ok {
+		t.Fatal("the previous check did not refresh the idle bound")
+	}
+
+	// The absolute cap ignores activity.
+	sm.m[fresh].expiresAt = time.Now().Add(-time.Second)
+	sm.m[fresh].lastSeen.Store(time.Now().UnixNano())
+	if _, ok := sm.get(fresh); ok {
+		t.Fatal("activity extended a session past its absolute cap")
+	}
+
+	// Both kinds are reaped.
+	sm.mu.Lock()
+	sm.removeExpiredLocked(time.Now())
+	remaining := len(sm.m)
+	sm.mu.Unlock()
+	if remaining != 0 {
+		t.Fatalf("%d dead sessions survived the reaper", remaining)
+	}
 }

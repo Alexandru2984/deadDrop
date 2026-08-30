@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"deaddrop/internal/middleware"
@@ -151,6 +152,17 @@ type session struct {
 	username  string
 	duress    bool
 	expiresAt time.Time
+	// lastSeen tracks activity for the idle bound. It is an atomic so a validity
+	// check can refresh it while holding only a read lock — every WebSocket pump
+	// re-checks its session every few seconds, so this is a hot path.
+	lastSeen atomic.Int64
+}
+
+func (s *session) live(now time.Time) bool {
+	if now.After(s.expiresAt) {
+		return false
+	}
+	return now.Sub(time.Unix(0, s.lastSeen.Load())) <= sessionIdleTimeout
 }
 
 type sessions struct {
@@ -158,7 +170,16 @@ type sessions struct {
 	m  map[string]*session
 }
 
-const maxSessions = 10_000
+const (
+	maxSessions = 10_000
+	// A session dies at whichever bound comes first. The absolute cap limits how
+	// long a stolen cookie is worth anything; the idle bound closes the far more
+	// common case of a browser left open and walked away from. Long-lived
+	// transports re-check their session every few seconds, so an active chat
+	// keeps itself alive without any client-side keepalive.
+	sessionAbsoluteTTL = 12 * time.Hour
+	sessionIdleTimeout = 30 * time.Minute
+)
 
 func newSessions() *sessions {
 	sm := &sessions{m: make(map[string]*session)}
@@ -182,7 +203,10 @@ func (sm *sessions) create(username string, duress bool) (string, error) {
 			sm.mu.Unlock()
 			continue
 		}
-		sm.m[tok] = &session{username: username, duress: duress, expiresAt: time.Now().Add(24 * time.Hour)}
+		now := time.Now()
+		entry := &session{username: username, duress: duress, expiresAt: now.Add(sessionAbsoluteTTL)}
+		entry.lastSeen.Store(now.UnixNano())
+		sm.m[tok] = entry
 		sm.mu.Unlock()
 		return tok, nil
 	}
@@ -197,9 +221,11 @@ func (sm *sessions) getMeta(token string) (string, bool, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	s, ok := sm.m[token]
-	if !ok || time.Now().After(s.expiresAt) {
+	now := time.Now()
+	if !ok || !s.live(now) {
 		return "", false, false
 	}
+	s.lastSeen.Store(now.UnixNano())
 	return s.username, s.duress, true
 }
 
@@ -239,15 +265,15 @@ func (sm *sessions) deleteUserKindExcept(username string, duress bool, keepToken
 
 func (sm *sessions) removeExpiredLocked(now time.Time) {
 	for token, s := range sm.m {
-		if now.After(s.expiresAt) {
+		if !s.live(now) {
 			delete(sm.m, token)
 		}
 	}
 }
 
-// reap removes expired sessions every 10 minutes.
+// reap drops sessions past either bound.
 func (sm *sessions) reap() {
-	for range time.NewTicker(10 * time.Minute).C {
+	for range time.NewTicker(5 * time.Minute).C {
 		sm.mu.Lock()
 		now := time.Now()
 		sm.removeExpiredLocked(now)
@@ -376,7 +402,7 @@ func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string
 		Name:     sessionCookieName(r),
 		Value:    token,
 		Path:     "/",
-		MaxAge:   86400,
+		MaxAge:   int(sessionAbsoluteTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   middleware.IsSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
