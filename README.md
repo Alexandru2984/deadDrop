@@ -118,9 +118,11 @@ constant-time primitives; the modular exponentiation is therefore not
 constant-time with respect to the password-derived exponent. Observing that
 requires code already running in the victim's browser.
 
-Changing a credential requires a fresh SRP proof of the password the session was
-opened with, so a borrowed session cookie cannot by itself rekey an account and
-lock its owner out. A decoy session can only re-prove the duress password.
+Changing a credential, setting a duress password, and deleting an account each
+require a fresh SRP proof of the password the session was opened with, so a
+borrowed session cookie cannot by itself rekey, alter, or destroy an account. A
+decoy session can only re-prove the duress password, and still receives the same
+responses a primary session would.
 
 The optional duress password gives a normal-looking decoy session to the person
 using the browser. The server necessarily knows whether a successful proof opened

@@ -118,6 +118,7 @@ class DeadDrop {
       logoutBtn:   $('#logout-btn'),
       settingsBtn:  $('#settings-btn'),
       accountPanel: $('#account-panel'),
+      currentPass:  $('#current-pass'),
       duressPass:   $('#duress-pass'),
       setDuressBtn: $('#set-duress-btn'),
       delAccountBtn:$('#del-account-btn'),
@@ -374,6 +375,7 @@ class DeadDrop {
   _afterAuth() {
     this.el.authPass.value = '';
     this.el.authInvite.value = '';
+    this.el.currentPass.value = '';
     this.el.accountPanel.classList.add('hidden');
     this._showPage('landing');
   }
@@ -381,21 +383,67 @@ class DeadDrop {
   // Set (or update) the duress password. Computed locally — never sent in the clear.
   async _setDuress() {
     const pw = this.el.duressPass.value;
+    const current = this.el.currentPass.value;
+    const flash = (key) => {
+      this.el.setDuressBtn.textContent = t(key);
+      setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);
+    };
     if (pw.length < 8) {
-      this.el.setDuressBtn.textContent = t('duress.set');
       this.el.duressPass.focus();
+      flash('duress.set');
+      return;
+    }
+    if (!current) {
+      this.el.currentPass.focus();
+      flash('account.needCurrent');
+      return;
+    }
+    let proof;
+    try {
+      proof = await this._reauthProof(this.username, current);
+    } catch {
+      flash('account.wrongCurrent');
       return;
     }
     const { salt, verifier, kdf } = await srpRegister(this.username, pw);
-    const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf });
+    const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf, ...proof });
     this.el.duressPass.value = '';
+    this.el.currentPass.value = '';
+    if (res.status === 401) { flash('account.wrongCurrent'); return; }
     this.el.setDuressBtn.textContent = res.ok ? t('duress.saved') : (res.data.error || t('duress.set'));
     setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);
   }
 
   async _deleteAccount() {
+    const current = this.el.currentPass.value;
+    if (!current) {
+      this.el.currentPass.focus();
+      this.el.delAccountBtn.textContent = t('account.needCurrent');
+      setTimeout(() => (this.el.delAccountBtn.textContent = t('account.delete')), 1800);
+      return;
+    }
     if (!confirm(t('account.confirmDelete'))) return;
-    try { await this._postJSON('/api/account/delete', {}); } catch { /* */ }
+    let proof;
+    try {
+      proof = await this._reauthProof(this.username, current);
+    } catch {
+      this.el.delAccountBtn.textContent = t('account.wrongCurrent');
+      setTimeout(() => (this.el.delAccountBtn.textContent = t('account.delete')), 1800);
+      return;
+    }
+    let res;
+    try {
+      res = await this._postJSON('/api/account/delete', proof);
+    } catch {
+      this.el.delAccountBtn.textContent = t('account.delete');
+      return;
+    }
+    this.el.currentPass.value = '';
+    if (res.status === 401) {
+      this.el.delAccountBtn.textContent = t('account.wrongCurrent');
+      setTimeout(() => (this.el.delAccountBtn.textContent = t('account.delete')), 1800);
+      return;
+    }
     this._cleanup();
     location.replace(location.origin + '/');
   }

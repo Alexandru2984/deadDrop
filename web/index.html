@@ -54,6 +54,8 @@
     </div>
 
     <div id="account-panel" class="account-panel hidden">
+      <input id="current-pass" type="password" placeholder="Current password"
+             data-i18n-ph="account.currentPh" autocomplete="current-password" />
       <input id="duress-pass" type="password" placeholder="Duress password (decoy)"
              data-i18n-ph="duress.ph" autocomplete="new-password" />
       <div class="account-actions">
@@ -61,6 +63,7 @@
         <button id="del-account-btn" class="btn btn-sm btn-danger" data-i18n="account.delete">Delete account</button>
       </div>
       <p class="account-hint" data-i18n="duress.hint">Optional: a second password that also logs in (to a decoy).</p>
+      <p class="account-hint" data-i18n="account.reauthHint">Both actions re-check your current password, so an open session alone cannot change or destroy the account.</p>
     </div>
 
     <div class="logo">💀</div>
@@ -202,6 +205,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-Ou8rlaWBzurh0c9GdRUILQinKe4doMyX5pA5DwUaQcs="></script>
+  <script type="module" src="js/app.js" integrity="sha256-lRaI9bELNEveJ4ihEkmZSBbdNKS11s+7Aa5ckoDFdOs="></script>
 </body>
 </html>

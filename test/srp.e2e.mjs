@@ -119,7 +119,8 @@ async function srpLogin(username, password, jar) {
   // 3. Duress password (decoy).
   const DURESS = 'duress-decoy-pass-99';
   const dreg = await register(USER, DURESS);
-  const setD = await post('/api/account/duress', { salt: dreg.salt, verifier: dreg.verifier, kdf: dreg.kdf }, jar2);
+  const setD = await post('/api/account/duress',
+    { salt: dreg.salt, verifier: dreg.verifier, kdf: dreg.kdf, ...(await reauthProof(USER, PASS)) }, jar2);
   ok(setD.status === 200, 'set duress password (computed client-side)');
   const djar = {};
   const dlogin = await srpLogin(USER, DURESS, djar);
@@ -145,7 +146,8 @@ async function srpLogin(username, password, jar) {
   //  - Setting a duress password from the decoy must fake success (no 403 tell)
   //    without touching anything.
   const xreg = await register(USER, 'probe-from-decoy-1234');
-  const probe = await post('/api/account/duress', { salt: xreg.salt, verifier: xreg.verifier, kdf: xreg.kdf }, djar);
+  const probe = await post('/api/account/duress',
+    { salt: xreg.salt, verifier: xreg.verifier, kdf: xreg.kdf, ...(await reauthProof(USER, NEWDURESS)) }, djar);
   ok(probe.status === 200, 'duress-set from decoy answers 200 (no detectable 403)');
   const dlogin3 = await srpLogin(USER, NEWDURESS, {});
   ok(dlogin3.status === 200 && dlogin3.usedDuress === true, 'duress-set from decoy was a no-op');
@@ -154,7 +156,7 @@ async function srpLogin(username, password, jar) {
   // primary account. Use a fresh decoy session because delete logs it out.
   const deleteDecoyJar = {};
   const deleteDecoyLogin = await srpLogin(USER, NEWDURESS, deleteDecoyJar);
-  const decoyDelete = await post('/api/account/delete', {}, deleteDecoyJar);
+  const decoyDelete = await post('/api/account/delete', await reauthProof(USER, NEWDURESS), deleteDecoyJar);
   ok(deleteDecoyLogin.usedDuress === true && decoyDelete.status === 200,
      'account delete from decoy reports success');
   const afterDecoyDelete = await srpLogin(USER, PASS, {});
@@ -208,7 +210,13 @@ async function srpLogin(username, password, jar) {
      'rejected downgrade leaves the stretched credential intact');
 
   // 5. Cleanup: delete the throwaway account.
-  const del = await post('/api/account/delete', {}, jar2);
+  // A live cookie alone must not be able to destroy the account.
+  const delNoProof = await post('/api/account/delete', { token: '', M1: '', M1d: '' }, jar2);
+  ok(delNoProof.status === 401, 'account delete without a fresh proof is refused');
+  const stillThere = await get('/api/me', jar2);
+  ok(stillThere.status === 200, 'refused delete left the account alive');
+
+  const del = await post('/api/account/delete', await reauthProof(USER, PASS), jar2);
   ok(del.status === 200, 'account self-delete works');
   const gone = await get('/api/me', jar2);
   ok(gone.status === 401, 'session cleared after delete');

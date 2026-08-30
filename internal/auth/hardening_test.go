@@ -56,6 +56,13 @@ func TestDeleteAccountDuressPreservesPrimary(t *testing.T) {
 	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
 		t.Fatal(err)
 	}
+	// A duress session is only reachable by proving a duress verifier, so the
+	// credential has to exist for the re-authentication on delete to mean
+	// anything.
+	duressSalt, duressVerifier := testSRPCredential("alice", "decoy password")
+	if err := h.store.setDuress("alice", duressSalt, duressVerifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
 	primaryToken, err := h.sess.create("alice", false)
 	if err != nil {
 		t.Fatal(err)
@@ -69,10 +76,7 @@ func TestDeleteAccountDuressPreservesPrimary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/account/delete", nil)
-	req.AddCookie(&http.Cookie{Name: "dd_session", Value: duressToken})
-	w := httptest.NewRecorder()
-	h.DeleteAccount(w, req)
+	w := deleteAccountRequest(t, h, duressToken, "alice", "decoy password")
 	if w.Code != http.StatusOK {
 		t.Fatalf("duress delete: got %d: %s", w.Code, w.Body.String())
 	}
@@ -93,10 +97,7 @@ func TestDeleteAccountDuressPreservesPrimary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req = httptest.NewRequest(http.MethodPost, "/api/account/delete", nil)
-	req.AddCookie(&http.Cookie{Name: "dd_session", Value: primaryToken})
-	w = httptest.NewRecorder()
-	h.DeleteAccount(w, req)
+	w = deleteAccountRequest(t, h, primaryToken, "alice", "correct horse battery staple")
 	if w.Code != http.StatusOK {
 		t.Fatalf("primary delete: got %d: %s", w.Code, w.Body.String())
 	}
@@ -143,13 +144,7 @@ func TestCredentialChangesRevokeTheRightSessions(t *testing.T) {
 
 	duressOther = createTestSession(t, h, "alice", true)
 	thirdSalt, thirdVerifier := testSRPCredential("alice", "third decoy password")
-	body, _ := json.Marshal(map[string]string{
-		"salt": thirdSalt, "verifier": thirdVerifier, "kdf": defaultKdf,
-	})
-	req := httptest.NewRequest(http.MethodPost, "/api/account/duress", bytes.NewReader(body))
-	req.AddCookie(&http.Cookie{Name: "dd_session", Value: primaryKeep})
-	w := httptest.NewRecorder()
-	h.SetDuress(w, req)
+	w := setDuressRequest(t, h, primaryKeep, "alice", "new primary password", thirdSalt, thirdVerifier)
 	if w.Code != http.StatusOK {
 		t.Fatalf("SetDuress status=%d: %s", w.Code, w.Body.String())
 	}
@@ -248,6 +243,28 @@ func TestSetVerifierRequiresAFreshProof(t *testing.T) {
 	if u, _ := h.store.getUser("alice"); u.Verifier != newVerifier {
 		t.Fatal("a correctly proved change was not applied")
 	}
+}
+
+func deleteAccountRequest(t *testing.T, h *Handler, token, username, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(freshProof(t, h, username, password))
+	req := httptest.NewRequest(http.MethodPost, "/api/account/delete", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: token})
+	w := httptest.NewRecorder()
+	h.DeleteAccount(w, req)
+	return w
+}
+
+func setDuressRequest(t *testing.T, h *Handler, token, username, password, salt, verifier string) *httptest.ResponseRecorder {
+	t.Helper()
+	payload := freshProof(t, h, username, password)
+	payload["salt"], payload["verifier"], payload["kdf"] = salt, verifier, defaultKdf
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/account/duress", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: token})
+	w := httptest.NewRecorder()
+	h.SetDuress(w, req)
+	return w
 }
 
 func createTestSession(t *testing.T, h *Handler, username string, duress bool) string {
@@ -540,10 +557,7 @@ func TestDeleteAccountFromDecoyConsumesTheDuressCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/account/delete", nil)
-	req.AddCookie(&http.Cookie{Name: "dd_session", Value: duressToken})
-	w := httptest.NewRecorder()
-	h.DeleteAccount(w, req)
+	w := deleteAccountRequest(t, h, duressToken, "alice", "the decoy password")
 	if w.Code != http.StatusOK {
 		t.Fatalf("decoy delete: got %d: %s", w.Code, w.Body.String())
 	}
@@ -599,4 +613,92 @@ func TestClearSiteDataNeverTargetsCookies(t *testing.T) {
 	if !strings.Contains(wipe, "storage") {
 		t.Fatalf("panic wipe = %q, want storage included", wipe)
 	}
+}
+
+// Destroying or re-keying an account must cost more than possession of a live
+// session cookie, and a decoy must stay indistinguishable while proving only its
+// own credential.
+func TestAccountActionsRequireAFreshProof(t *testing.T) {
+	setup := func(t *testing.T) *Handler {
+		t.Helper()
+		h := newTestHandler(t)
+		salt, verifier := testSRPCredential("alice", "primary password")
+		if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
+			t.Fatal(err)
+		}
+		dSalt, dVerifier := testSRPCredential("alice", "decoy password")
+		if err := h.store.setDuress("alice", dSalt, dVerifier, defaultKdf); err != nil {
+			t.Fatal(err)
+		}
+		return h
+	}
+
+	t.Run("delete refuses a cookie with no proof", func(t *testing.T) {
+		h := setup(t)
+		req := httptest.NewRequest(http.MethodPost, "/api/account/delete",
+			bytes.NewReader([]byte(`{"token":"","M1":"","M1d":""}`)))
+		req.AddCookie(&http.Cookie{Name: "dd_session", Value: createTestSession(t, h, "alice", false)})
+		w := httptest.NewRecorder()
+		h.DeleteAccount(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", w.Code)
+		}
+		if _, ok := h.store.getUser("alice"); !ok {
+			t.Fatal("the account was destroyed without a proof")
+		}
+	})
+
+	t.Run("delete refuses the wrong password", func(t *testing.T) {
+		h := setup(t)
+		w := deleteAccountRequest(t, h, createTestSession(t, h, "alice", false), "alice", "guess")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", w.Code)
+		}
+		if _, ok := h.store.getUser("alice"); !ok {
+			t.Fatal("a wrong password still destroyed the account")
+		}
+	})
+
+	t.Run("a decoy cannot reach the account by proving the primary password", func(t *testing.T) {
+		h := setup(t)
+		w := deleteAccountRequest(t, h, createTestSession(t, h, "alice", true), "alice", "primary password")
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", w.Code)
+		}
+	})
+
+	t.Run("duress-set refuses a cookie with no proof", func(t *testing.T) {
+		h := setup(t)
+		newSalt, newVerifier := testSRPCredential("alice", "attacker decoy")
+		body, _ := json.Marshal(map[string]string{
+			"salt": newSalt, "verifier": newVerifier, "kdf": defaultKdf,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/account/duress", bytes.NewReader(body))
+		req.AddCookie(&http.Cookie{Name: "dd_session", Value: createTestSession(t, h, "alice", false)})
+		w := httptest.NewRecorder()
+		h.SetDuress(w, req)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("got %d, want 401", w.Code)
+		}
+		if u, _ := h.store.getUser("alice"); u.DuressVerifier == newVerifier {
+			t.Fatal("the duress credential was replaced without a proof")
+		}
+	})
+
+	// The decoy branch answers 200 without writing. With the proof in front of it
+	// that has to stay true, or the status code becomes the tell.
+	t.Run("a proving decoy still gets an indistinguishable 200", func(t *testing.T) {
+		h := setup(t)
+		before, _ := h.store.getUser("alice")
+		probeSalt, probeVerifier := testSRPCredential("alice", "probe from the decoy")
+		w := setDuressRequest(t, h, createTestSession(t, h, "alice", true),
+			"alice", "decoy password", probeSalt, probeVerifier)
+		if w.Code != http.StatusOK {
+			t.Fatalf("decoy duress-set got %d, want an indistinguishable 200", w.Code)
+		}
+		after, _ := h.store.getUser("alice")
+		if after.DuressVerifier != before.DuressVerifier || after.Verifier != before.Verifier {
+			t.Fatal("the decoy duress-set was not a no-op")
+		}
+	})
 }

@@ -983,7 +983,8 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
-// SetDuress sets or clears the duress credential for the logged-in user. The
+// SetDuress sets or clears the duress credential for the logged-in user, after a
+// fresh SRP proof of the credential this session was opened with. The
 // browser computes (salt, verifier) from the duress password — it never reaches
 // the server. A duress session must not be allowed to change the duress credential.
 func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
@@ -1006,9 +1007,19 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		Salt     string `json:"salt"`
 		Verifier string `json:"verifier"`
 		Kdf      string `json:"kdf"`
+		Token    string `json:"token"`
+		M1       string `json:"M1"`
+		M1d      string `json:"M1d"`
 	}
 	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
 		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	// The proof is checked before the decoy branch below, and against whichever
+	// credential opened this session, so a decoy still answers 200 for its own
+	// password and never reveals which branch it took.
+	if !h.requireFreshProof(r, username, duress, body.Token, body.M1, body.M1d) {
+		jsonErr(w, "re-authentication required", http.StatusUnauthorized)
 		return
 	}
 	if err := validateDuressUpdate(body.Salt, body.Verifier, body.Kdf); err != nil {
@@ -1029,7 +1040,8 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
-// DeleteAccount removes an account only from a primary session. A duress session
+// DeleteAccount requires a fresh SRP proof and removes an account only from a
+// primary session. A duress session
 // preserves the real account but consumes the duress credential, so the password
 // the coerced user surrendered genuinely stops working: a coercer who watches the
 // deletion and then retries that password must not find the account still alive.
@@ -1046,6 +1058,23 @@ func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	username, duress, ok := h.sess.getMeta(c.Value)
 	if !ok {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
+	var body struct {
+		Token string `json:"token"`
+		M1    string `json:"M1"`
+		M1d   string `json:"M1d"`
+	}
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
+		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	// Destroying an account is irreversible, so a borrowed session must not be
+	// able to do it either. A decoy proves its own credential and still gets the
+	// deletion theatre below.
+	if !h.requireFreshProof(r, username, duress, body.Token, body.M1, body.M1d) {
+		jsonErr(w, "re-authentication required", http.StatusUnauthorized)
 		return
 	}
 	if duress {
