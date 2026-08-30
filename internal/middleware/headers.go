@@ -16,14 +16,22 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "no-referrer")
 		h.Set("Cross-Origin-Opener-Policy", "same-origin")
 		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		h.Set("X-Permitted-Cross-Domain-Policies", "none")
 		// Code and API responses must arrive byte-for-byte. Besides preventing
 		// sensitive API caching, no-transform stops CDN bot products from
 		// injecting JavaScript into HTML and invalidating the published hashes.
 		h.Set("Cache-Control", "no-store, no-transform")
+		// Deny every capability the app does not use. camera/microphone stay
+		// self-enabled for calls and QR scanning; everything else is a sensor,
+		// tracking surface, or device bridge this app has no business touching.
 		h.Set("Permissions-Policy",
-			"camera=(self), microphone=(self), display-capture=(), geolocation=(), "+
-				"browsing-topics=(), interest-cohort=(), payment=(), usb=(), "+
-				"accelerometer=(), gyroscope=(), magnetometer=()")
+			"camera=(self), microphone=(self), fullscreen=(self), autoplay=(self), "+
+				"display-capture=(), geolocation=(), payment=(), usb=(), serial=(), "+
+				"bluetooth=(), hid=(), midi=(), accelerometer=(), gyroscope=(), "+
+				"magnetometer=(), ambient-light-sensor=(), idle-detection=(), "+
+				"local-fonts=(), compute-pressure=(), screen-wake-lock=(), "+
+				"browsing-topics=(), interest-cohort=(), attribution-reporting=(), "+
+				"otp-credentials=(), publickey-credentials-get=(), storage-access=()")
 		// Privacy-first CSP: no external origins, no inline scripts OR styles. The
 		// whole app is same-origin ES modules + stylesheets; dynamic styling goes
 		// through the CSSOM (element.style.x = …), which CSP does not block.
@@ -39,7 +47,14 @@ func SecurityHeaders(next http.Handler) http.Handler {
 				"font-src 'self'; "+
 				"connect-src 'self'; "+
 				"manifest-src 'self'; "+
-				"worker-src 'self' blob:; "+
+				"worker-src 'self'; "+
+				"child-src 'none'; "+
+				"frame-src 'none'; "+
+				// Inline event handlers and style="" attributes are not used
+				// anywhere; refusing them removes the injection sinks that
+				// script-src/style-src alone still permit.
+				"script-src-attr 'none'; "+
+				"style-src-attr 'none'; "+
 				"form-action 'self'; "+
 				"frame-ancestors 'none'")
 		// HSTS — 2 years, preload-eligible.

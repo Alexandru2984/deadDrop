@@ -31,6 +31,25 @@ func isUnsafeMethod(method string) bool {
 }
 
 func sameOrigin(r *http.Request) bool {
+	// Sec-Fetch-Site is set by the browser itself and cannot be written by page
+	// script, so it holds even where an attacker can influence Origin/Referer.
+	// Checking it first makes CSRF protection independent of header reflection
+	// quirks in any proxy ahead of us.
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		// Keep going: still confirm Origin/Referer agree with the request host.
+	case "":
+		// Absent: an older browser or a non-browser client. Fall through to the
+		// Origin/Referer checks below.
+	default:
+		// cross-site, same-site, or none — never a legitimate state change here.
+		return false
+	}
+	// A state-changing API call is a fetch, never a top-level navigation. A
+	// navigate-mode POST is a cross-document form submission.
+	if mode := r.Header.Get("Sec-Fetch-Mode"); mode == "navigate" || mode == "no-cors" {
+		return false
+	}
 	origin := r.Header.Get("Origin")
 	if origin != "" {
 		return originHostMatches(r, origin)
@@ -39,8 +58,8 @@ func sameOrigin(r *http.Request) bool {
 	if referer != "" {
 		return originHostMatches(r, referer)
 	}
-	// Non-browser clients may omit both headers. Browsers send Origin on fetch POSTs,
-	// which are the CSRF-sensitive requests this app uses.
+	// Non-browser clients may omit all of these. Browsers send Origin on fetch
+	// POSTs, which are the CSRF-sensitive requests this app uses.
 	return true
 }
 

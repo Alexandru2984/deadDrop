@@ -302,6 +302,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := sessionCookie(r); err == nil {
 		h.sess.delete(c.Value)
 	}
+	setClearSiteData(w, r, r.URL.Query().Get("wipe") == "1")
 	http.SetCookie(w, &http.Cookie{ // #nosec G124 -- flags are explicit; Secure is false only for local HTTP development
 		Name:     sessionCookieName(r),
 		Value:    "",
@@ -380,6 +381,28 @@ func (h *Handler) setCookie(w http.ResponseWriter, r *http.Request, token string
 		Secure:   middleware.IsSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// setClearSiteData asks the browser to drop local traces of this origin.
+//
+// "cookies" is deliberately NOT requested. The directive is specified to clear
+// cookies for the whole registrable domain, not just this origin, so on a host
+// that serves other applications under sibling subdomains it would sign the user
+// out of all of them. The session cookie is expired explicitly instead, which is
+// precise and origin-scoped.
+//
+// "storage" is requested only for a panic wipe: it also unregisters service
+// workers, which is the right call when the user is destroying local traces, but
+// would silently discard the pinned-code registration on an ordinary logout.
+func setClearSiteData(w http.ResponseWriter, r *http.Request, wipeStorage bool) {
+	if !middleware.IsSecureRequest(r) {
+		return // the directive is ignored outside secure contexts anyway
+	}
+	if wipeStorage {
+		w.Header().Set("Clear-Site-Data", `"cache", "storage"`)
+		return
+	}
+	w.Header().Set("Clear-Site-Data", `"cache"`)
 }
 
 func sessionCookieName(r *http.Request) string {

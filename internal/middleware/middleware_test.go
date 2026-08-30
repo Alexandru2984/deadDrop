@@ -302,3 +302,50 @@ func TestRequireSameOrigin(t *testing.T) {
 		t.Fatal("untrusted forwarded scheme must be ignored")
 	}
 }
+
+// Sec-Fetch-Site is written by the browser and is unreachable from page script,
+// so it must be able to refuse a cross-site state change on its own — even when
+// Origin and Referer look agreeable.
+func TestRequireSameOriginHonoursSecFetchMetadata(t *testing.T) {
+	newReq := func(site, mode, origin string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "https://dead.micutu.com/api/logout", nil)
+		if site != "" {
+			r.Header.Set("Sec-Fetch-Site", site)
+		}
+		if mode != "" {
+			r.Header.Set("Sec-Fetch-Mode", mode)
+		}
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+
+	cases := []struct {
+		name             string
+		site, mode, orig string
+		want             int
+	}{
+		{"same-origin fetch passes", "same-origin", "cors", "https://dead.micutu.com", http.StatusNoContent},
+		{"cross-site is refused", "cross-site", "cors", "https://dead.micutu.com", http.StatusForbidden},
+		{"same-site is refused", "same-site", "cors", "https://dead.micutu.com", http.StatusForbidden},
+		{"none is refused", "none", "cors", "https://dead.micutu.com", http.StatusForbidden},
+		{"navigate mode is refused", "same-origin", "navigate", "https://dead.micutu.com", http.StatusForbidden},
+		{"no-cors mode is refused", "same-origin", "no-cors", "https://dead.micutu.com", http.StatusForbidden},
+		{"absent metadata falls back to Origin", "", "", "https://dead.micutu.com", http.StatusNoContent},
+		{"absent metadata still rejects a foreign Origin", "", "", "https://evil.example", http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			handler := RequireSameOrigin(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			w := httptest.NewRecorder()
+			handler(w, newReq(tc.site, tc.mode, tc.orig))
+			if w.Code != tc.want {
+				t.Fatalf("got %d, want %d", w.Code, tc.want)
+			}
+		})
+	}
+}

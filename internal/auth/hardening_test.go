@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -556,5 +557,46 @@ func TestDeleteAccountFromDecoyConsumesTheDuressCredential(t *testing.T) {
 	}
 	if u.Verifier != verifier || u.Salt != salt {
 		t.Fatal("decoy delete altered the primary credential")
+	}
+}
+
+// Clear-Site-Data must never request "cookies": the directive clears them for
+// the whole registrable domain, which on a host serving sibling subdomains would
+// sign the user out of unrelated applications.
+func TestClearSiteDataNeverTargetsCookies(t *testing.T) {
+	h := newTestHandler(t)
+	token, err := h.sess.create("alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(target string) string {
+		req := httptest.NewRequest(http.MethodPost, target, nil)
+		req.RemoteAddr = "127.0.0.1:1234"
+		req.Header.Set("X-Forwarded-Proto", "https")
+		req.AddCookie(&http.Cookie{Name: "__Host-dd_session", Value: token})
+		w := httptest.NewRecorder()
+		h.Logout(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("logout %s: %d", target, w.Code)
+		}
+		return w.Header().Get("Clear-Site-Data")
+	}
+
+	plain := call("https://dead.micutu.com/api/logout")
+	if strings.Contains(plain, "cookies") {
+		t.Fatalf("logout asked to clear cookies domain-wide: %q", plain)
+	}
+	if !strings.Contains(plain, "cache") || strings.Contains(plain, "storage") {
+		t.Fatalf("plain logout = %q, want cache only", plain)
+	}
+
+	token, _ = h.sess.create("alice", false)
+	wipe := call("https://dead.micutu.com/api/logout?wipe=1")
+	if strings.Contains(wipe, "cookies") {
+		t.Fatalf("panic wipe asked to clear cookies domain-wide: %q", wipe)
+	}
+	if !strings.Contains(wipe, "storage") {
+		t.Fatalf("panic wipe = %q, want storage included", wipe)
 	}
 }

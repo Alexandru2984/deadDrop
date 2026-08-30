@@ -1726,7 +1726,9 @@ class DeadDrop {
     if (this.el.msgInput) this.el.msgInput.value = '';
     this.roomCode = null;
     this.username = null;
-    try { await fetch('/api/logout', { method: 'POST' }); } catch { /* best effort */ }
+    // wipe=1 also asks the browser to drop cache and origin storage; a plain
+    // logout leaves those alone.
+    try { await fetch('/api/logout?wipe=1', { method: 'POST' }); } catch { /* best effort */ }
     location.replace(location.origin + '/');
   }
 
