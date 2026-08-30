@@ -55,6 +55,12 @@ func SecurityHeaders(next http.Handler) http.Handler {
 				// script-src/style-src alone still permit.
 				"script-src-attr 'none'; "+
 				"style-src-attr 'none'; "+
+				// Every render path builds DOM nodes and appends strings as text,
+				// so no code needs the innerHTML sink. Declaring no policy makes
+				// any future assignment to it a runtime error rather than a
+				// silently reintroduced XSS sink.
+				"require-trusted-types-for 'script'; "+
+				"trusted-types 'none'; "+
 				"form-action 'self'; "+
 				"frame-ancestors 'none'")
 		// HSTS — 2 years, preload-eligible.

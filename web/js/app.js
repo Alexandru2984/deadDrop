@@ -29,6 +29,29 @@ const MAX_SIGNAL_BYTES_PER_WINDOW = 1024 * 1024;
 const ALLOWED_TTLS = new Set([0, 10, 30, 60, 300]);
 const CURRENT_KDF_ITERATIONS = Number(DEFAULT_KDF.split(':')[1]);
 
+/**
+ * Build an element without ever handing a string to an HTML parser.
+ *
+ * `node.append()` inserts strings as text nodes, so nothing here can be talked
+ * into creating markup. Every render path below uses this instead of innerHTML,
+ * which is what lets the CSP refuse the innerHTML sink outright — see
+ * require-trusted-types-for in internal/middleware/headers.go.
+ */
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === undefined || value === null || value === false) continue;
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else node.setAttribute(key, value);
+  }
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    node.append(child);
+  }
+  return node;
+}
+
 function needsKdfUpgrade(kdf) {
   const match = /^pbkdf2:(\d+)$/.exec(kdf || '');
   return !match || Number(match[1]) < CURRENT_KDF_ITERATIONS;
@@ -544,12 +567,14 @@ class DeadDrop {
     const link = `${location.origin}/#join=${code}`;
     const el = document.createElement('div');
     el.className = 'msg system share-link';
-    el.innerHTML = '<span class="share-intro"></span><br>' +
-      '<span class="share-url"></span> <button class="btn btn-sm copy-link-btn"></button>';
-    el.querySelector('.share-intro').textContent = t('share.intro');
-    el.querySelector('.share-url').textContent = link;
-    const btn = el.querySelector('.copy-link-btn');
-    btn.textContent = t('share.copy');
+    const btn = h('button', { class: 'btn btn-sm copy-link-btn', text: t('share.copy') });
+    el.append(
+      h('span', { class: 'share-intro', text: t('share.intro') }),
+      h('br'),
+      h('span', { class: 'share-url', text: link }),
+      ' ',
+      btn,
+    );
     btn.addEventListener('click', () => {
       navigator.clipboard.writeText(link).then(() => {
         btn.textContent = t('share.copied');
@@ -1516,15 +1541,11 @@ class DeadDrop {
     el.className = `msg ${mine ? 'mine' : 'theirs'}`;
     if (burn) el.classList.add('burn');
 
-    let meta = '';
-    if (burn) meta += '<span class="burn-badge">🔥 BURN</span> ';
-    if (ttl > 0) meta += `<span class="countdown">${ttl}s</span>`;
-
-    el.innerHTML = `
-      ${this._senderTag(mine, sender)}
-      <div class="msg-text">${this._esc(text)}</div>
-      ${meta ? `<div class="msg-meta">${meta}</div>` : ''}
-    `;
+    el.append(
+      this._senderTag(mine, sender),
+      h('div', { class: 'msg-text', text: String(text) }),
+      this._metaRow(burn, ttl),
+    );
     this._applySenderColor(el, sender);
 
     this.el.messages.appendChild(el);
@@ -1549,32 +1570,35 @@ class DeadDrop {
     const key = this._messageKey(mine ? null : peerId, id);
     el.id = this._domMessageId(key);
 
-    let preview = '';
-    const escaped = this._esc(meta.fileName);
+    let preview;
     if (meta.fileType.startsWith('image/')) {
-      preview = `<img src="${blobUrl}" alt="${escaped}" class="file-preview-img" loading="lazy" />`;
+      preview = h('img', {
+        src: blobUrl, alt: meta.fileName, class: 'file-preview-img', loading: 'lazy',
+      });
     } else if (meta.fileType.startsWith('video/')) {
-      preview = `<video src="${blobUrl}" controls playsinline class="file-preview-video"></video>`;
+      preview = h('video', {
+        src: blobUrl, controls: '', playsinline: '', class: 'file-preview-video',
+      });
     } else if (meta.fileType.startsWith('audio/')) {
-      preview = `<audio src="${blobUrl}" controls class="file-preview-audio"></audio>`;
+      preview = h('audio', { src: blobUrl, controls: '', class: 'file-preview-audio' });
     } else {
-      preview = `<div class="file-generic"><span class="file-icon-lg">📄</span></div>`;
+      preview = h('div', { class: 'file-generic' },
+        h('span', { class: 'file-icon-lg', text: '📄' }));
     }
 
-    let badges = '';
-    if (burn) badges += '<span class="burn-badge">🔥 BURN</span> ';
-    if (ttl > 0) badges += `<span class="countdown">${ttl}s</span>`;
-
-    el.innerHTML = `
-      ${this._senderTag(mine, sender)}
-      <div class="file-content">${preview}</div>
-      <div class="file-details">
-        <span class="file-name">${escaped}</span>
-        <span class="file-size">${this._fmtSize(meta.fileSize)}</span>
-        <a href="${blobUrl}" download="${escaped}" class="file-download" title="Download">💾</a>
-      </div>
-      ${badges ? `<div class="msg-meta">${badges}</div>` : ''}
-    `;
+    el.append(
+      this._senderTag(mine, sender),
+      h('div', { class: 'file-content' }, preview),
+      h('div', { class: 'file-details' },
+        h('span', { class: 'file-name', text: meta.fileName }),
+        h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) }),
+        h('a', {
+          href: blobUrl, download: meta.fileName, class: 'file-download',
+          title: 'Download', text: '💾',
+        }),
+      ),
+      this._metaRow(burn, ttl),
+    );
     this._applySenderColor(el, sender);
 
     this.el.messages.appendChild(el);
@@ -1595,13 +1619,13 @@ class DeadDrop {
     const el = document.createElement('div');
     el.className = 'msg theirs file-msg';
     el.id = this._domMessageId(key);
-    el.innerHTML = `
-      <div class="file-receiving">
-        <span>📦 Receiving file…</span>
-        <div class="progress-bar"><div class="progress-fill"></div></div>
-        <span class="progress-text">0 / ${total}</span>
-      </div>
-    `;
+    el.append(
+      h('div', { class: 'file-receiving' },
+        h('span', { text: '📦 Receiving file…' }),
+        h('div', { class: 'progress-bar' }, h('div', { class: 'progress-fill' })),
+        h('span', { class: 'progress-text', text: `0 / ${total}` }),
+      ),
+    );
     this.el.messages.appendChild(el);
     this._pruneRenderedNodes();
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
@@ -1630,8 +1654,18 @@ class DeadDrop {
    * The color is applied afterwards via _applySenderColor (CSSOM), because an
    * inline style attribute would violate the strict CSP. */
   _senderTag(mine, sender) {
-    if (mine || !sender || this.peers.size < 2) return '';
-    return `<div class="msg-sender">${this._esc(sender.label)}</div>`;
+    if (mine || !sender || this.peers.size < 2) return null;
+    return h('div', { class: 'msg-sender', text: sender.label });
+  }
+
+  /** Burn badge and TTL countdown, or nothing when neither applies. */
+  _metaRow(burn, ttl) {
+    if (!burn && ttl <= 0) return null;
+    return h('div', { class: 'msg-meta' },
+      burn && h('span', { class: 'burn-badge', text: '🔥 BURN' }),
+      burn && ttl > 0 && ' ',
+      ttl > 0 && h('span', { class: 'countdown', text: `${ttl}s` }),
+    );
   }
 
   _applySenderColor(el, sender) {
@@ -1681,13 +1715,6 @@ class DeadDrop {
       this.el.copyBtn.textContent = '✓';
       setTimeout(() => (this.el.copyBtn.textContent = '📋'), 1500);
     });
-  }
-
-  _esc(s) {
-    const d = document.createElement('div');
-    d.textContent = s;
-    // innerHTML escapes <, >, & but NOT quotes — add those for attribute safety
-    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   _fmtSize(bytes) {
@@ -1770,7 +1797,7 @@ class DeadDrop {
   async _panicWipe() {
     // Tear down every trace locally, end the session, and reload to a clean screen.
     this._cleanup();
-    if (this.el.messages) this.el.messages.innerHTML = '';
+    if (this.el.messages) this.el.messages.replaceChildren();
     if (this.el.msgInput) this.el.msgInput.value = '';
     this.roomCode = null;
     this.username = null;

@@ -62,9 +62,9 @@ jobs:
       - name: Integrity manifest matches the served code
         run: node scripts/gen-integrity.mjs --check
 
-  # Live zero-knowledge login flow: the real web/js/srp.js against a running server.
+  # Live zero-knowledge login flow plus a real-browser run of the client.
   e2e:
-    name: Live SRP e2e
+    name: Live SRP e2e + browser smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +98,21 @@ jobs:
           DD_URL: http://127.0.0.1:8100
           DD_INVITE: ${{ steps.invite.outputs.code }}
         run: node test/srp.e2e.mjs
+
+      # Executes the real page in Chrome. The Go and Node suites never run the
+      # client, so only this catches a policy the browser refuses to honour —
+      # a CSP directive that blocks the app's own code, or a Trusted Types
+      # violation from an innerHTML assignment that crept back in.
+      - name: Mint a second invite for the browser run
+        id: uiinvite
+        run: echo "code=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Browser smoke test
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.uiinvite.outputs.code }}
+          DD_REQUIRE_BROWSER: '1'
+        run: node test/browser.smoke.mjs
 
       - name: Server log (on failure)
         if: failure()
