@@ -376,7 +376,61 @@ const (
 	maxInvites       = 100_000
 	maxInviteBatch   = 10_000
 	maxInviteFileLen = 8 << 20
+	defaultInviteTTL = 14 * 24 * time.Hour
 )
+
+// invite is one stored code. ExpiresAt is a Unix timestamp; zero means the code
+// never expires, which is what every code minted before expiry existed becomes.
+type invite struct {
+	Code      string `json:"code"`
+	ExpiresAt int64  `json:"exp,omitempty"`
+}
+
+func (i invite) expired(now time.Time) bool {
+	return i.ExpiresAt != 0 && now.Unix() > i.ExpiresAt
+}
+
+// inviteTTL is how long a freshly minted code stays usable. INVITE_TTL_DAYS
+// overrides it; 0 disables expiry for new codes.
+func inviteTTL() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("INVITE_TTL_DAYS"))
+	if raw == "" {
+		return defaultInviteTTL
+	}
+	days, err := strconv.Atoi(raw)
+	if err != nil || days < 0 || days > 3650 {
+		return defaultInviteTTL
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
+
+func newInviteExpiry(now time.Time) int64 {
+	ttl := inviteTTL()
+	if ttl == 0 {
+		return 0
+	}
+	return now.Add(ttl).Unix()
+}
+
+// UnmarshalJSON accepts both the current object form and the bare string the
+// store used before codes could expire, so invites already issued in production
+// keep working (as non-expiring) across the upgrade.
+func (i *invite) UnmarshalJSON(data []byte) error {
+	var code string
+	if err := json.Unmarshal(data, &code); err == nil {
+		i.Code, i.ExpiresAt = code, 0
+		return nil
+	}
+	var raw struct {
+		Code      string `json:"code"`
+		ExpiresAt int64  `json:"exp"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	i.Code, i.ExpiresAt = raw.Code, raw.ExpiresAt
+	return nil
+}
 
 // OpenRegistration reports whether registration is open to everyone (no invite).
 func OpenRegistration() bool { return os.Getenv("OPEN_REGISTRATION") == "1" }
@@ -444,7 +498,7 @@ func ParseInviteCodes(raw []byte) []string {
 	return out
 }
 
-func (iv *invites) load(root *os.Root, name string) ([]string, error) {
+func (iv *invites) load(root *os.Root, name string) ([]invite, error) {
 	pathInfo, err := root.Lstat(name)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -477,7 +531,7 @@ func (iv *invites) load(root *os.Root, name string) ([]string, error) {
 	if _, err := io.ReadFull(f, data); err != nil {
 		return nil, err
 	}
-	var codes []string
+	var codes []invite
 	if err := json.Unmarshal(data, &codes); err != nil {
 		return nil, err
 	}
@@ -485,20 +539,26 @@ func (iv *invites) load(root *os.Root, name string) ([]string, error) {
 		return nil, errors.New("invite store exceeds code limit")
 	}
 	seen := make(map[string]struct{}, len(codes))
-	for _, code := range codes {
-		if !validInviteCode(code) {
+	live := make([]invite, 0, len(codes))
+	now := time.Now()
+	for _, entry := range codes {
+		if !validInviteCode(entry.Code) {
 			return nil, errors.New("invite store contains an invalid code")
 		}
-		normalized := strings.ToUpper(strings.TrimSpace(code))
+		normalized := strings.ToUpper(strings.TrimSpace(entry.Code))
 		if _, duplicate := seen[normalized]; duplicate {
 			return nil, errors.New("invite store contains a duplicate code")
 		}
 		seen[normalized] = struct{}{}
+		if entry.expired(now) {
+			continue // pruned here, persisted on the next save under the same lock
+		}
+		live = append(live, entry)
 	}
-	return codes, nil
+	return live, nil
 }
 
-func (iv *invites) save(root *os.Root, name string, codes []string) error {
+func (iv *invites) save(root *os.Root, name string, codes []invite) error {
 	if len(codes) > maxInvites {
 		return errors.New("invite store exceeds code limit")
 	}
@@ -546,9 +606,9 @@ func (iv *invites) consume(code string) (consumed bool, err error) {
 		if loadErr != nil {
 			return loadErr
 		}
-		for i, c := range codes {
-			if subtleEqual(strings.ToUpper(c), code) {
-				next := append(append([]string(nil), codes[:i]...), codes[i+1:]...)
+		for i, entry := range codes {
+			if subtleEqual(strings.ToUpper(entry.Code), code) {
+				next := append(append([]invite(nil), codes[:i]...), codes[i+1:]...)
 				if saveErr := iv.save(root, name, next); saveErr != nil {
 					return saveErr
 				}
@@ -573,11 +633,13 @@ func (iv *invites) restore(code string) error {
 			return err
 		}
 		for _, existing := range codes {
-			if subtleEqual(strings.ToUpper(existing), code) {
+			if subtleEqual(strings.ToUpper(existing.Code), code) {
 				return nil
 			}
 		}
-		codes = append(codes, code)
+		// A restored code keeps a fresh window: the registration it was consumed
+		// for failed, so the invite is effectively unused again.
+		codes = append(codes, invite{Code: code, ExpiresAt: newInviteExpiry(time.Now())})
 		return iv.save(root, name, codes)
 	})
 }
@@ -591,12 +653,18 @@ func (iv *invites) Generate() (string, error) {
 	return codes[0], nil
 }
 
-// list returns the current unused codes (a copy is fine; caller only reads).
+// list returns the current unused, unexpired codes.
 func (iv *invites) list() (codes []string, err error) {
 	err = iv.withLock(func(root *os.Root, name string) error {
-		var loadErr error
-		codes, loadErr = iv.load(root, name)
-		return loadErr
+		entries, loadErr := iv.load(root, name)
+		if loadErr != nil {
+			return loadErr
+		}
+		codes = make([]string, 0, len(entries))
+		for _, entry := range entries {
+			codes = append(codes, entry.Code)
+		}
+		return nil
 	})
 	return codes, err
 }
@@ -617,9 +685,10 @@ func (iv *invites) generateN(n int) ([]string, error) {
 			return errors.New("invite store exceeds code limit")
 		}
 		seen := make(map[string]bool, len(codes)+n)
-		for _, c := range codes {
-			seen[strings.ToUpper(c)] = true
+		for _, entry := range codes {
+			seen[strings.ToUpper(entry.Code)] = true
 		}
+		expiry := newInviteExpiry(time.Now())
 		for len(minted) < n {
 			code, err := newInviteCode()
 			if err != nil {
@@ -629,7 +698,7 @@ func (iv *invites) generateN(n int) ([]string, error) {
 				continue // astronomically unlikely, but never emit a dup
 			}
 			seen[strings.ToUpper(code)] = true
-			codes = append(codes, code)
+			codes = append(codes, invite{Code: code, ExpiresAt: expiry})
 			minted = append(minted, code)
 		}
 		return iv.save(root, name, codes)
@@ -649,9 +718,10 @@ func (iv *invites) importCodes(in []string) (added, skipped int, err error) {
 			return loadErr
 		}
 		seen := make(map[string]bool, len(codes)+len(in))
-		for _, c := range codes {
-			seen[strings.ToUpper(strings.TrimSpace(c))] = true
+		for _, entry := range codes {
+			seen[strings.ToUpper(strings.TrimSpace(entry.Code))] = true
 		}
+		expiry := newInviteExpiry(time.Now())
 		for _, raw := range in {
 			code := strings.ToUpper(strings.TrimSpace(raw))
 			if !validInviteCode(code) || seen[code] || len(codes) >= maxInvites {
@@ -659,7 +729,7 @@ func (iv *invites) importCodes(in []string) (added, skipped int, err error) {
 				continue
 			}
 			seen[code] = true
-			codes = append(codes, code)
+			codes = append(codes, invite{Code: code, ExpiresAt: expiry})
 			added++
 		}
 		if added > 0 {

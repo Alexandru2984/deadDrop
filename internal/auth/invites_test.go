@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestGenerateInvitesBulk(t *testing.T) {
@@ -188,5 +189,96 @@ func TestInviteRestoreIsIdempotent(t *testing.T) {
 	}
 	if len(codes) != 1 || codes[0] != code {
 		t.Fatalf("idempotent restore produced %v", codes)
+	}
+}
+
+// Codes minted before expiry existed are stored as bare strings. They must keep
+// working across the upgrade rather than locking an operator out of their own
+// invite store.
+func TestInviteStoreReadsLegacyStringFormat(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `["DD-ABCD-EFGH-JKMN","DD-2345-6789-ABCD-EFGH-JKMN"]`
+	if err := os.WriteFile(filepath.Join(dir, "invites.json"), []byte(legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	iv := newInvites(dir)
+
+	codes, err := iv.list()
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(codes) != 2 {
+		t.Fatalf("read %d legacy codes, want 2", len(codes))
+	}
+	consumed, err := iv.consume("DD-ABCD-EFGH-JKMN")
+	if err != nil || !consumed {
+		t.Fatalf("a legacy code was not consumable: consumed=%v err=%v", consumed, err)
+	}
+}
+
+func TestInvitesExpire(t *testing.T) {
+	t.Setenv("INVITE_TTL_DAYS", "1")
+	dir := t.TempDir()
+	iv := newInvites(dir)
+
+	code, err := iv.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Age it past its window by rewriting the stored expiry.
+	err = iv.withLock(func(root *os.Root, name string) error {
+		entries, loadErr := iv.load(root, name)
+		if loadErr != nil {
+			return loadErr
+		}
+		if len(entries) != 1 {
+			t.Fatalf("expected 1 stored invite, got %d", len(entries))
+		}
+		if entries[0].ExpiresAt == 0 {
+			t.Fatal("a freshly minted code was stored as never-expiring")
+		}
+		entries[0].ExpiresAt = time.Now().Add(-time.Minute).Unix()
+		return iv.save(root, name, entries)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	consumed, err := iv.consume(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consumed {
+		t.Fatal("an expired invite was accepted")
+	}
+	codes, err := iv.list()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(codes) != 0 {
+		t.Fatalf("expired invite still listed: %v", codes)
+	}
+}
+
+func TestInviteTTLCanBeDisabled(t *testing.T) {
+	t.Setenv("INVITE_TTL_DAYS", "0")
+	dir := t.TempDir()
+	iv := newInvites(dir)
+	if _, err := iv.Generate(); err != nil {
+		t.Fatal(err)
+	}
+	err := iv.withLock(func(root *os.Root, name string) error {
+		entries, loadErr := iv.load(root, name)
+		if loadErr != nil {
+			return loadErr
+		}
+		if entries[0].ExpiresAt != 0 {
+			t.Fatalf("INVITE_TTL_DAYS=0 still set an expiry: %d", entries[0].ExpiresAt)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

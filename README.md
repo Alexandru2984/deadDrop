@@ -87,7 +87,8 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   idle, or 12 hours absolute. A primary password change closes every session for
   the account and rotates the changing browser's own token.
 - The server persists handles, SRP salts/verifiers/KDF labels, optional duress
-  verifiers, invites, and one local anti-enumeration secret. It does not persist
+  verifiers, invites (single-use, expiring after 14 days by default), and one
+  local anti-enumeration secret. It does not persist
   rooms, peer IDs, chat messages, files, calls, or session cookies across restart.
 - Messages/files exist in browser memory and may be downloaded. TTL, burn, and
   bilateral-delete notices are cooperative UI behavior; a peer, extension,

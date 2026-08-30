@@ -1,5 +1,8 @@
-# Go binaries
+# Go binaries. The glob matters: deploy and rollback steps produce siblings
+# like deaddrop.rollback or deaddrop.new, and a bare /deaddrop would let a
+# 10 MB build artefact ride into a commit unnoticed.
 /deaddrop
+/deaddrop.*
 /server
 *.exe
 *.exe~

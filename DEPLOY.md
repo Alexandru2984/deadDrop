@@ -145,6 +145,11 @@ Accounts use SRP-6a: login sends proofs, never the password. No endpoint accepts
 a password, so neither the origin nor Cloudflare ever sees one. Registration
 requires a single-use invite code by default.
 
+Codes expire 14 days after they are minted. `INVITE_TTL_DAYS` overrides the
+window; `0` disables expiry. Codes issued before expiry existed are stored in the
+older bare-string form and are read as never-expiring, so nothing already handed
+out stops working. Expired codes are pruned the next time the store is written.
+
 Mint invites from the CLI (codes go to stdout, status to stderr, so they pipe cleanly):
 
 ```bash
