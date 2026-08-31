@@ -271,7 +271,22 @@ const shareRendered = await sessionEval(`
 `);
 ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder');
 
-// Trusted Types must actually be enforced: innerHTML has to throw.
+// Assert the clean-run properties BEFORE deliberately tripping Trusted Types
+// below, so the probe's own violation cannot be mistaken for one from the app.
+ok(pageErrors.length === 0, `no uncaught page exceptions${pageErrors.length ? ': ' + pageErrors[0] : ''}`);
+
+const distinctViolations = [...new Set(cspViolations)];
+ok(distinctViolations.length === 0,
+  `no CSP, Permissions-Policy or Trusted Types violations${
+    distinctViolations.length ? ':\n      - ' + distinctViolations.join('\n      - ') : ''}`);
+
+const realConsoleErrors = consoleErrors.filter((e) => !/favicon|ERR_/.test(e));
+ok(realConsoleErrors.length === 0,
+  `no console errors${realConsoleErrors.length ? ': ' + realConsoleErrors[0] : ''}`);
+
+// Last, because it is expected to violate: the whole point is that the browser
+// refuses this. If the policy ever stops being enforced, the sink silently comes
+// back and every render path becomes an injection candidate again.
 const ttEnforced = await sessionEval(`
   (() => {
     if (!window.trustedTypes) return 'unsupported';
@@ -284,16 +299,6 @@ const ttEnforced = await sessionEval(`
   })()
 `);
 ok(ttEnforced === 'blocked', `innerHTML is refused by Trusted Types (${ttEnforced})`);
-
-ok(pageErrors.length === 0, `no uncaught page exceptions${pageErrors.length ? ': ' + pageErrors[0] : ''}`);
-const distinctViolations = [...new Set(cspViolations)];
-ok(distinctViolations.length === 0,
-  `no CSP, Permissions-Policy or Trusted Types violations${
-    distinctViolations.length ? ':\n      - ' + distinctViolations.join('\n      - ') : ''}`);
-
-const realConsoleErrors = consoleErrors.filter((e) => !/favicon|ERR_/.test(e));
-ok(realConsoleErrors.length === 0,
-  `no console errors${realConsoleErrors.length ? ': ' + realConsoleErrors[0] : ''}`);
 
 browser.close();
 cleanup();
