@@ -196,6 +196,84 @@ class Peer {
     `);
   }
 
+  /**
+   * Send a file the way the UI does: put a real File on the hidden input and
+   * fire change. Reaching past it into the transfer manager would skip the
+   * size-binding checks that run on the way in.
+   */
+  async sendFile(name, contents, type = 'text/plain') {
+    return this.eval(`
+      (() => {
+        const input = document.querySelector('#file-input');
+        const dt = new DataTransfer();
+        dt.items.add(new File([${JSON.stringify(contents)}], ${JSON.stringify(name)},
+          { type: ${JSON.stringify(type)} }));
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()
+    `);
+  }
+
+  /** Filenames, sizes and download hrefs of received file messages. */
+  receivedFiles() {
+    return this.eval(`
+      [...document.querySelectorAll('.file-msg')].map((el) => ({
+        name: el.querySelector('.file-name')?.textContent || null,
+        size: el.querySelector('.file-size')?.textContent || null,
+        href: el.querySelector('.file-download')?.getAttribute('href') || null,
+        hasImage: !!el.querySelector('.file-preview-img'),
+      }))
+    `);
+  }
+
+  /**
+   * Decode a received image preview.
+   *
+   * The blob cannot be read back with fetch(): connect-src is 'self' and does
+   * not admit blob:, which is correct — the app only ever uses these URLs as a
+   * src or href. Letting the browser decode the image proves the bytes survived
+   * chunking, encryption and reassembly just as well, without loosening the
+   * policy for a test.
+   */
+  decodedImageSize() {
+    return this.eval(`
+      (async () => {
+        const img = document.querySelector('#messages .file-preview-img');
+        if (!img) return null;
+        if (!img.complete) {
+          await new Promise((r) => { img.onload = r; img.onerror = r; });
+        }
+        return img.naturalWidth + 'x' + img.naturalHeight;
+      })()
+    `);
+  }
+
+  /** Draw a PNG of known dimensions and hand it to the attach input. */
+  async sendGeneratedImage(width, height, name = 'proof.png') {
+    return this.eval(`
+      (async () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = ${width}; canvas.height = ${height};
+        const ctx = canvas.getContext('2d');
+        // Noise, so the encoded bytes are not a trivially compressible constant.
+        const img = ctx.createImageData(${width}, ${height});
+        for (let i = 0; i < img.data.length; i += 4) {
+          img.data[i] = (i * 7) % 251; img.data[i + 1] = (i * 13) % 241;
+          img.data[i + 2] = (i * 29) % 239; img.data[i + 3] = 255;
+        }
+        ctx.putImageData(img, 0, 0);
+        const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+        const input = document.querySelector('#file-input');
+        const dt = new DataTransfer();
+        dt.items.add(new File([blob], ${JSON.stringify(name)}, { type: 'image/png' }));
+        input.files = dt.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return blob.size;
+      })()
+    `);
+  }
+
   transcript() {
     return this.eval(`
       [...document.querySelectorAll('.msg-text')].map((n) => n.textContent).join('\\n')
@@ -309,6 +387,47 @@ await alice.eval(`
 `);
 ok(await waitFor(async () => (await bob.transcript()).includes(secret)),
   'a message sent by A is decrypted by B');
+
+// ── Files ──
+// filetransfer.js chunks, reassembles and re-checks the declared size against
+// both the ciphertext and the plaintext. None of that had ever run against a
+// real peer.
+const fileBody = 'dead drop file payload ' + suffix + '\n' + 'x'.repeat(120 * 1024);
+ok(await alice.sendFile('notes.txt', fileBody), 'peer A attaches a file');
+
+const received = await waitFor(async () => {
+  const files = await bob.receivedFiles();
+  const match = files.find((f) => f.name === 'notes.txt');
+  return match || false;
+}, { timeout: 40000 });
+ok(received, 'peer B receives the file and renders it');
+
+// Both ends format the size from the same declared length, so a mismatch means
+// the metadata and the payload disagreed somewhere in between.
+const sentFile = (await alice.receivedFiles()).find((f) => f.name === 'notes.txt');
+ok(received && sentFile && received.size === sentFile.size,
+  `the received size matches what the sender showed (${received?.size} / ${sentFile?.size})`);
+ok(received && received.href && received.href.startsWith('blob:'),
+  'the download link points at a locally created blob, not the network');
+
+// An image that decodes to its original dimensions could not have survived a
+// corrupted chunk, a short read, or a mis-sliced reassembly.
+const pngBytes = await alice.sendGeneratedImage(64, 48);
+ok(pngBytes > 0, 'peer A sends a generated PNG');
+ok(await waitFor(async () => (await bob.decodedImageSize()) === '64x48', { timeout: 40000 }),
+  'the received image decodes at its original dimensions');
+
+// The name is peer-controlled text and reaches the DOM. Under Trusted Types a
+// markup-shaped name must arrive as literal characters, not as elements.
+const nastyName = '<img src=x onerror=alert(1)>.txt';
+ok(await alice.sendFile(nastyName, 'small'), 'peer A sends a file with a markup-shaped name');
+const nasty = await waitFor(async () => {
+  const files = await bob.receivedFiles();
+  return files.find((f) => f.name === nastyName) || false;
+}, { timeout: 30000 });
+ok(nasty, 'the hostile filename arrives as text, not markup');
+ok(await bob.eval(`!document.querySelector('#messages img[src="x"]')`),
+  'no element was created from the filename');
 
 // ── Second session: a saved contact must not need a new comparison ──
 // Fresh pages in the same browser contexts, so cookies and the pinned identity

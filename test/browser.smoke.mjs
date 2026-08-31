@@ -28,6 +28,7 @@ const PASS = 'browser-smoke-passphrase-77';
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
+  `${process.env.HOME}/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell`,
   `${process.env.HOME}/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`,
   '/usr/bin/chromium',
   '/usr/bin/chromium-browser',
