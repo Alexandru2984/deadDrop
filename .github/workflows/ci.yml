@@ -115,7 +115,19 @@ jobs:
           DD_URL: http://127.0.0.1:8100
           DD_INVITE: ${{ steps.uiinvite.outputs.code }}
           DD_REQUIRE_BROWSER: '1'
+          DD_SCREENSHOT_DIR: screenshots
         run: node test/browser.smoke.mjs
+
+      # The layout assertions prove the page is usable on a phone; these show
+      # what it actually looks like, which no assertion can.
+      - name: Upload mobile screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-screenshots
+          path: screenshots/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Server log (on failure)
         if: failure()

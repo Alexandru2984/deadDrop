@@ -14,11 +14,14 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
+// When set, each emulated viewport is also captured to a PNG. CI uploads the
+// directory so the mobile layout can be reviewed as rendered, not imagined.
+const SHOT_DIR = process.env.DD_SCREENSHOT_DIR || '';
 const INVITE = process.env.DD_INVITE || '';
 const USER = 'zz_ui_' + Math.floor(Math.random() * 1e6);
 const PASS = 'browser-smoke-passphrase-77';
@@ -368,6 +371,31 @@ for (const vp of VIEWPORTS) {
       };
     })()
   `);
+
+  if (SHOT_DIR) {
+    mkdirSync(SHOT_DIR, { recursive: true });
+    for (const [view, prep] of [
+      ['chat', `true`],
+      ['landing', `document.querySelector('#chat-wrap').classList.add('hidden');
+                  document.querySelector('#landing').classList.remove('hidden'); true`],
+      ['auth', `document.querySelector('#landing').classList.add('hidden');
+                document.querySelector('#auth').classList.remove('hidden'); true`],
+    ]) {
+      await sessionEval(prep);
+      await sleep(150);
+      const shot = await sessionSend('Page.captureScreenshot', { format: 'png' });
+      const slug = vp.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      writeFileSync(join(SHOT_DIR, `${slug}-${vp.width}-${view}.png`),
+        Buffer.from(shot.data, 'base64'));
+    }
+    // Put the chat view back so the measurements below match what was asserted.
+    await sessionEval(`
+      document.querySelector('#auth').classList.add('hidden');
+      document.querySelector('#landing').classList.add('hidden');
+      document.querySelector('#chat-wrap').classList.remove('hidden'); true
+    `);
+    await sleep(150);
+  }
 
   const label = `${vp.name} (${vp.width}px)`;
   ok(report.coarse, `${label}: the run really is emulating a touch pointer`);
