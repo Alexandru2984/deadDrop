@@ -301,6 +301,10 @@ class DeadDrop {
       if (res.ok) {
         const data = await res.json();
         this.username = data.username;
+        // A returning visitor lands here rather than in _afterAuth, so without
+        // this the identity stays unloaded and every saved contact is silently
+        // forgotten on reload — the exact case the feature exists for.
+        await this._restoreIdentity().catch(() => {});
         this._showPage('landing');
       } else {
         this._showPage('auth');
@@ -979,6 +983,7 @@ class DeadDrop {
     s.identityFp = fp;
     const known = await findContact(fp);
     if (!known) {
+      this._maybeSaveContact(peerId); // the user may have already confirmed
       this._refreshRoomState();
       return;
     }
@@ -1005,11 +1010,26 @@ class DeadDrop {
       this._renderSystem(`✓ ${s.label} ${t('sys.waitPeerVerify')}`);
       this._refreshRoomState();
     }
-    // Only offer to remember a peer that actually presented an identity, and
-    // only when this browser has one of its own to be recognised by in return.
-    if (this.identity && s.identityFp && !s.knownContact && !verifiedByQR) {
-      this._offerToSaveContact(peerId, s);
+    if (!verifiedByQR) {
+      s.manuallyVerified = true;
+      this._maybeSaveContact(peerId);
     }
+  }
+
+  /**
+   * Offer to remember a peer once both halves are in place: the human compared
+   * the safety code, and the peer proved possession of an identity to attach
+   * that trust to. Either can land first — the proof arrives over the encrypted
+   * channel just after the handshake, which may be before or after the click —
+   * so both paths call this.
+   */
+  _maybeSaveContact(peerId) {
+    const s = this.peers.get(peerId);
+    if (!s || !this.identity) return;
+    if (!s.identityFp || s.knownContact || s.saveOffered) return;
+    if (!s.manuallyVerified) return;
+    s.saveOffered = true;
+    this._offerToSaveContact(peerId, s);
   }
 
   _offerToSaveContact(peerId, s) {

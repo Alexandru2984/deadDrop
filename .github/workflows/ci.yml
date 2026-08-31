@@ -120,6 +120,24 @@ jobs:
 
       # The layout assertions prove the page is usable on a phone; these show
       # what it actually looks like, which no assertion can.
+      # Two isolated browser contexts, one real WebRTC session between them.
+      # Nothing else covers the path that actually matters: a handshake over the
+      # wire, a safety code both sides compare, and a saved contact recognised
+      # on a later session without comparing anything again.
+      - name: Mint invites for the two-peer run
+        id: pairinvites
+        run: |
+          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Two-peer end-to-end test
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.pairinvites.outputs.a }}
+          DD_INVITE2: ${{ steps.pairinvites.outputs.b }}
+          DD_REQUIRE_BROWSER: '1'
+        run: node test/browser.pair.mjs
+
       - name: Upload mobile screenshots
         if: always()
         uses: actions/upload-artifact@v4
