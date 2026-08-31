@@ -1023,9 +1023,13 @@ select { cursor: pointer; width: auto; }
     font-size: 11px;
   }
   .controls { flex-wrap: wrap; }
+  /* Let the icon buttons size themselves: on a touch device they are 44px
+     wide, and pinning the columns at 32px left them overflowing their cells
+     with a gap before the message field. */
   .input-row {
     display: grid;
-    grid-template-columns: 32px 32px minmax(0, 1fr) auto;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    gap: 6px;
   }
   .call-controls {
     gap: 8px;
