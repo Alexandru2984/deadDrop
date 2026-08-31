@@ -287,6 +287,59 @@ const shareRendered = await sessionEval(`
 `);
 ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder');
 
+/* ── Saved contacts (opt-in identity) ──
+ * The privacy claim is that nothing long-lived exists unless the user asks for
+ * it. That is only true if the default really does store nothing, so check the
+ * database rather than the checkbox.
+ */
+const identityStored = async () => sessionEval(`
+  (async () => {
+    const dbs = await indexedDB.databases();
+    if (!dbs.some((d) => d.name === 'deaddrop-identity')) return false;
+    return await new Promise((resolve) => {
+      const req = indexedDB.open('deaddrop-identity');
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('identity')) { db.close(); resolve(false); return; }
+        const get = db.transaction('identity', 'readonly').objectStore('identity').get('self');
+        get.onsuccess = () => { const v = get.result; db.close(); resolve(!!(v && v.privateKey)); };
+        get.onerror = () => { db.close(); resolve(false); };
+      };
+      req.onerror = () => resolve(false);
+    });
+  })()
+`);
+
+await sessionEval(`document.querySelector('#settings-btn').click(); true`);
+await sleep(200);
+
+ok(await identityStored() === false,
+  'no identity key exists until the user opts in');
+ok(await sessionEval(`document.querySelector('#contacts-toggle').checked`) === false,
+  'saved contacts default to off');
+
+await sessionEval(`
+  const box = document.querySelector('#contacts-toggle');
+  box.checked = true;
+  box.dispatchEvent(new Event('change'));
+  true
+`);
+await waitFor(async () => identityStored(), { timeout: 8000 });
+ok(await identityStored() === true, 'opting in mints and stores an identity key');
+
+// The private half must not be readable, or storing it buys nothing.
+const extractable = await sessionEval(`
+  (async () => {
+    const req = indexedDB.open('deaddrop-identity');
+    const db = await new Promise((r) => { req.onsuccess = () => r(req.result); });
+    const get = db.transaction('identity', 'readonly').objectStore('identity').get('self');
+    const rec = await new Promise((r) => { get.onsuccess = () => r(get.result); });
+    db.close();
+    return rec.privateKey.extractable;
+  })()
+`);
+ok(extractable === false, 'the stored private key is non-extractable');
+
 /* ── Mobile layout ──
  * "Looks fine on a phone" is not checkable by reading CSS, but the failures that
  * actually ruin a mobile UI are measurable: a page that scrolls sideways, a

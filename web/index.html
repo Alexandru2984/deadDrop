@@ -8,7 +8,7 @@
   <meta name="referrer" content="no-referrer" />
   <meta name="robots" content="noindex, nofollow, noarchive" />
   <title>💀 Dead Drop</title>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-DI9+KsqOzCl+QfYIL4bKoAAPomPvf2oMJBQECwDR0xI=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-lT9owl+jn2w2Ve4m0rxOzFZV5kG5B5QZ9xBmkD4LJPQ=" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icon.svg" />
@@ -64,6 +64,13 @@
       </div>
       <p class="account-hint" data-i18n="duress.hint">Optional: a second password that also logs in (to a decoy).</p>
       <p class="account-hint" data-i18n="account.reauthHint">Both actions re-check your current password, so an open session alone cannot change or destroy the account.</p>
+
+      <label class="relay-toggle contacts-toggle">
+        <input id="contacts-toggle" type="checkbox" />
+        <span><span data-i18n="contacts.label">🔖 Saved contacts</span>
+          <small data-i18n="contacts.sub">— verify a person once instead of every session; they can tell your sessions apart</small></span>
+      </label>
+      <div id="contacts-list" class="contacts-list"></div>
     </div>
 
     <div class="logo">💀</div>
@@ -205,6 +212,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-V0Lpn8HisLEt8lJnJFETyVoyOveuTO098wIqL6+dTIk="></script>
+  <script type="module" src="js/app.js" integrity="sha256-H3IRMOQ2sjSxVJ7Rw9JtUaJt+LYuV83BMaq6BvAszqI="></script>
 </body>
 </html>

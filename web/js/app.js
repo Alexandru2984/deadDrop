@@ -13,6 +13,10 @@ import {
   assertFileSizeBinding,
 } from './filetransfer.js';
 import { register as srpRegister, ClientLogin, DEFAULT_KDF } from './srp.js';
+import {
+  loadIdentity, ensureIdentity, clearIdentity,
+  pinContact, findContact, forgetContact, listContacts,
+} from './identity.js';
 import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig } from './util.js';
@@ -67,6 +71,9 @@ class DeadDrop {
     // its own CryptoLayer (hybrid handshake, SAS, epochs). There is no group key;
     // every message is encrypted separately for each peer.
     this.peers = new Map(); // peerId → { conn, crypto, encrypted, sas, verified, label, color }
+    // Opt-in saved contacts. Null until the user turns the feature on; while it
+    // is null nothing long-lived is generated or presented to any peer.
+    this.identity = null;
     this.msgMgr = null;
     this.fileMgr = new FileTransferManager();
     this.encrypted = false; // true when ≥1 pairwise session is encrypted and SAS-verified
@@ -142,6 +149,8 @@ class DeadDrop {
       settingsBtn:  $('#settings-btn'),
       accountPanel: $('#account-panel'),
       currentPass:  $('#current-pass'),
+      contactsToggle: $('#contacts-toggle'),
+      contactsList: $('#contacts-list'),
       duressPass:   $('#duress-pass'),
       setDuressBtn: $('#set-duress-btn'),
       delAccountBtn:$('#del-account-btn'),
@@ -203,7 +212,11 @@ class DeadDrop {
     this.el.registerBtn.addEventListener('click', () => this._register());
     this.el.langBtn.addEventListener('click', () => setLang(getLang() === 'ro' ? 'en' : 'ro'));
     this.el.logoutBtn.addEventListener('click', () => this._logout());
-    this.el.settingsBtn.addEventListener('click', () => this.el.accountPanel.classList.toggle('hidden'));
+    this.el.settingsBtn.addEventListener('click', () => {
+      this.el.accountPanel.classList.toggle('hidden');
+      if (!this.el.accountPanel.classList.contains('hidden')) this._renderContacts();
+    });
+    this.el.contactsToggle.addEventListener('change', (e) => this._setContactsEnabled(e.target.checked));
     this.el.setDuressBtn.addEventListener('click', () => this._setDuress());
     this.el.delAccountBtn.addEventListener('click', () => this._deleteAccount());
     // Room
@@ -400,6 +413,7 @@ class DeadDrop {
     this.el.authInvite.value = '';
     this.el.currentPass.value = '';
     this.el.accountPanel.classList.add('hidden');
+    this._restoreIdentity().catch(() => {});
     this._showPage('landing');
   }
 
@@ -765,6 +779,7 @@ class DeadDrop {
       (m) => this._onPeerMessage(peerId, m),
       (state, sas) => this._onConnState(peerId, state, sas),
       { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly },
+      this.identity,
     );
     conn.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
     s = {
@@ -878,6 +893,9 @@ class DeadDrop {
         this._renderSystem(`⚠️ ${s.label} ${t('sys.awaitVerify')}`);
         this._refreshRoomState();
         break;
+      case 'identity-proved':
+        this._onIdentityProved(peerId, sas); // `sas` carries the fingerprint here
+        break;
       case 'media-verified':
         // Transport binding alone is insufficient; the human SAS gate remains.
         this._refreshRoomState();
@@ -946,6 +964,32 @@ class DeadDrop {
     }
   }
 
+  /**
+   * The peer proved possession of a long-term identity.
+   *
+   * A pin is only ever created after a human compared the safety code, and the
+   * proof is bound to this session, so recognising the fingerprint is enough to
+   * skip the comparison — that is the entire point of saving a contact. An
+   * unknown fingerprint changes nothing: the session stays locked until the
+   * codes are compared, exactly as before.
+   */
+  async _onIdentityProved(peerId, fp) {
+    const s = this.peers.get(peerId);
+    if (!s || !fp) return;
+    s.identityFp = fp;
+    const known = await findContact(fp);
+    if (!known) {
+      this._refreshRoomState();
+      return;
+    }
+    s.knownContact = known;
+    s.label = known.label || s.label;
+    this._renderSystem(`🔖 ${s.label} ${t('contact.recognised')}`);
+    // Unlock without a fresh comparison. The peer does the same on its side, so
+    // two saved contacts connect straight through.
+    this._markVerified(peerId, true);
+  }
+
   _markVerified(peerId, verifiedByQR = false) {
     const s = this.peers.get(peerId);
     if (!s || !s.encrypted) return;
@@ -961,6 +1005,24 @@ class DeadDrop {
       this._renderSystem(`✓ ${s.label} ${t('sys.waitPeerVerify')}`);
       this._refreshRoomState();
     }
+    // Only offer to remember a peer that actually presented an identity, and
+    // only when this browser has one of its own to be recognised by in return.
+    if (this.identity && s.identityFp && !s.knownContact && !verifiedByQR) {
+      this._offerToSaveContact(peerId, s);
+    }
+  }
+
+  _offerToSaveContact(peerId, s) {
+    const label = window.prompt(t('contact.savePrompt'), s.label);
+    if (label === null) return;
+    pinContact(s.identityFp, label.trim() || s.label)
+      .then(() => {
+        s.knownContact = { fingerprint: s.identityFp, label };
+        s.label = label.trim() || s.label;
+        this._renderSystem(`🔖 ${s.label} ${t('contact.saved')}`);
+        this._refreshRoomState();
+      })
+      .catch(() => this._renderSystem(t('contact.saveFailed')));
   }
 
   /* ── QR safety-code verification ──
@@ -1794,9 +1856,73 @@ class DeadDrop {
     if (this._escTimes.length >= 3) { this._escTimes = []; this._panicWipe(); }
   }
 
+  /**
+   * Turning this on mints the long-term key; turning it off destroys it along
+   * with every pin. There is no in-between state: while the feature is off this
+   * browser presents nothing that outlives a session.
+   */
+  async _setContactsEnabled(enabled) {
+    if (enabled) {
+      try {
+        this.identity = await ensureIdentity();
+      } catch {
+        this.el.contactsToggle.checked = false;
+        this._renderContacts();
+        return;
+      }
+    } else {
+      if (!window.confirm(t('contacts.confirmOff'))) {
+        this.el.contactsToggle.checked = true;
+        return;
+      }
+      await clearIdentity().catch(() => {});
+      this.identity = null;
+    }
+    this._renderContacts();
+  }
+
+  async _restoreIdentity() {
+    this.identity = await loadIdentity().catch(() => null);
+    this.el.contactsToggle.checked = !!this.identity;
+    this._renderContacts();
+  }
+
+  async _renderContacts() {
+    const box = this.el.contactsList;
+    if (!box) return;
+    box.replaceChildren();
+    const status = h('p', {
+      class: 'account-hint',
+      text: this.identity ? t('contacts.on') : t('contacts.off'),
+    });
+    box.append(status);
+    if (!this.identity) return;
+
+    const saved = await listContacts().catch(() => []);
+    if (saved.length === 0) {
+      box.append(h('p', { class: 'account-hint', text: t('contacts.none') }));
+      return;
+    }
+    for (const contact of saved) {
+      const forget = h('button', { class: 'btn btn-sm', text: t('contacts.forget') });
+      forget.addEventListener('click', async () => {
+        await forgetContact(contact.fingerprint);
+        this._renderContacts();
+      });
+      box.append(h('div', { class: 'contact-row' },
+        h('span', { class: 'contact-name', text: contact.label || '—' }),
+        h('code', { class: 'contact-fp', text: contact.fingerprint.slice(0, 16) }),
+        forget,
+      ));
+    }
+  }
+
   async _panicWipe() {
     // Tear down every trace locally, end the session, and reload to a clean screen.
     this._cleanup();
+    // The identity and its pinned contacts are the only things this app keeps
+    // across sessions, so a panic wipe has to take them too.
+    await clearIdentity().catch(() => {});
     if (this.el.messages) this.el.messages.replaceChildren();
     if (this.el.msgInput) this.el.msgInput.value = '';
     this.roomCode = null;
