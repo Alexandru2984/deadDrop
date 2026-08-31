@@ -192,6 +192,14 @@ select {
   letter-spacing: 2px;
   margin-bottom: 20px;
   text-align: center;
+  /* Three separator-joined words: let the browser even the lines rather than
+     dropping a single trailing word onto its own row on a narrow screen. */
+  text-wrap: balance;
+  max-width: 34ch;
+}
+
+h1, h2, .auth-hint, .account-hint, .verify-hint {
+  text-wrap: pretty;
 }
 
 .actions {
