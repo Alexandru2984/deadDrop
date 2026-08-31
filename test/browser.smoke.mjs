@@ -299,7 +299,60 @@ const VIEWPORTS = [
   { name: 'iPhone Pro Max', width: 430, height: 932 },
 ];
 
-for (const vp of VIEWPORTS) {
+/** Measure the current document at one emulated phone viewport. */
+async function measureLayout(pageLabel) {
+  return sessionEval(`
+    (() => {
+      const doc = document.documentElement;
+      const overflowsPage = doc.scrollWidth > doc.clientWidth + 1;
+
+      const spillers = [];
+      for (const el of document.querySelectorAll('body *')) {
+        if (!el.getClientRects().length) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0) continue;
+        if (r.right > doc.clientWidth + 1 || r.left < -1) {
+          spillers.push((el.id ? '#' + el.id : el.className || el.tagName).toString().slice(0, 60));
+        }
+      }
+
+      // A checkbox or radio is measured through the label that wraps it, since
+      // that label is what a finger actually lands on.
+      const small = [];
+      for (const el of document.querySelectorAll('button, a, input, select, [role="button"]')) {
+        if (!el.getClientRects().length) continue;
+        const isToggle = el.tagName === 'INPUT'
+          && (el.type === 'checkbox' || el.type === 'radio');
+        const target = isToggle ? (el.closest('label') || el) : el;
+        const r = target.getBoundingClientRect();
+        if (r.height > 0 && r.height < 44) {
+          const name = target.id ? '#' + target.id : (target.className || target.tagName);
+          small.push((name + '@' + Math.round(r.height) + 'px').toString().slice(0, 60));
+        }
+      }
+
+      // A text-entry control under 16px makes iOS zoom the whole page on focus.
+      const zoomy = [];
+      for (const el of document.querySelectorAll(
+          'textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=range])')) {
+        if (!el.getClientRects().length) continue;
+        const size = parseFloat(getComputedStyle(el).fontSize);
+        if (size < 16) zoomy.push(((el.id || el.tagName) + '@' + size + 'px').toString());
+      }
+
+      return {
+        coarse: window.matchMedia('(pointer: coarse)').matches,
+        overflowsPage,
+        spillers: [...new Set(spillers)].slice(0, 6),
+        small: [...new Set(small)].slice(0, 6),
+        zoomy: [...new Set(zoomy)].slice(0, 6),
+      };
+    })()
+  `);
+}
+
+/** Put the browser into a phone-shaped, touch-driven emulation. */
+async function emulatePhone(vp) {
   await sessionSend('Emulation.setDeviceMetricsOverride', {
     width: vp.width, height: vp.height, deviceScaleFactor: 2, mobile: true,
   });
@@ -316,61 +369,23 @@ for (const vp of VIEWPORTS) {
   });
   await sessionSend('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   await sleep(400); // let the media queries settle
+}
 
-  const report = await sessionEval(`
-    (() => {
-      const doc = document.documentElement;
-      const overflowsPage = doc.scrollWidth > doc.clientWidth + 1;
+function assertLayout(report, label) {
+  ok(report.coarse, `${label}: the run really is emulating a touch pointer`);
+  ok(!report.overflowsPage && report.spillers.length === 0,
+    `${label}: nothing overflows the viewport${
+      report.spillers.length ? ' — ' + report.spillers.join(', ') : ''}`);
+  ok(report.small.length === 0,
+    `${label}: every control is at least 44px tall${
+      report.small.length ? ' — ' + report.small.join(', ') : ''}`);
+  ok(report.zoomy.length === 0,
+    `${label}: no input smaller than 16px (iOS zoom)${
+      report.zoomy.length ? ' — ' + report.zoomy.join(', ') : ''}`);
+}
 
-      // Elements poking past the right edge are the usual cause.
-      const spillers = [];
-      for (const el of document.querySelectorAll('body *')) {
-        if (!el.getClientRects().length) continue;
-        const r = el.getBoundingClientRect();
-        if (r.width === 0) continue;
-        if (r.right > doc.clientWidth + 1 || r.left < -1) {
-          spillers.push((el.id ? '#' + el.id : el.className || el.tagName).toString().slice(0, 60));
-        }
-      }
-
-      // Anything tappable needs a real target. 44px is the long-standing floor.
-      // A checkbox or radio is measured through the label that wraps it, since
-      // that label is what a finger actually lands on.
-      const small = [];
-      const tappable = document.querySelectorAll(
-        'button, a, input, select, [role="button"]');
-      for (const el of tappable) {
-        if (!el.getClientRects().length) continue;
-        const isToggle = el.tagName === 'INPUT'
-          && (el.type === 'checkbox' || el.type === 'radio');
-        const target = isToggle ? (el.closest('label') || el) : el;
-        const r = target.getBoundingClientRect();
-        if (r.height > 0 && r.height < 44) {
-          const name = target.id ? '#' + target.id : (target.className || target.tagName);
-          small.push((name + '@' + Math.round(r.height) + 'px').toString().slice(0, 60));
-        }
-      }
-
-      // A text-entry control under 16px makes iOS zoom the whole page on focus.
-      // Checkboxes and radios do not, so they are not part of this rule.
-      const zoomy = [];
-      const typeable = document.querySelectorAll(
-        'textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=range])');
-      for (const el of typeable) {
-        if (!el.getClientRects().length) continue;
-        const size = parseFloat(getComputedStyle(el).fontSize);
-        if (size < 16) zoomy.push(((el.id || el.tagName) + '@' + size + 'px').toString());
-      }
-
-      return {
-        coarse: window.matchMedia('(pointer: coarse)').matches,
-        overflowsPage,
-        spillers: [...new Set(spillers)].slice(0, 6),
-        small: [...new Set(small)].slice(0, 6),
-        zoomy: [...new Set(zoomy)].slice(0, 6),
-      };
-    })()
-  `);
+for (const vp of VIEWPORTS) {
+  await emulatePhone(vp);
 
   if (SHOT_DIR) {
     mkdirSync(SHOT_DIR, { recursive: true });
@@ -388,7 +403,6 @@ for (const vp of VIEWPORTS) {
       writeFileSync(join(SHOT_DIR, `${slug}-${vp.width}-${view}.png`),
         Buffer.from(shot.data, 'base64'));
     }
-    // Put the chat view back so the measurements below match what was asserted.
     await sessionEval(`
       document.querySelector('#auth').classList.add('hidden');
       document.querySelector('#landing').classList.add('hidden');
@@ -397,17 +411,28 @@ for (const vp of VIEWPORTS) {
     await sleep(150);
   }
 
-  const label = `${vp.name} (${vp.width}px)`;
-  ok(report.coarse, `${label}: the run really is emulating a touch pointer`);
-  ok(!report.overflowsPage && report.spillers.length === 0,
-    `${label}: nothing overflows the viewport${
-      report.spillers.length ? ' — ' + report.spillers.join(', ') : ''}`);
-  ok(report.small.length === 0,
-    `${label}: every control is at least 44px tall${
-      report.small.length ? ' — ' + report.small.join(', ') : ''}`);
-  ok(report.zoomy.length === 0,
-    `${label}: no input smaller than 16px (iOS zoom)${
-      report.zoomy.length ? ' — ' + report.zoomy.join(', ') : ''}`);
+  assertLayout(await measureLayout(vp.name), `${vp.name} (${vp.width}px)`);
+}
+
+// The standalone pages carry the security explanations and the integrity
+// checker. They are reached from the app but never exercised by any other
+// suite, so nothing would notice them breaking on a phone.
+for (const page of ['about.html', 'verify.html']) {
+  for (const vp of VIEWPORTS) {
+    await emulatePhone(vp);
+    await sessionSend('Page.navigate', { url: `${BASE}/${page}` });
+    await waitFor(async () => sessionEval('document.readyState === "complete"').catch(() => false),
+      { timeout: 10000 });
+    await sleep(250);
+
+    assertLayout(await measureLayout(page), `${page} on ${vp.name} (${vp.width}px)`);
+
+    if (SHOT_DIR && vp.width === 375) {
+      const shot = await sessionSend('Page.captureScreenshot', { format: 'png' });
+      writeFileSync(join(SHOT_DIR, `${page.replace('.html', '')}-375.png`),
+        Buffer.from(shot.data, 'base64'));
+    }
+  }
 }
 
 await sessionSend('Emulation.clearDeviceMetricsOverride');
