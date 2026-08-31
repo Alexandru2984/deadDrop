@@ -34,3 +34,15 @@
   padding: 10px 12px; font-size: 12px; color: var(--text); overflow-x: auto;
   white-space: pre; line-height: 1.5; margin: 6px 0;
 }
+
+/* On a touch device the standalone links on these pages are controls, not
+   prose: the back link and the manifest link are the only way off the page and
+   need a finger-sized target. Inline links inside sentences are left alone. */
+@media (pointer: coarse) {
+  .back,
+  #gh-link {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+}

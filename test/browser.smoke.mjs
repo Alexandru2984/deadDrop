@@ -318,9 +318,23 @@ async function measureLayout(pageLabel) {
 
       // A checkbox or radio is measured through the label that wraps it, since
       // that label is what a finger actually lands on.
+      //
+      // A link written inside a sentence is exempt: prose links take their size
+      // from the text around them, and forcing 44px there would wreck the
+      // paragraph. A link that stands alone in its own block is a control and
+      // has to be tappable like any other.
+      const standsAlone = (a) => {
+        const parent = a.parentElement;
+        if (!parent) return true;
+        const own = (a.textContent || '').trim();
+        const around = (parent.textContent || '').trim();
+        return around.length - own.length < 3;
+      };
+
       const small = [];
       for (const el of document.querySelectorAll('button, a, input, select, [role="button"]')) {
         if (!el.getClientRects().length) continue;
+        if (el.tagName === 'A' && !standsAlone(el)) continue;
         const isToggle = el.tagName === 'INPUT'
           && (el.type === 'checkbox' || el.type === 'radio');
         const target = isToggle ? (el.closest('label') || el) : el;
