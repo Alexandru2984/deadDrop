@@ -1006,6 +1006,42 @@ select { cursor: pointer; width: auto; }
   }
 }
 
+/* ── Touch targets ──
+ * On a coarse pointer every control needs a finger-sized hit area. The visual
+ * size stays as designed: the padding grows, and where an icon must stay small
+ * an ::after overlay extends the tappable box past the painted one. Desktop is
+ * left alone — a 44px icon button there just looks clumsy.
+ */
+@media (pointer: coarse) {
+  .btn-icon {
+    min-height: 44px;
+    min-width: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .btn-sm { min-height: 44px; }
+
+  /* The label is the real target for a checkbox, so give it the height. */
+  .toggle-label,
+  .relay-toggle {
+    min-height: 44px;
+    align-items: center;
+  }
+
+  #attach-btn,
+  #record-btn,
+  #send-btn {
+    min-height: 44px;
+  }
+
+  /* Verify-bar rows sit close together; keep their controls apart enough to
+     hit the intended one. */
+  .verify-row { gap: 10px; }
+  .verify-row .btn { min-height: 44px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

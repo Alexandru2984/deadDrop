@@ -319,19 +319,29 @@ for (const vp of VIEWPORTS) {
       }
 
       // Anything tappable needs a real target. 44px is the long-standing floor.
+      // A checkbox or radio is measured through the label that wraps it, since
+      // that label is what a finger actually lands on.
       const small = [];
-      for (const el of document.querySelectorAll('button, a, input, select, [role="button"]')) {
+      const tappable = document.querySelectorAll(
+        'button, a, input, select, [role="button"]');
+      for (const el of tappable) {
         if (!el.getClientRects().length) continue;
-        const r = el.getBoundingClientRect();
+        const isToggle = el.tagName === 'INPUT'
+          && (el.type === 'checkbox' || el.type === 'radio');
+        const target = isToggle ? (el.closest('label') || el) : el;
+        const r = target.getBoundingClientRect();
         if (r.height > 0 && r.height < 44) {
-          small.push(((el.id ? '#' + el.id : el.className || el.tagName) + '@' +
-            Math.round(r.height) + 'px').toString().slice(0, 60));
+          const name = target.id ? '#' + target.id : (target.className || target.tagName);
+          small.push((name + '@' + Math.round(r.height) + 'px').toString().slice(0, 60));
         }
       }
 
-      // A text input under 16px makes iOS zoom the whole page on focus.
+      // A text-entry control under 16px makes iOS zoom the whole page on focus.
+      // Checkboxes and radios do not, so they are not part of this rule.
       const zoomy = [];
-      for (const el of document.querySelectorAll('input, select, textarea')) {
+      const typeable = document.querySelectorAll(
+        'textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=range])');
+      for (const el of typeable) {
         if (!el.getClientRects().length) continue;
         const size = parseFloat(getComputedStyle(el).fontSize);
         if (size < 16) zoomy.push(((el.id || el.tagName) + '@' + size + 'px').toString());
