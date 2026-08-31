@@ -1,8 +1,11 @@
 /**
- * Dead Drop — Authenticated hybrid key exchange (protocol v4)
+ * Dead Drop — Authenticated hybrid key exchange (protocol v5)
  *
- * Both parties commit to their ephemeral P-256 key, ML-KEM-768 key and random
- * nonce before revealing them. The lexicographically smaller ECDH key becomes
+ * Both parties commit to their ephemeral P-256 key, ML-KEM-768 key, optional
+ * long-term identity key and random nonce before revealing them. Binding the
+ * identity into the commitment and the transcript means the safety code already
+ * authenticates it: a man-in-the-middle who swaps the identity changes the code
+ * both users compare. The lexicographically smaller ECDH key becomes
  * the ML-KEM encapsulator. A role-ordered transcript binds both complete reveals
  * and the KEM ciphertext into every derived secret and confirmation tag.
  *
@@ -16,16 +19,26 @@ import { compareBytes, PROTOCOL_VERSION } from './crypto.js';
 
 const COMMIT_NONCE_BYTES = 16;
 const ECDH_PUB_BYTES = 65;
+const IDENTITY_PUB_BYTES = 65;
+// A peer that has not opted into saved contacts still occupies the identity slot
+// with a fixed all-zero block. Keeping the field a constant size means the
+// commitment and transcript are byte-identical in shape either way, so nothing
+// about whether the feature is on can be inferred from message lengths.
+const NO_IDENTITY = new Uint8Array(IDENTITY_PUB_BYTES);
 const KEM_PUB_BYTES = 1184;
 const KEM_CT_BYTES = 1088;
 const enc = new TextEncoder();
 
 export class Handshake {
-  constructor(cryptoLayer, send, { onEstablished, onError }) {
+  constructor(cryptoLayer, send, { onEstablished, onError, identityPub = null }) {
     this.crypto = cryptoLayer;
     this.send = send;
     this.onEstablished = onEstablished;
     this.onError = onError;
+    // Presented only when the user has opted into saved contacts.
+    this.identityPub = identityPub instanceof Uint8Array
+      && identityPub.length === IDENTITY_PUB_BYTES ? identityPub : NO_IDENTITY;
+    this.peerIdentityPub = null;
     this._myNonce = null;
     this._peerCommit = null;
     this._peerRecord = null;
@@ -42,7 +55,7 @@ export class Handshake {
     const myEcdhPub = await this.crypto.generateKeyPair();
     const myKemPub = this.crypto.generateKemKeys();
     this._myNonce = crypto.getRandomValues(new Uint8Array(COMMIT_NONCE_BYTES));
-    const commit = await commitment(myEcdhPub, myKemPub, this._myNonce);
+    const commit = await commitment(myEcdhPub, myKemPub, this.identityPub, this._myNonce);
     this.send({ type: 'kex-commit', v: PROTOCOL_VERSION, commit: bufToB64(commit) });
   }
 
@@ -85,6 +98,7 @@ export class Handshake {
       v: PROTOCOL_VERSION,
       publicKey: bufToB64(this.crypto._myPubRaw),
       kemPublicKey: bufToB64(this.crypto._kemPubRaw),
+      identityKey: bufToB64(this.identityPub),
       nonce: bufToB64(this._myNonce),
     });
   }
@@ -94,14 +108,16 @@ export class Handshake {
     if (!this._peerCommit) return this._fail('reveal before commit');
     if (typeof msg.publicKey !== 'string'
         || typeof msg.kemPublicKey !== 'string'
+        || typeof msg.identityKey !== 'string'
         || typeof msg.nonce !== 'string') {
       return this._fail('malformed reveal');
     }
 
-    let peerEcdh, peerKem, peerNonce;
+    let peerEcdh, peerKem, peerIdentity, peerNonce;
     try {
       peerEcdh = new Uint8Array(b64ToBuf(msg.publicKey));
       peerKem = new Uint8Array(b64ToBuf(msg.kemPublicKey));
+      peerIdentity = new Uint8Array(b64ToBuf(msg.identityKey));
       peerNonce = new Uint8Array(b64ToBuf(msg.nonce));
     } catch {
       return this._fail('malformed reveal');
@@ -110,9 +126,10 @@ export class Handshake {
       return this._fail('invalid public key');
     }
     if (peerKem.length !== KEM_PUB_BYTES) return this._fail('invalid KEM key length');
+    if (peerIdentity.length !== IDENTITY_PUB_BYTES) return this._fail('invalid identity length');
     if (peerNonce.length !== COMMIT_NONCE_BYTES) return this._fail('invalid nonce length');
 
-    const expect = await commitment(peerEcdh, peerKem, peerNonce);
+    const expect = await commitment(peerEcdh, peerKem, peerIdentity, peerNonce);
     if (!timingSafeEqual(new Uint8Array(expect), this._peerCommit)) {
       return this._fail('commitment mismatch — possible MitM');
     }
@@ -120,7 +137,12 @@ export class Handshake {
     const order = compareBytes(this.crypto._myPubRaw, peerEcdh);
     if (order === 0) return this._fail('reflected public key — possible MitM');
     this._isEncapsulator = order < 0;
-    this._peerRecord = { ecdh: peerEcdh, kem: peerKem, nonce: peerNonce };
+    this._peerRecord = {
+      ecdh: peerEcdh, kem: peerKem, identity: peerIdentity, nonce: peerNonce,
+    };
+    // Null unless the peer actually presented one; the all-zero slot means
+    // "ephemeral only" and must never be pinned as a contact.
+    this.peerIdentityPub = isZero(peerIdentity) ? null : peerIdentity;
 
     try {
       if (this._isEncapsulator) {
@@ -221,6 +243,7 @@ export class Handshake {
     return {
       ecdh: this.crypto._myPubRaw,
       kem: this.crypto._kemPubRaw,
+      identity: this.identityPub,
       nonce: this._myNonce,
     };
   }
@@ -232,21 +255,23 @@ export class Handshake {
   }
 }
 
-async function commitment(ecdhPub, kemPub, nonce) {
+async function commitment(ecdhPub, kemPub, identityPub, nonce) {
   return crypto.subtle.digest(
     'SHA-256',
-    concatBytes(enc.encode('deaddrop/v4/commit\0'), ecdhPub, kemPub, nonce),
+    concatBytes(enc.encode('deaddrop/v5/commit\0'), ecdhPub, kemPub, identityPub, nonce),
   );
 }
 
 function handshakeTranscript(encapsulator, decapsulator, ciphertext) {
   return concatBytes(
-    enc.encode('deaddrop/v4/handshake\0'),
+    enc.encode('deaddrop/v5/handshake\0'),
     encapsulator.ecdh,
     encapsulator.kem,
+    encapsulator.identity,
     encapsulator.nonce,
     decapsulator.ecdh,
     decapsulator.kem,
+    decapsulator.identity,
     decapsulator.nonce,
     ciphertext,
   );
@@ -261,6 +286,12 @@ function concatBytes(...arrs) {
     off += bytes.length;
   }
   return out;
+}
+
+function isZero(bytes) {
+  let acc = 0;
+  for (const b of bytes) acc |= b;
+  return acc === 0;
 }
 
 function timingSafeEqual(a, b) {

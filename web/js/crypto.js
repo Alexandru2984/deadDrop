@@ -1,10 +1,10 @@
 /**
- * Dead Drop — Encryption Layer (protocol v4)
+ * Dead Drop — Encryption Layer (protocol v5)
  *
  * Hybrid post-quantum key agreement: ephemeral ECDH (P-256) + ML-KEM-768
  * (FIPS 203) → HKDF-SHA256 → AES-256-GCM.
  *
- * Protocol v4 derives independent traffic keys for each direction and content
+ * Protocol v5 derives independent traffic keys for each direction and content
  * type, authenticates the protocol context and epoch as AEAD additional data,
  * and tracks authenticated 96-bit IVs for the complete retained key lifetime.
  * Rekeys mix a fresh ephemeral ECDH share with the evolving post-quantum root.
@@ -18,7 +18,7 @@
 import { bufToB64, b64ToBuf } from './util.js';
 import { ml_kem768 } from './vendor/noble/ml-kem.js';
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 const RETAINED_EPOCHS = 3; // current + 2 previous epochs for ordered in-flight data
 const MAX_IVS_PER_EPOCH = 100000; // fail closed instead of forgetting replay history
@@ -57,6 +57,7 @@ export class CryptoLayer {
     this._pendingRekey = null;
     this._sasSecret = null;
     this._confirmSecret = null;
+    this.transcriptHash = null;
     this._seenIVs = Object.fromEntries(TRAFFIC_CONTEXTS.map((c) => [c, new Map()]));
   }
 
@@ -107,6 +108,9 @@ export class CryptoLayer {
       ecdhSecret = new Uint8Array(await this._ecdh(this.keyPair?.privateKey, peerPubRaw));
       ikm = concatBytes(ecdhSecret, kemShared);
       const salt = await crypto.subtle.digest('SHA-256', transcript);
+      // Kept so an opt-in identity can sign exactly this session. It is derived
+      // from public handshake values and is not secret.
+      this.transcriptHash = new Uint8Array(salt);
 
       const eToD = await this._deriveTrafficKeys(ikm, salt, 'encapsulator-to-decapsulator', 0);
       const dToE = await this._deriveTrafficKeys(ikm, salt, 'decapsulator-to-encapsulator', 0);
@@ -114,9 +118,9 @@ export class CryptoLayer {
       this.recvEpochs.set(0, role === 'e' ? dToE : eToD);
       this.sendEpoch = 0;
 
-      this._sasSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v4/sas', 16);
-      this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v4/confirm', 32);
-      this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v4/root/epoch/0', 32);
+      this._sasSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v5/sas', 16);
+      this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v5/confirm', 32);
+      this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v5/root/epoch/0', 32);
     } finally {
       if (ecdhSecret) ecdhSecret.fill(0);
       if (ikm) ikm.fill(0);
@@ -132,7 +136,7 @@ export class CryptoLayer {
     return this._hkdfBytes(
       this._confirmSecret,
       new Uint8Array(32),
-      `deaddrop/v4/confirm/${role}`,
+      `deaddrop/v5/confirm/${role}`,
       16,
     );
   }
@@ -228,7 +232,7 @@ export class CryptoLayer {
       ecdhSecret = new Uint8Array(await this._ecdh(privateKey, peerPubRaw));
       ikm = concatBytes(this._rootSecret, ecdhSecret);
       const ratchetTranscript = concatBytes(
-        enc.encode(`deaddrop/v4/ratchet/epoch/${epoch}\0`),
+        enc.encode(`deaddrop/v5/ratchet/epoch/${epoch}\0`),
         offerPub,
         answerPub,
       );
@@ -240,7 +244,7 @@ export class CryptoLayer {
         ikm, salt, 'answerer-to-offerer', epoch,
       );
       const nextRoot = await this._hkdfBytes(
-        ikm, salt, `deaddrop/v4/root/epoch/${epoch}`, 32,
+        ikm, salt, `deaddrop/v5/root/epoch/${epoch}`, 32,
       );
 
       this.sendEpochs.set(epoch, role === 'offerer' ? offerToAnswer : answerToOffer);
@@ -320,6 +324,7 @@ export class CryptoLayer {
     this._rootSecret = null;
     this._sasSecret = null;
     this._confirmSecret = null;
+    this.transcriptHash = null;
     if (this._pendingRekey?.myPubRaw) this._pendingRekey.myPubRaw.fill(0);
     this._pendingRekey = null;
     this.sendEpochs.clear();
@@ -381,7 +386,7 @@ export class CryptoLayer {
   }
 
   _aad(context, epoch) {
-    return enc.encode(`deaddrop/v4/aead/${context}/epoch/${epoch}`);
+    return enc.encode(`deaddrop/v5/aead/${context}/epoch/${epoch}`);
   }
 
   _checkReplay(context, epoch, ivKey) {
@@ -444,7 +449,7 @@ export class CryptoLayer {
       await this._hkdfAesKey(
         secret,
         salt,
-        `deaddrop/v4/aead/${direction}/${context}/epoch/${epoch}`,
+        `deaddrop/v5/aead/${direction}/${context}/epoch/${epoch}`,
       ),
     ]));
     return Object.fromEntries(entries);

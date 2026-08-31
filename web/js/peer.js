@@ -7,8 +7,10 @@
  * intended protocol does not transmit application encryption keys to the server.
  */
 
+import { bufToB64, b64ToBuf } from './util.js';
 import { Handshake } from './handshake.js';
 import { PROTOCOL_VERSION } from './crypto.js';
+import { signTranscript, verifyTranscript, fingerprint } from './identity.js';
 
 const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
 const REKEY_INTERVAL_MS = 10 * 60 * 1000; // periodic DH key evolution
@@ -25,7 +27,7 @@ export class PeerConnection {
    * @param {Function}    onMessage    – called with each decrypted peer message
    * @param {Function}    onStateChange – called with 'connected' | 'encrypted' | 'disconnected'
    */
-  constructor(signaling, cryptoLayer, onMessage, onStateChange, iceConfig = {}) {
+  constructor(signaling, cryptoLayer, onMessage, onStateChange, iceConfig = {}, identity = null) {
     this.signaling = signaling;
     this.crypto = cryptoLayer;
     this.onMessage = onMessage;
@@ -55,6 +57,11 @@ export class PeerConnection {
     // the encrypted session, then separately require both users to compare and
     // confirm the SAS before any call or application traffic is allowed.
     this.mediaVerified = false;
+    // Opt-in saved contacts. `identity` is this browser's long-term keypair when
+    // the user enabled the feature; peerIdentityFp is set only once the peer has
+    // proved possession of the key it presented.
+    this.identity = identity;
+    this.peerIdentityFp = null;
     this._fpTimer = null;
     this._handshakeTimer = null;
     this._closed = false;
@@ -220,6 +227,7 @@ export class PeerConnection {
     this.localVerified = false;
     this.remoteVerified = false;
     this.userVerified = false;
+    this.peerIdentityFp = null;
     if (notify) this.onStateChange('disconnected');
   }
 
@@ -269,6 +277,7 @@ export class PeerConnection {
     ch.onopen = async () => {
       // Authenticated key exchange (commit-reveal) over the data channel.
       this.handshake = new Handshake(this.crypto, (m) => this._dcSend(m), {
+        identityPub: this.identity?.publicKeyRaw ?? null,
         onEstablished: (sas) => this._onEstablished(sas),
         onError: (reason) => {
           console.warn('[peer] handshake failed:', reason);
@@ -317,7 +326,7 @@ export class PeerConnection {
         return;
       }
 
-      // Rekeys and app traffic arrive only in protocol-v4 sealed envelopes.
+      // Rekeys and app traffic arrive only in protocol-v5 sealed envelopes.
       if (msg.type !== 'enc' || msg.v !== PROTOCOL_VERSION) {
         console.warn('[peer] dropping unsealed app message');
         return;
@@ -349,6 +358,10 @@ export class PeerConnection {
     if (inner.type === 'rekey-offer') { await this._onRekeyOffer(inner); return; }
     if (inner.type === 'rekey-answer') { await this._onRekeyAnswer(inner); return; }
     if (inner.type === 'dtls-fp') { this._onPeerFingerprint(inner); return; }
+    if (inner.type === 'identity-proof' && inner.v === PROTOCOL_VERSION) {
+      await this._onIdentityProof(inner);
+      return;
+    }
     if (inner.type === 'verify-ready' && inner.v === PROTOCOL_VERSION) {
       this.remoteVerified = true;
       this._updateVerificationState();
@@ -394,6 +407,47 @@ export class PeerConnection {
     // can check it against the fingerprint signaling handed them. This binds
     // transport to the session; user verification is still a separate gate.
     this._verifyMediaPath();
+    this._proveIdentity();
+  }
+
+  /**
+   * Prove possession of the identity key presented in the handshake.
+   *
+   * Showing a public key is not evidence of holding it. Without this an attacker
+   * could replay a saved contact's public key, match the pin, and be trusted
+   * without the user ever comparing a safety code again. The signature covers
+   * this session's transcript, so it cannot be lifted from another one.
+   */
+  _proveIdentity() {
+    if (!this.identity || !this.crypto.transcriptHash) return;
+    signTranscript(this.identity.privateKey, this.crypto.transcriptHash)
+      .then((signature) => this._queueSealed({
+        type: 'identity-proof',
+        v: PROTOCOL_VERSION,
+        sig: bufToB64(signature),
+      }))
+      .catch((err) => console.warn('[peer] identity proof failed', err));
+  }
+
+  async _onIdentityProof(msg) {
+    const peerKey = this.handshake?.peerIdentityPub;
+    if (!peerKey || this.peerIdentityFp) return;   // none offered, or already proved
+    if (typeof msg.sig !== 'string' || !this.crypto.transcriptHash) return;
+    let signature;
+    try {
+      signature = new Uint8Array(b64ToBuf(msg.sig));
+    } catch {
+      return;
+    }
+    const valid = await verifyTranscript(peerKey, this.crypto.transcriptHash, signature);
+    if (!valid) {
+      // A key was offered and the proof does not hold. That is not a benign
+      // mismatch — abort rather than fall back to an unpinnable session.
+      this._terminateInsecure('identity proof failed');
+      return;
+    }
+    this.peerIdentityFp = await fingerprint(peerKey);
+    this.onStateChange('identity-proved', this.peerIdentityFp);
   }
 
   /* ── Media-path (DTLS) authentication over the SAS-verified channel ── */

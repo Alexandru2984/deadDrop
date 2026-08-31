@@ -13,6 +13,7 @@
 import { CryptoLayer, PROTOCOL_VERSION } from '../web/js/crypto.js';
 import { Handshake } from '../web/js/handshake.js';
 import { PeerConnection } from '../web/js/peer.js';
+import { signTranscript, verifyTranscript } from '../web/js/identity.js';
 
 let failures = 0;
 function ok(cond, msg) {
@@ -212,6 +213,7 @@ async function commitmentRejection() {
     v: PROTOCOL_VERSION,
     publicKey: bufToB64Fake(65),
     kemPublicKey: bufToB64Fake(1184),
+    identityKey: toB64(new Uint8Array(65)), // ephemeral-only slot
     nonce: bufToB64Fake(16),
   };
   await hsB.handle(forgedReveal);
@@ -253,9 +255,10 @@ async function malformedNonceRejection() {
 
   const ecdh = new Uint8Array(65); ecdh[0] = 4;
   const kem = new Uint8Array(1184);
+  const identity = new Uint8Array(65);
   const nonce = new Uint8Array(15);
   const commitInput = concatForTest(
-    new TextEncoder().encode('deaddrop/v4/commit\0'), ecdh, kem, nonce,
+    new TextEncoder().encode('deaddrop/v5/commit\0'), ecdh, kem, identity, nonce,
   );
   const commit = new Uint8Array(await crypto.subtle.digest('SHA-256', commitInput));
   await hs.handle({ type: 'kex-commit', v: PROTOCOL_VERSION, commit: toB64(commit) });
@@ -264,6 +267,7 @@ async function malformedNonceRejection() {
     v: PROTOCOL_VERSION,
     publicKey: toB64(ecdh),
     kemPublicKey: toB64(kem),
+    identityKey: toB64(identity),
     nonce: toB64(nonce),
   });
   ok(error === 'invalid nonce length', 'non-canonical commitment nonce is rejected');
@@ -346,6 +350,78 @@ function bufToB64Fake(len = 65) {
   return btoa(bin);
 }
 
+
+/**
+ * Opt-in identity: the key is bound into the transcript, so the safety code
+ * authenticates it, and possession must be proved before it can ever be pinned.
+ */
+async function identityBinding() {
+  console.log('opt-in identity binding');
+
+  const mint = async () => {
+    const pair = await crypto.subtle.generateKey(
+      { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify'],
+    );
+    return {
+      privateKey: pair.privateKey,
+      publicKeyRaw: new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey)),
+    };
+  };
+
+  const run = async (idA, idB) => {
+    const a = new CryptoLayer(), b = new CryptoLayer();
+    const outA = [], outB = [];
+    let sasA = null, sasB = null, err = null;
+    const hsA = new Handshake(a, (m) => outA.push(m), {
+      identityPub: idA?.publicKeyRaw ?? null,
+      onEstablished: (s) => { sasA = s; }, onError: (e) => { err = e; },
+    });
+    const hsB = new Handshake(b, (m) => outB.push(m), {
+      identityPub: idB?.publicKeyRaw ?? null,
+      onEstablished: (s) => { sasB = s; }, onError: (e) => { err = e; },
+    });
+    await hsA.start();
+    await hsB.start();
+    await pump(outA, outB, hsA, hsB);
+    return { a, b, hsA, hsB, sasA, sasB, err };
+  };
+
+  // Nobody opted in: the slot is present but empty, and nothing is pinnable.
+  const plain = await run(null, null);
+  ok(plain.err === null && plain.sasA && plain.sasA === plain.sasB,
+    'an ephemeral-only session still completes');
+  ok(plain.hsA.peerIdentityPub === null && plain.hsB.peerIdentityPub === null,
+    'no identity is exposed when neither side opted in');
+
+  // Both opted in: each side sees the other's key and the SAS still agrees.
+  const idA = await mint(), idB = await mint();
+  const saved = await run(idA, idB);
+  ok(saved.err === null && saved.sasA === saved.sasB,
+    'a session with identities completes and both derive the same SAS');
+  ok(saved.hsB.peerIdentityPub
+     && saved.hsB.peerIdentityPub.every((x, i) => x === idA.publicKeyRaw[i]),
+    "each side receives the other's identity key");
+
+  // The identity is inside the transcript, so swapping it changes the code both
+  // users compare. That is what makes an out-of-band check authenticate it.
+  const other = await run(idA, await mint());
+  ok(other.sasA !== saved.sasA,
+    'substituting an identity changes the safety code');
+
+  // Possession must be proved: holding someone's public key is not enough.
+  const sig = await signTranscript(idA.privateKey, saved.a.transcriptHash);
+  ok(await verifyTranscript(idA.publicKeyRaw, saved.a.transcriptHash, sig),
+    'a genuine identity proof verifies');
+  ok(!await verifyTranscript(idB.publicKeyRaw, saved.a.transcriptHash, sig),
+    'a proof does not verify against a different identity');
+
+  // A signature lifted from another session must not be reusable here — this is
+  // what stops an attacker replaying a saved contact's key to match a pin.
+  const elsewhere = await signTranscript(idA.privateKey, other.a.transcriptHash);
+  ok(!await verifyTranscript(idA.publicKeyRaw, saved.a.transcriptHash, elsewhere),
+    'a proof from another session is rejected');
+}
+
 (async () => {
   try {
     const { a, b } = await honestHandshake();
@@ -357,6 +433,7 @@ function bufToB64Fake(len = 65) {
     await commitmentRejection();
     await kemCtTampering();
     await malformedNonceRejection();
+    await identityBinding();
   } catch (e) {
     console.error('FATAL', e);
     failures++;
