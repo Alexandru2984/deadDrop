@@ -133,8 +133,21 @@ const chrome = spawn(chromePath, [
   '--no-default-browser-check',
   '--disable-gpu',
   '--no-sandbox',
+  // A CI container has no session bus and a small /dev/shm. Without these,
+  // startup stalls on dbus long enough to miss the endpoint deadline, or the
+  // renderer dies outright once shared memory runs out.
+  '--disable-dev-shm-usage',
+  '--disable-extensions',
+  '--disable-component-update',
+  '--disable-default-apps',
+  '--disable-background-networking',
+  '--disable-sync',
+  '--mute-audio',
   'about:blank',
-], { stdio: ['ignore', 'ignore', 'pipe'] });
+], {
+  stdio: ['ignore', 'ignore', 'pipe'],
+  env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: '/dev/null' },
+});
 
 // Chrome writes its chosen port and websocket path to DevToolsActivePort in the
 // profile directory. Reading that file is deterministic; scraping the same
@@ -168,7 +181,7 @@ const gotEndpoint = await waitFor(() => {
   const fromFile = readDevToolsEndpoint();
   if (fromFile) { wsURL = fromFile; return true; }
   return wsURL !== null;
-}, { timeout: 30000, interval: 100 });
+}, { timeout: 60000, interval: 100 });
 
 if (!gotEndpoint) {
   console.error('browser smoke: Chromium did not report a debugging endpoint');
