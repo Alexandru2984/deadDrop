@@ -49,7 +49,7 @@ changing the client served by an already-built binary.
 
 ### Pairwise content encryption
 
-- Protocol v4 combines ephemeral P-256 ECDH and ML-KEM-768, then uses
+- Protocol v5 combines ephemeral P-256 ECDH and ML-KEM-768, then uses
   HKDF-SHA256 to derive independent AES-256-GCM keys for each direction and
   content class.
 - A commit/reveal transcript, key confirmation, protocol/epoch AAD, strict field
@@ -58,6 +58,19 @@ changing the client served by an already-built binary.
   The six emoji encode 36 bits; QR verification compares the full 128-bit token.
 - Rooms contain at most six people and form a mesh of independent pairwise
   sessions. There is no group key; each peer must be verified separately.
+- Saved contacts are optional and off by default. While off, nothing that
+  outlives a session is generated or presented, and the identity field in the
+  handshake is a fixed all-zero block — two conversations with the same person
+  are not linkable to each other by either side, and each needs its own
+  safety-code comparison.
+- Turning them on mints a non-extractable ECDSA P-256 identity key held in
+  IndexedDB. It is covered by the handshake commitment and transcript, so the
+  safety code already authenticates it, and the peer proves possession with a
+  signature over that session's transcript before it can ever be pinned. A
+  recognised contact then unlocks without a fresh comparison.
+- The trade is explicit: a peer who has seen your identity key can tell two of
+  your sessions apart. That is what makes pinning possible and what costs
+  unlinkability. A panic wipe destroys the key and every pin.
 - The initiator performs an authenticated fresh-ECDH rekey about every ten
   minutes. The current and two previous epochs are retained for in-flight data.
   This gives limited key-evolution/forward-secrecy properties, not a formally
