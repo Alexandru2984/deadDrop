@@ -339,7 +339,10 @@ async function measureLayout(pageLabel) {
           && (el.type === 'checkbox' || el.type === 'radio');
         const target = isToggle ? (el.closest('label') || el) : el;
         const r = target.getBoundingClientRect();
-        if (r.height > 0 && r.height < 44) {
+        // Half a pixel of tolerance: a box with min-height:44px can measure
+        // 43.99 after layout rounding, which is a reporting artefact rather
+        // than a target anyone would miss.
+        if (r.height > 0 && r.height < 43.5) {
           const name = target.id ? '#' + target.id : (target.className || target.tagName);
           small.push((name + '@' + Math.round(r.height) + 'px').toString().slice(0, 60));
         }
