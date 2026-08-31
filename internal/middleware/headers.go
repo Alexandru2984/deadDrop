@@ -24,14 +24,19 @@ func SecurityHeaders(next http.Handler) http.Handler {
 		// Deny every capability the app does not use. camera/microphone stay
 		// self-enabled for calls and QR scanning; everything else is a sensor,
 		// tracking surface, or device bridge this app has no business touching.
+		//
+		// Only feature names the browser actually recognises belong here: an
+		// unknown one is ignored but logs a console error on every page load,
+		// which buries real warnings. The browser smoke test fails the build on
+		// exactly that error, so this list stays honest.
 		h.Set("Permissions-Policy",
 			"camera=(self), microphone=(self), fullscreen=(self), autoplay=(self), "+
 				"display-capture=(), geolocation=(), payment=(), usb=(), serial=(), "+
-				"bluetooth=(), hid=(), midi=(), accelerometer=(), gyroscope=(), "+
-				"magnetometer=(), ambient-light-sensor=(), idle-detection=(), "+
-				"local-fonts=(), compute-pressure=(), screen-wake-lock=(), "+
-				"browsing-topics=(), interest-cohort=(), attribution-reporting=(), "+
-				"otp-credentials=(), publickey-credentials-get=(), storage-access=()")
+				"hid=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), "+
+				"idle-detection=(), local-fonts=(), compute-pressure=(), "+
+				"screen-wake-lock=(), browsing-topics=(), interest-cohort=(), "+
+				"attribution-reporting=(), otp-credentials=(), "+
+				"publickey-credentials-get=(), storage-access=()")
 		// Privacy-first CSP: no external origins, no inline scripts OR styles. The
 		// whole app is same-origin ES modules + stylesheets; dynamic styling goes
 		// through the CSSOM (element.style.x = …), which CSP does not block.

@@ -262,8 +262,10 @@ const ttEnforced = await sessionEval(`
 ok(ttEnforced === 'blocked', `innerHTML is refused by Trusted Types (${ttEnforced})`);
 
 ok(pageErrors.length === 0, `no uncaught page exceptions${pageErrors.length ? ': ' + pageErrors[0] : ''}`);
-ok(cspViolations.length === 0,
-  `no CSP or Trusted Types violations from the app${cspViolations.length ? ': ' + cspViolations[0] : ''}`);
+const distinctViolations = [...new Set(cspViolations)];
+ok(distinctViolations.length === 0,
+  `no CSP, Permissions-Policy or Trusted Types violations${
+    distinctViolations.length ? ':\n      - ' + distinctViolations.join('\n      - ') : ''}`);
 
 const realConsoleErrors = consoleErrors.filter((e) => !/favicon|ERR_/.test(e));
 ok(realConsoleErrors.length === 0,
