@@ -138,6 +138,25 @@ jobs:
           DD_REQUIRE_BROWSER: '1'
         run: node test/browser.pair.mjs
 
+      # A room is a mesh of independent pairwise sessions, not a group key. A
+      # mesh that reused one session across peers, or matched a safety code
+      # against the wrong pair, would look completely normal from one browser.
+      - name: Mint invites for the group run
+        id: groupinvites
+        run: |
+          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "c=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Three-peer group-room test
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.groupinvites.outputs.a }}
+          DD_INVITE2: ${{ steps.groupinvites.outputs.b }}
+          DD_INVITE3: ${{ steps.groupinvites.outputs.c }}
+          DD_REQUIRE_BROWSER: '1'
+        run: node test/browser.group.mjs
+
       - name: Upload mobile screenshots
         if: always()
         uses: actions/upload-artifact@v4
