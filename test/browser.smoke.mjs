@@ -300,6 +300,18 @@ for (const vp of VIEWPORTS) {
   await sessionSend('Emulation.setDeviceMetricsOverride', {
     width: vp.width, height: vp.height, deviceScaleFactor: 2, mobile: true,
   });
+  // Device metrics alone do not change the pointer media feature, so a
+  // (pointer: coarse) rule would never apply and the run would be measuring a
+  // desktop layout at phone width. Emulate the input type as well.
+  await sessionSend('Emulation.setEmulatedMedia', {
+    features: [
+      { name: 'pointer', value: 'coarse' },
+      { name: 'any-pointer', value: 'coarse' },
+      { name: 'hover', value: 'none' },
+      { name: 'any-hover', value: 'none' },
+    ],
+  });
+  await sessionSend('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
   await sleep(400); // let the media queries settle
 
   const report = await sessionEval(`
@@ -348,6 +360,7 @@ for (const vp of VIEWPORTS) {
       }
 
       return {
+        coarse: window.matchMedia('(pointer: coarse)').matches,
         overflowsPage,
         spillers: [...new Set(spillers)].slice(0, 6),
         small: [...new Set(small)].slice(0, 6),
@@ -357,6 +370,7 @@ for (const vp of VIEWPORTS) {
   `);
 
   const label = `${vp.name} (${vp.width}px)`;
+  ok(report.coarse, `${label}: the run really is emulating a touch pointer`);
   ok(!report.overflowsPage && report.spillers.length === 0,
     `${label}: nothing overflows the viewport${
       report.spillers.length ? ' — ' + report.spillers.join(', ') : ''}`);
@@ -369,6 +383,8 @@ for (const vp of VIEWPORTS) {
 }
 
 await sessionSend('Emulation.clearDeviceMetricsOverride');
+await sessionSend('Emulation.setEmulatedMedia', { features: [] });
+await sessionSend('Emulation.setTouchEmulationEnabled', { enabled: false });
 
 // Assert the clean-run properties BEFORE deliberately tripping Trusted Types
 // below, so the probe's own violation cannot be mistaken for one from the app.
