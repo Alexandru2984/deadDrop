@@ -284,6 +284,82 @@ const shareRendered = await sessionEval(`
 `);
 ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder');
 
+/* ── Mobile layout ──
+ * "Looks fine on a phone" is not checkable by reading CSS, but the failures that
+ * actually ruin a mobile UI are measurable: a page that scrolls sideways, a
+ * control too small to hit, or text pushed outside the viewport. Assert those at
+ * real device sizes instead of trusting the media queries.
+ */
+const VIEWPORTS = [
+  { name: 'iPhone SE', width: 375, height: 667 },
+  { name: 'small Android', width: 360, height: 740 },
+  { name: 'iPhone Pro Max', width: 430, height: 932 },
+];
+
+for (const vp of VIEWPORTS) {
+  await sessionSend('Emulation.setDeviceMetricsOverride', {
+    width: vp.width, height: vp.height, deviceScaleFactor: 2, mobile: true,
+  });
+  await sleep(400); // let the media queries settle
+
+  const report = await sessionEval(`
+    (() => {
+      const doc = document.documentElement;
+      const overflowsPage = doc.scrollWidth > doc.clientWidth + 1;
+
+      // Elements poking past the right edge are the usual cause.
+      const spillers = [];
+      for (const el of document.querySelectorAll('body *')) {
+        if (!el.getClientRects().length) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width === 0) continue;
+        if (r.right > doc.clientWidth + 1 || r.left < -1) {
+          spillers.push((el.id ? '#' + el.id : el.className || el.tagName).toString().slice(0, 60));
+        }
+      }
+
+      // Anything tappable needs a real target. 44px is the long-standing floor.
+      const small = [];
+      for (const el of document.querySelectorAll('button, a, input, select, [role="button"]')) {
+        if (!el.getClientRects().length) continue;
+        const r = el.getBoundingClientRect();
+        if (r.height > 0 && r.height < 44) {
+          small.push(((el.id ? '#' + el.id : el.className || el.tagName) + '@' +
+            Math.round(r.height) + 'px').toString().slice(0, 60));
+        }
+      }
+
+      // A text input under 16px makes iOS zoom the whole page on focus.
+      const zoomy = [];
+      for (const el of document.querySelectorAll('input, select, textarea')) {
+        if (!el.getClientRects().length) continue;
+        const size = parseFloat(getComputedStyle(el).fontSize);
+        if (size < 16) zoomy.push(((el.id || el.tagName) + '@' + size + 'px').toString());
+      }
+
+      return {
+        overflowsPage,
+        spillers: [...new Set(spillers)].slice(0, 6),
+        small: [...new Set(small)].slice(0, 6),
+        zoomy: [...new Set(zoomy)].slice(0, 6),
+      };
+    })()
+  `);
+
+  const label = `${vp.name} (${vp.width}px)`;
+  ok(!report.overflowsPage && report.spillers.length === 0,
+    `${label}: nothing overflows the viewport${
+      report.spillers.length ? ' — ' + report.spillers.join(', ') : ''}`);
+  ok(report.small.length === 0,
+    `${label}: every control is at least 44px tall${
+      report.small.length ? ' — ' + report.small.join(', ') : ''}`);
+  ok(report.zoomy.length === 0,
+    `${label}: no input smaller than 16px (iOS zoom)${
+      report.zoomy.length ? ' — ' + report.zoomy.join(', ') : ''}`);
+}
+
+await sessionSend('Emulation.clearDeviceMetricsOverride');
+
 // Assert the clean-run properties BEFORE deliberately tripping Trusted Types
 // below, so the probe's own violation cannot be mistaken for one from the app.
 ok(pageErrors.length === 0, `no uncaught page exceptions${pageErrors.length ? ': ' + pageErrors[0] : ''}`);
