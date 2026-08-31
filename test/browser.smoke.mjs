@@ -14,7 +14,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -136,11 +136,27 @@ const chrome = spawn(chromePath, [
   'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
+// Chrome writes its chosen port and websocket path to DevToolsActivePort in the
+// profile directory. Reading that file is deterministic; scraping the same
+// information out of stderr races against chunk boundaries and startup timing,
+// which is exactly how this step failed intermittently on CI. stderr is kept
+// only as a fallback and to surface a launch error.
 let wsURL = null;
+let stderrTail = '';
 chrome.stderr.on('data', (chunk) => {
-  const m = /ws:\/\/[^\s]+/.exec(chunk.toString());
+  const text = chunk.toString();
+  stderrTail = (stderrTail + text).slice(-2000);
+  const m = /ws:\/\/[^\s]+/.exec(text);
   if (m && !wsURL) wsURL = m[0];
 });
+
+function readDevToolsEndpoint() {
+  const portFile = join(profile, 'DevToolsActivePort');
+  if (!existsSync(portFile)) return null;
+  const [port, path] = readFileSync(portFile, 'utf8').split('\n');
+  if (!port || !path) return null;
+  return `ws://127.0.0.1:${port.trim()}${path.trim()}`;
+}
 
 const cleanup = () => {
   try { chrome.kill('SIGKILL'); } catch { /* already gone */ }
@@ -148,8 +164,16 @@ const cleanup = () => {
 };
 process.on('exit', cleanup);
 
-if (!await waitFor(() => wsURL !== null, { timeout: 15000 })) {
+const gotEndpoint = await waitFor(() => {
+  const fromFile = readDevToolsEndpoint();
+  if (fromFile) { wsURL = fromFile; return true; }
+  return wsURL !== null;
+}, { timeout: 30000, interval: 100 });
+
+if (!gotEndpoint) {
   console.error('browser smoke: Chromium did not report a debugging endpoint');
+  if (chrome.exitCode !== null) console.error(`  chrome exited with ${chrome.exitCode}`);
+  if (stderrTail) console.error('  chrome stderr:\n' + stderrTail);
   process.exit(1);
 }
 
