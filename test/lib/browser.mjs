@@ -162,6 +162,7 @@ export class Peer {
     this.cdp = cdp;
     this.name = name;
     this.errors = [];
+    this.logs = [];
   }
 
   static async open(cdp, name) {
@@ -181,9 +182,17 @@ export class Peer {
         peer.errors.push(msg.params.exceptionDetails.exception?.description
           || msg.params.exceptionDetails.text || 'exception');
       }
+      // A script the browser refuses to run — a failed integrity check, a CSP
+      // block — throws nothing. It is reported here and nowhere else, and
+      // without it a page whose app never started looks exactly like a page
+      // whose app started and did nothing.
+      if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
+        peer.logs.push(msg.params.entry.text);
+      }
     });
     await cdp.send('Runtime.enable', {}, sessionId);
     await cdp.send('Page.enable', {}, sessionId);
+    await cdp.send('Log.enable', {}, sessionId);
     return peer;
   }
 
@@ -198,9 +207,32 @@ export class Peer {
     return res.result.value;
   }
 
-  async goto(url) {
+  /**
+   * Navigate, and do not come back until the app is actually running.
+   *
+   * Waiting on readyState alone is not enough, and failing quietly is worse. The
+   * markup is static, so every element a test reaches for exists as soon as the
+   * HTML is parsed — a form can be filled in and a button clicked on a page
+   * whose module has not executed, and nothing happens. The run then fails much
+   * later, on an assertion far from the cause, with the server showing no
+   * request at all.
+   *
+   * `#call-btn` is hidden from the constructor through the CSSOM rather than an
+   * inline attribute (the CSP allows no inline styles), so an inline display of
+   * 'none' cannot come from the markup: it means the constructor ran. And since
+   * that constructor is synchronous, nothing outside can observe a half-built
+   * app — seeing the flag means the event handlers are bound too.
+   */
+  async goto(url, { expectApp = true } = {}) {
     await this.cdp.send('Page.navigate', { url }, this.sessionId);
-    await waitFor(() => this.eval('document.readyState === "complete"'));
+    const ready = await waitFor(() => this.eval('document.readyState === "complete"'),
+      { timeout: 45000 });
+    if (!ready) throw new Error(`${this.name}: ${url} never finished loading — ${await this.why()}`);
+    if (expectApp) {
+      const booted = await waitFor(() => this.eval(
+        `document.querySelector('#call-btn')?.style.display === 'none'`), { timeout: 45000 });
+      if (!booted) throw new Error(`${this.name}: the app never started on ${url} — ${await this.why()}`);
+    }
     // The app asks for confirmation before trusting a safety code and prompts
     // for a contact name. Answer both so the flow can run unattended.
     await this.eval(`window.confirm = () => true; window.prompt = () => 'peer'; true`);
@@ -213,8 +245,32 @@ export class Peer {
       document.querySelector('#auth-invite').value = ${JSON.stringify(invite)};
       document.querySelector('#register-btn').click(); true
     `);
-    return waitFor(() => this.eval(
+    const landed = await waitFor(() => this.eval(
       `!document.querySelector('#landing').classList.contains('hidden')`), { timeout: 25000 });
+    // A registration that silently fails takes every later assertion down with
+    // it, and the run then reports twenty red lines that all mean one thing.
+    // Say what the page actually showed instead.
+    if (!landed) console.error(`  ! ${this.name} never reached the landing page: ${await this.why()}`);
+    return landed;
+  }
+
+  /** Whatever the page can tell us about why it is not where it should be. */
+  async why() {
+    const page = await this.eval(`
+      (() => ({
+        url: location.href,
+        ready: document.readyState,
+        authError: document.querySelector('#auth-error')?.textContent || '',
+        visible: [...document.querySelectorAll('section, main, div')]
+          .filter((el) => el.id && !el.classList.contains('hidden'))
+          .map((el) => el.id).slice(0, 6),
+      }))()
+    `).catch((err) => ({ evalFailed: String(err) }));
+    return JSON.stringify({
+      ...page,
+      errors: this.errors.slice(0, 3),
+      browserLogs: this.logs.slice(0, 5),
+    });
   }
 
   async enableSavedContacts() {
