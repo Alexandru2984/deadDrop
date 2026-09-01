@@ -157,6 +157,25 @@ jobs:
           DD_REQUIRE_BROWSER: '1'
         run: node test/browser.group.mjs
 
+      # Messages ride a channel the handshake authenticates. Media does not:
+      # audio and video are secured by DTLS-SRTP, whose certificate is vouched
+      # for only by a fingerprint in the SDP the untrusted server relayed. The
+      # client attests its real fingerprint over the encrypted channel; this
+      # checks that binding against the certificates actually in use.
+      - name: Mint invites for the call run
+        id: callinvites
+        run: |
+          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Audio/video call test
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.callinvites.outputs.a }}
+          DD_INVITE2: ${{ steps.callinvites.outputs.b }}
+          DD_REQUIRE_BROWSER: '1'
+        run: node test/browser.call.mjs
+
       - name: Upload mobile screenshots
         if: always()
         uses: actions/upload-artifact@v4

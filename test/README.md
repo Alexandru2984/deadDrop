@@ -30,8 +30,9 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 ## Browser suites
 
 `browser.smoke.mjs` (one page), `browser.pair.mjs` (two peers, one real WebRTC
-session) and `browser.group.mjs` (three peers, a full mesh) drive headless
-Chrome over the DevTools Protocol. Shared plumbing lives in `lib/browser.mjs`. They need no
+session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
+(one audio/video call, with the DTLS fingerprint binding checked against the
+certificates actually in use) drive headless Chrome over the DevTools Protocol. Shared plumbing lives in `lib/browser.mjs`. They need no
 npm packages — Node 22 has a built-in WebSocket client.
 
 Both skip when no Chromium is on the box, so a developer without one still gets

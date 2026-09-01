@@ -65,6 +65,11 @@ export async function launchBrowser(prefix) {
     '--disable-dev-shm-usage',
     '--disable-extensions', '--disable-component-update', '--disable-default-apps',
     '--disable-background-networking', '--disable-sync', '--mute-audio',
+    // Calls need a camera and a microphone. The fake device produces a
+    // deterministic tone and a moving pattern, and the fake UI auto-grants the
+    // permission prompt, so a headless run can place a real WebRTC call.
+    '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
+    '--autoplay-policy=no-user-gesture-required',
     'about:blank',
   ], {
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -325,6 +330,105 @@ export class Peer {
   transcript() {
     return this.eval(`
       [...document.querySelectorAll('.msg-text')].map((n) => n.textContent).join('\\n')
+    `);
+  }
+
+  /* ── Calls ── */
+
+  /** True once the call button is offered, i.e. the media path is bound. */
+  callable() {
+    return this.eval(`
+      (() => {
+        const btn = document.querySelector('#call-btn');
+        return !!btn && btn.style.display !== 'none';
+      })()
+    `);
+  }
+
+  startCall() {
+    return this.eval(`document.querySelector('#call-btn').click(); true`);
+  }
+
+  ringing() {
+    return this.eval(
+      `!document.querySelector('#incoming-call').classList.contains('hidden')`);
+  }
+
+  acceptCall() {
+    return this.eval(`document.querySelector('#accept-call').click(); true`);
+  }
+
+  rejectCall() {
+    return this.eval(`document.querySelector('#reject-call').click(); true`);
+  }
+
+  endCall() {
+    return this.eval(`document.querySelector('#end-call').click(); true`);
+  }
+
+  /**
+   * What the media elements actually hold. `remote` is the only honest proof a
+   * call connected: it is set from `ontrack`, which cannot fire unless DTLS-SRTP
+   * completed with the peer.
+   */
+  mediaState() {
+    return this.eval(`
+      (() => {
+        const state = (v) => {
+          const s = v && v.srcObject;
+          if (!s) return null;
+          return {
+            audio: s.getAudioTracks().length,
+            video: s.getVideoTracks().length,
+            live: s.getTracks().filter((t) => t.readyState === 'live').length,
+          };
+        };
+        return {
+          local: state(document.querySelector('#local-video')),
+          remote: state(document.querySelector('#remote-video')),
+          overlay: !document.querySelector('#call-overlay').classList.contains('hidden'),
+          status: document.querySelector('#call-status-bar').textContent || '',
+        };
+      })()
+    `);
+  }
+
+  /**
+   * Record every RTCPeerConnection the page creates, so a test can read real
+   * WebRTC stats. Must run before the page loads. This instruments the browser
+   * from the outside — the app exposes nothing, and should not start to.
+   */
+  instrumentPeerConnections() {
+    return this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `
+        window.__ddPeerConnections = [];
+        const Native = window.RTCPeerConnection;
+        window.RTCPeerConnection = function (...args) {
+          const pc = new Native(...args);
+          window.__ddPeerConnections.push(pc);
+          return pc;
+        };
+        window.RTCPeerConnection.prototype = Native.prototype;
+      `,
+    }, this.sessionId);
+  }
+
+  /** Bytes the peer connection has actually decoded from the remote end. */
+  inboundMedia() {
+    return this.eval(`
+      (async () => {
+        const pcs = window.__ddPeerConnections || [];
+        let bytes = 0;
+        for (const pc of pcs) {
+          const report = await pc.getStats();
+          report.forEach((s) => {
+            if (s.type === 'inbound-rtp' && typeof s.bytesReceived === 'number') {
+              bytes += s.bytesReceived;
+            }
+          });
+        }
+        return bytes;
+      })()
     `);
   }
 }
