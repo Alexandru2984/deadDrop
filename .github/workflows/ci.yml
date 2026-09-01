@@ -64,10 +64,75 @@ jobs:
       - name: Integrity manifest matches the served code
         run: node scripts/gen-integrity.mjs --check
 
-  # Live zero-knowledge login flow plus a real-browser run of the client.
-  e2e:
-    name: Live SRP e2e + browser smoke
+  # Live zero-knowledge login flow: no browser, so it stays its own quick job.
+  srp-e2e:
+    name: Live SRP e2e
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build server
+        run: go build -o deaddrop ./cmd/server/
+      - name: Start server
+        run: .github/start-server.sh
+      - name: Mint an invite code
+        id: invite
+        run: echo "code=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+      - name: Run live SRP e2e
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.invite.outputs.code }}
+        run: node test/srp.e2e.mjs
+      - name: Server log (on failure)
+        if: failure()
+        run: cat server.log || true
+
+  # Real Chrome against the real page. One job per suite, each with its own
+  # runner and its own server: these were a single job running five browsers
+  # back to back, where one flaky suite took every later one down with it and
+  # the failure that mattered was buried under twenty timeouts.
+  browser:
+    name: Browser — ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Executes the real page in Chrome. The Go and Node suites never run
+          # the client, so only this catches a policy the browser refuses to
+          # honour — a CSP directive that blocks the app's own code, or a
+          # Trusted Types violation from an innerHTML assignment that crept back
+          # in. The layout assertions prove the page is usable on a phone; the
+          # screenshots show what it actually looks like, which no assertion can.
+          - name: smoke
+            suite: browser.smoke.mjs
+          # Two isolated contexts, one real WebRTC session between them: a
+          # handshake over the wire, a safety code both sides compare, and a
+          # saved contact recognised later without comparing anything again.
+          - name: two peers
+            suite: browser.pair.mjs
+          # A room is a mesh of independent pairwise sessions, not a group key.
+          # A mesh that reused one session across peers, or matched a code
+          # against the wrong pair, would look normal from a single browser.
+          - name: group room
+            suite: browser.group.mjs
+          # Messages ride a channel the handshake authenticates. Media does not:
+          # audio and video are secured by DTLS-SRTP, whose certificate is
+          # vouched for only by a fingerprint in the SDP the untrusted server
+          # relayed. This checks that binding against the certificates in use.
+          - name: audio/video call
+            suite: browser.call.mjs
+          # Every other suite has two honest clients, so every frame arrives in
+          # the order the state machine expects. Comparing a safety code says
+          # who is on the other end, not what their software will do next — so
+          # this one runs a patched client against a stock one.
+          - name: hostile peer
+            suite: browser.hostile.mjs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -80,124 +145,29 @@ jobs:
         run: go build -o deaddrop ./cmd/server/
 
       - name: Start server
-        run: |
-          # ALLOW_LOCAL_ORIGINS is required for the browser job: without it the
-          # allowed WebSocket origin stays the production hostname and the
-          # signaling upgrade rejects the loopback page, so no room can open.
-          ALLOW_LOCAL_ORIGINS=1 PORT=8100 HOST=127.0.0.1 ./deaddrop > server.log 2>&1 &
-          echo $! > server.pid
-          for i in $(seq 1 40); do
-            if curl -sf http://127.0.0.1:8100/api/config >/dev/null; then
-              echo "server up"; exit 0
-            fi
-            sleep 0.25
-          done
-          echo "server did not become ready"; cat server.log; exit 1
+        run: .github/start-server.sh
 
-      - name: Mint an invite code
-        id: invite
-        run: echo "code=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-
-      - name: Run live SRP e2e
-        env:
-          DD_URL: http://127.0.0.1:8100
-          DD_INVITE: ${{ steps.invite.outputs.code }}
-        run: node test/srp.e2e.mjs
-
-      # Executes the real page in Chrome. The Go and Node suites never run the
-      # client, so only this catches a policy the browser refuses to honour —
-      # a CSP directive that blocks the app's own code, or a Trusted Types
-      # violation from an innerHTML assignment that crept back in.
-      - name: Mint a second invite for the browser run
-        id: uiinvite
-        run: echo "code=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-
-      - name: Browser smoke test
-        env:
-          DD_URL: http://127.0.0.1:8100
-          DD_INVITE: ${{ steps.uiinvite.outputs.code }}
-          DD_REQUIRE_BROWSER: '1'
-          DD_SCREENSHOT_DIR: screenshots
-        run: node test/browser.smoke.mjs
-
-      # The layout assertions prove the page is usable on a phone; these show
-      # what it actually looks like, which no assertion can.
-      # Two isolated browser contexts, one real WebRTC session between them.
-      # Nothing else covers the path that actually matters: a handshake over the
-      # wire, a safety code both sides compare, and a saved contact recognised
-      # on a later session without comparing anything again.
-      - name: Mint invites for the two-peer run
-        id: pairinvites
-        run: |
-          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-
-      - name: Two-peer end-to-end test
-        env:
-          DD_URL: http://127.0.0.1:8100
-          DD_INVITE: ${{ steps.pairinvites.outputs.a }}
-          DD_INVITE2: ${{ steps.pairinvites.outputs.b }}
-          DD_REQUIRE_BROWSER: '1'
-        run: node test/browser.pair.mjs
-
-      # A room is a mesh of independent pairwise sessions, not a group key. A
-      # mesh that reused one session across peers, or matched a safety code
-      # against the wrong pair, would look completely normal from one browser.
-      - name: Mint invites for the group run
-        id: groupinvites
+      # Three is more than any suite needs; the extras cost nothing and keep
+      # this step identical for every one of them.
+      - name: Mint invites
+        id: invites
         run: |
           echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
           echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
           echo "c=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
 
-      - name: Three-peer group-room test
+      - name: Run ${{ matrix.name }}
         env:
           DD_URL: http://127.0.0.1:8100
-          DD_INVITE: ${{ steps.groupinvites.outputs.a }}
-          DD_INVITE2: ${{ steps.groupinvites.outputs.b }}
-          DD_INVITE3: ${{ steps.groupinvites.outputs.c }}
+          DD_INVITE: ${{ steps.invites.outputs.a }}
+          DD_INVITE2: ${{ steps.invites.outputs.b }}
+          DD_INVITE3: ${{ steps.invites.outputs.c }}
           DD_REQUIRE_BROWSER: '1'
-        run: node test/browser.group.mjs
-
-      # Messages ride a channel the handshake authenticates. Media does not:
-      # audio and video are secured by DTLS-SRTP, whose certificate is vouched
-      # for only by a fingerprint in the SDP the untrusted server relayed. The
-      # client attests its real fingerprint over the encrypted channel; this
-      # checks that binding against the certificates actually in use.
-      - name: Mint invites for the call run
-        id: callinvites
-        run: |
-          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-
-      - name: Audio/video call test
-        env:
-          DD_URL: http://127.0.0.1:8100
-          DD_INVITE: ${{ steps.callinvites.outputs.a }}
-          DD_INVITE2: ${{ steps.callinvites.outputs.b }}
-          DD_REQUIRE_BROWSER: '1'
-        run: node test/browser.call.mjs
-
-      # Every other browser job has two honest clients, so every frame arrives
-      # in the order the state machine expects. Comparing a safety code says who
-      # is on the other end, not what their software will do next — so this one
-      # runs a patched client against a stock one.
-      - name: Mint invites for the hostile-peer run
-        id: hostileinvites
-        run: |
-          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
-
-      - name: Hostile-peer test
-        env:
-          DD_URL: http://127.0.0.1:8100
-          DD_INVITE: ${{ steps.hostileinvites.outputs.a }}
-          DD_INVITE2: ${{ steps.hostileinvites.outputs.b }}
-          DD_REQUIRE_BROWSER: '1'
-        run: node test/browser.hostile.mjs
+          DD_SCREENSHOT_DIR: screenshots
+        run: node test/${{ matrix.suite }}
 
       - name: Upload mobile screenshots
-        if: always()
+        if: always() && matrix.name == 'smoke'
         uses: actions/upload-artifact@v4
         with:
           name: mobile-screenshots
