@@ -47,6 +47,13 @@ over a real, properly encrypted, safety-code-confirmed session. Every assertion
 in it is about what the *stock* client on the other side refuses to do. Shared plumbing lives in `lib/browser.mjs`. They need no
 npm packages — Node 22 has a built-in WebSocket client.
 
+The server allows ten auth requests a minute per address, and one registration
+costs several — a room, a TURN config and a session check on top of the
+registration itself. Several suites run back to back from one address will trip
+that, which is the limiter working rather than a bug: the suites wait for the
+bucket to refill and carry on. In CI each suite gets its own runner and its own
+server, so it never comes up.
+
 Both skip when no Chromium is on the box, so a developer without one still gets
 a green run; CI sets `DD_REQUIRE_BROWSER=1` so a missing browser fails loudly
 instead of quietly never running.

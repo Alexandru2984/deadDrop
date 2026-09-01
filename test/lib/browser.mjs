@@ -238,20 +238,52 @@ export class Peer {
     await this.eval(`window.confirm = () => true; window.prompt = () => 'peer'; true`);
   }
 
-  async register(username, invite, password) {
-    await this.eval(`
-      document.querySelector('#auth-user').value = ${JSON.stringify(username)};
-      document.querySelector('#auth-pass').value = ${JSON.stringify(password)};
-      document.querySelector('#auth-invite').value = ${JSON.stringify(invite)};
-      document.querySelector('#register-btn').click(); true
-    `);
-    const landed = await waitFor(() => this.eval(
-      `!document.querySelector('#landing').classList.contains('hidden')`), { timeout: 25000 });
-    // A registration that silently fails takes every later assertion down with
-    // it, and the run then reports twenty red lines that all mean one thing.
-    // Say what the page actually showed instead.
-    if (!landed) console.error(`  ! ${this.name} never reached the landing page: ${await this.why()}`);
-    return landed;
+  /**
+   * Register, waiting out the auth rate limit if it is in the way.
+   *
+   * The suites are ordinary clients of a public API that allows ten auth
+   * requests a minute per address, and registering an account costs several —
+   * a room, a TURN config and a session check on top of the registration
+   * itself. Run a few suites from one address and the later ones are refused,
+   * exactly as an attacker would be. That is the limiter working, not a bug to
+   * engineer around: the tests pace themselves instead.
+   *
+   * Tokens come back in whole-interval steps, so a partial wait buys nothing.
+   */
+  async register(username, invite, password, { attempts = 3 } = {}) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      await this.eval(`
+        document.querySelector('#auth-user').value = ${JSON.stringify(username)};
+        document.querySelector('#auth-pass').value = ${JSON.stringify(password)};
+        document.querySelector('#auth-invite').value = ${JSON.stringify(invite)};
+        document.querySelector('#register-btn').click(); true
+      `);
+      const outcome = await waitFor(async () => {
+        if (await this.eval(`!document.querySelector('#landing').classList.contains('hidden')`)) {
+          return 'landed';
+        }
+        return await this.eval(`
+          (() => {
+            const el = document.querySelector('#auth-error');
+            return el && !el.classList.contains('hidden') && el.textContent
+              ? 'error: ' + el.textContent : false;
+          })()
+        `);
+      }, { timeout: 25000 });
+
+      if (outcome === 'landed') return true;
+      if (String(outcome).includes('too many requests') && attempt < attempts) {
+        console.log(`  … ${this.name} is rate limited; waiting for the bucket to refill`);
+        await sleep(65000);
+        continue;
+      }
+      // A registration that silently fails takes every later assertion down with
+      // it, and the run then reports twenty red lines that all mean one thing.
+      // Say what the page actually showed instead.
+      console.error(`  ! ${this.name} never reached the landing page: ${await this.why()}`);
+      return false;
+    }
+    return false;
   }
 
   /** Whatever the page can tell us about why it is not where it should be. */
