@@ -75,13 +75,20 @@ export async function launchBrowser(prefix, { extraArgs = [] } = {}) {
   ], {
     stdio: ['ignore', 'ignore', 'pipe'],
     env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: '/dev/null' },
+    // Chrome is a process tree, not a process. Its own group means the whole
+    // tree can be taken down at once — killing just the launcher leaves the
+    // zygote and every renderer behind, and a run that ends early strands them
+    // for as long as the machine is up.
+    detached: true,
   });
 
   let stderrTail = '';
   chrome.stderr.on('data', (c) => { stderrTail = (stderrTail + c.toString()).slice(-2000); });
 
   const cleanup = () => {
-    try { chrome.kill('SIGKILL'); } catch { /* gone */ }
+    // Negative pid: the group, so the renderers go with it.
+    try { process.kill(-chrome.pid, 'SIGKILL'); } catch { /* already gone */ }
+    try { chrome.kill('SIGKILL'); } catch { /* already gone */ }
     try { rmSync(profile, { recursive: true, force: true }); } catch { /* best effort */ }
   };
   process.on('exit', cleanup);
