@@ -20,6 +20,7 @@ import {
 import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig } from './util.js';
+import { callSignalAllowed } from './callsignal.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -91,6 +92,9 @@ class DeadDrop {
     // Call state (calls stay 1:1 — only available when exactly one peer is in the room)
     this.callState = 'idle'; // idle | requesting | incoming | connecting | active
     this._callPeerId = null;
+    // Which side of the call setup this is. An offer is only ever legitimate
+    // for a callee waiting on one, an answer only for a caller that sent one.
+    this._callRole = null;   // 'caller' | 'callee'
     this.localStream = null;
     this.remoteStream = null;
     this._callVideo = false;
@@ -1375,6 +1379,7 @@ class DeadDrop {
     if (this.callState !== 'idle' || enc.length !== 1 || this.peers.size !== 1) return;
     if (!enc[0].conn.mediaVerified) return;
     this._callPeerId = [...this.peers.keys()][0];
+    this._callRole = 'caller';
     this._startCall(true);
   }
 
@@ -1395,7 +1400,7 @@ class DeadDrop {
     } catch (err) {
       console.error('getUserMedia failed:', err);
       await this._sendBestEffort(this._callConn(), { type: 'call-reject', reason: 'media-error' });
-      this.callState = 'idle';
+      this._endCallCleanup();
       this._renderSystem('Failed to access camera/microphone');
       return;
     }
@@ -1407,14 +1412,22 @@ class DeadDrop {
   }
 
   _rejectCall() {
-    this.el.incomingCall.classList.add('hidden');
-    this.callState = 'idle';
+    // Send first: the cleanup drops the reference to the peer being declined.
+    // Leaving that reference behind is what let a declined caller keep going.
     this._sendBestEffort(this._callConn(), { type: 'call-reject' });
+    this._endCallCleanup();
   }
 
   _handleCallSignal(peerId, msg) {
-    // Everything after call-req must come from the peer the call is with.
-    if (msg.type !== 'call-req' && peerId !== this._callPeerId) return;
+    // A frame from the right peer is not the same as a frame at the right
+    // moment. Verification tells us who is on the other end; it does not stop
+    // them from running a patched client that offers media while our phone is
+    // merely ringing, or straight after the user pressed decline.
+    if (!callSignalAllowed(msg.type, {
+      state: this.callState,
+      role: this._callRole,
+      fromCallPeer: peerId === this._callPeerId,
+    })) return;
     if (msg.type === 'call-req' && typeof msg.video !== 'boolean') return;
     if ((msg.type === 'call-offer' || msg.type === 'call-answer')
         && (typeof msg.sdp !== 'string' || msg.sdp.length > 64 * 1024)) return;
@@ -1446,6 +1459,7 @@ class DeadDrop {
       return;
     }
     this._callPeerId = peerId;
+    this._callRole = 'callee';
     this.callState = 'incoming';
     this._callVideo = msg.video;
     this.el.incomingCall.classList.remove('hidden');
@@ -1534,6 +1548,7 @@ class DeadDrop {
     this.callState = 'idle';
     this._callConn()?.stopMedia();
     this._callPeerId = null;
+    this._callRole = null;
     if (this.localStream) {
       for (const track of this.localStream.getTracks()) track.stop();
       this.localStream = null;
@@ -1541,6 +1556,10 @@ class DeadDrop {
     this.remoteStream = null;
     this.el.localVideo.srcObject = null;
     this.el.remoteVideo.srcObject = null;
+    // A call that fails mid-negotiation gets torn down here, and left the last
+    // status behind: the user was told "connecting" forever with nothing to
+    // connect to.
+    this._showCallStatus('');
     this._toggleCallOverlay(false);
     this.el.incomingCall.classList.add('hidden');
     this.el.remotePlaceholder.classList.remove('hidden');

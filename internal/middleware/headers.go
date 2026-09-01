@@ -35,8 +35,12 @@ func SecurityHeaders(next http.Handler) http.Handler {
 				"hid=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), "+
 				"idle-detection=(), local-fonts=(), compute-pressure=(), "+
 				"screen-wake-lock=(), browsing-topics=(), interest-cohort=(), "+
-				"attribution-reporting=(), otp-credentials=(), "+
+				"otp-credentials=(), "+
 				"publickey-credentials-get=(), storage-access=()")
+		// attribution-reporting is deliberately absent: Chrome dropped the API,
+		// and naming a feature the browser no longer knows makes it reject the
+		// token and log an error on every page load. Noise in the console is not
+		// free — it is where a real violation goes unnoticed.
 		// Privacy-first CSP: no external origins, no inline scripts OR styles. The
 		// whole app is same-origin ES modules + stylesheets; dynamic styling goes
 		// through the CSSOM (element.style.x = …), which CSP does not block.

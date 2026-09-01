@@ -55,6 +55,8 @@ jobs:
         run: node test/srp.selftest.mjs
       - name: DTLS fingerprint media-path check
         run: node test/fingerprint.selftest.mjs
+      - name: Call-signaling state machine
+        run: node test/callsignal.selftest.mjs
       - name: STUN/TURN response validation
         run: node test/config.selftest.mjs
       - name: Strict integrity manifest parser
@@ -175,6 +177,24 @@ jobs:
           DD_INVITE2: ${{ steps.callinvites.outputs.b }}
           DD_REQUIRE_BROWSER: '1'
         run: node test/browser.call.mjs
+
+      # Every other browser job has two honest clients, so every frame arrives
+      # in the order the state machine expects. Comparing a safety code says who
+      # is on the other end, not what their software will do next — so this one
+      # runs a patched client against a stock one.
+      - name: Mint invites for the hostile-peer run
+        id: hostileinvites
+        run: |
+          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Hostile-peer test
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.hostileinvites.outputs.a }}
+          DD_INVITE2: ${{ steps.hostileinvites.outputs.b }}
+          DD_REQUIRE_BROWSER: '1'
+        run: node test/browser.hostile.mjs
 
       - name: Upload mobile screenshots
         if: always()

@@ -57,6 +57,9 @@ export class PeerConnection {
     // the encrypted session, then separately require both users to compare and
     // confirm the SAS before any call or application traffic is allowed.
     this.mediaVerified = false;
+    // The exact certificate the peer attested. Every later renegotiation has to
+    // still be that certificate, or the media path is no longer the one bound.
+    this.boundFingerprints = null;
     // Opt-in saved contacts. `identity` is this browser's long-term keypair when
     // the user enabled the feature; peerIdentityFp is set only once the peer has
     // proved possession of the key it presented.
@@ -184,6 +187,7 @@ export class PeerConnection {
    */
   async acceptMedia(offer, localStream) {
     this._requireVerifiedMedia();
+    this._requireBoundCertificate(offer);
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
     if (localStream) {
       this.localStream = localStream;
@@ -197,6 +201,7 @@ export class PeerConnection {
   /** Handle the renegotiation answer. */
   async completeMedia(answer) {
     this._requireVerifiedMedia();
+    this._requireBoundCertificate(answer);
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
   }
 
@@ -487,6 +492,7 @@ export class PeerConnection {
       // The cert the peer actually holds matches what signaling delivered: no
       // DTLS man-in-the-middle. Media (calls) is now bound to the verified SAS.
       this.mediaVerified = true;
+      this.boundFingerprints = theirs;
       this.onStateChange('media-verified');
     } else {
       // The peer's real DTLS cert differs from the SDP signaling relayed — a
@@ -581,6 +587,27 @@ export class PeerConnection {
   _requireVerifiedMedia() {
     if (!this.userVerified || !this.mediaVerified) {
       throw new Error('Peer identity or media path is not verified');
+    }
+  }
+
+  /**
+   * A renegotiation must keep using the certificate that was attested.
+   *
+   * The fingerprint comparison happens once, when the session is established.
+   * Every SDP after that arrives over the encrypted channel, so it cannot be
+   * rewritten in flight — but it can carry a different certificate, and
+   * accepting one would silently move the media to a DTLS session nobody ever
+   * vouched for. Re-checking costs nothing and makes the binding an invariant
+   * rather than a one-time check.
+   */
+  _requireBoundCertificate(description) {
+    if (!this.boundFingerprints) throw new Error('Media path is not bound');
+    let offered = [];
+    try {
+      offered = extractFingerprints(description?.sdp || '');
+    } catch { /* leave empty — the check below rejects it */ }
+    if (!fingerprintsMatch(this.boundFingerprints, offered)) {
+      throw new Error('Renegotiated media uses a different certificate');
     }
   }
 

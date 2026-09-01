@@ -42,7 +42,7 @@ export function findChrome() {
  * Launch Chrome and connect. Returns { cdp, cleanup } or exits with a clear
  * message — a browser suite that cannot start a browser has nothing to say.
  */
-export async function launchBrowser(prefix) {
+export async function launchBrowser(prefix, { extraArgs = [] } = {}) {
   const chromePath = findChrome();
   if (!chromePath) {
     if (process.env.DD_REQUIRE_BROWSER === '1') {
@@ -70,6 +70,7 @@ export async function launchBrowser(prefix) {
     // permission prompt, so a headless run can place a real WebRTC call.
     '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
     '--autoplay-policy=no-user-gesture-required',
+    ...extraArgs,
     'about:blank',
   ], {
     stdio: ['ignore', 'ignore', 'pipe'],
@@ -133,10 +134,22 @@ export class CDP {
     return new CDP(ws);
   }
 
-  send(method, params = {}, sessionId) {
+  /**
+   * A renderer wedged in a WebRTC operation never answers, and a test that
+   * waits forever tells CI nothing. Fail the call instead, with the method name
+   * that stalled.
+   */
+  send(method, params = {}, sessionId, timeout = 60000) {
     const id = ++this.id;
     this.ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }));
-    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out after ${timeout}ms`));
+      }, timeout);
+      const done = (fn) => (value) => { clearTimeout(timer); fn(value); };
+      this.pending.set(id, { resolve: done(resolve), reject: done(reject) });
+    });
   }
 
   on(fn) { this.listeners.push(fn); }
@@ -389,6 +402,74 @@ export class Peer {
           overlay: !document.querySelector('#call-overlay').classList.contains('hidden'),
           status: document.querySelector('#call-status-bar').textContent || '',
         };
+      })()
+    `);
+  }
+
+  /**
+   * Turn this peer into a hostile client.
+   *
+   * A peer you compared a safety code with is still just software on someone
+   * else's machine, and nothing stops them from running a modified build. The
+   * only honest way to test what the *other* side does when a peer stops
+   * following the protocol is to actually have one that does not.
+   *
+   * So rewrite the bundle on its way into this browser: drop the integrity
+   * attributes the page pins its own modules with (an attacker patching their
+   * own client would), and hand the app instance to the test so it can send any
+   * frame it likes over the real, properly encrypted channel. The victim peer
+   * is untouched and sees a perfectly ordinary session.
+   *
+   * Must run before the page loads.
+   */
+  async becomeHostile() {
+    await this.cdp.send('Fetch.enable', {
+      patterns: [
+        { urlPattern: '*/', requestStage: 'Response' },
+        { urlPattern: '*/index.html', requestStage: 'Response' },
+        { urlPattern: '*/js/app.js', requestStage: 'Response' },
+      ],
+    }, this.sessionId);
+
+    this.cdp.on(async (msg) => {
+      if (msg.sessionId !== this.sessionId || msg.method !== 'Fetch.requestPaused') return;
+      const { requestId, request, responseHeaders } = msg.params;
+      try {
+        const { body, base64Encoded } = await this.cdp.send(
+          'Fetch.getResponseBody', { requestId }, this.sessionId);
+        let text = base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body;
+        if (request.url.endsWith('/js/app.js')) {
+          text = text.replace('new DeadDrop();', 'window.__ddApp = new DeadDrop();');
+        } else {
+          text = text.replace(/\s+integrity="[^"]*"/g, '');
+        }
+        await this.cdp.send('Fetch.fulfillRequest', {
+          requestId,
+          responseCode: 200,
+          responseHeaders: (responseHeaders || []).filter(
+            (h) => !/^content-length$/i.test(h.name)),
+          body: Buffer.from(text, 'utf8').toString('base64'),
+        }, this.sessionId);
+      } catch {
+        try { await this.cdp.send('Fetch.continueRequest', { requestId }, this.sessionId); }
+        catch { /* the request is already gone */ }
+      }
+    });
+  }
+
+  /**
+   * Send a raw protocol frame to the peer, sealed and sent exactly as the real
+   * client would — only at a moment the real client never would. Requires
+   * becomeHostile().
+   */
+  sendRaw(frame) {
+    return this.eval(`
+      (async () => {
+        const app = window.__ddApp;
+        const session = [...app.peers.values()][0];
+        if (!session) return false;
+        await app._sendBestEffort(session.conn, ${JSON.stringify(frame)});
+        return true;
       })()
     `);
   }
