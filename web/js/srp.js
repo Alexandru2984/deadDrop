@@ -9,6 +9,8 @@
  * vectors in test/srp.selftest.mjs ↔ internal/srp/srp_test.go.
  */
 
+import { concatBytes } from './util.js';
+
 const N = BigInt('0x' +
   'AC6BDB41324A9A9BF166DE5E1389582FAF72B6651987EE07FC3192943DB56050' +
   'A37329CBB4A099ED8193E0757767A13DD52312AB4B03310DCD7F48A9DA04FD50' +
@@ -23,7 +25,7 @@ const N_LEN = (N.toString(16).length + 1) >> 1; // bytes in N (256)
 
 let _k = null;
 async function kParam() {
-  if (_k === null) _k = bytesToBig(await sha256(concat(pad(N), pad(g))));
+  if (_k === null) _k = bytesToBig(await sha256(concatBytes(pad(N), pad(g))));
   return _k;
 }
 
@@ -54,7 +56,7 @@ async function stretch(username, password, saltBytes, kdf) {
   const base = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
   // Bind the stretch to the account and the SRP salt so identical passwords on
   // different accounts (or after a salt rotation) never collide.
-  const salt = concat(enc.encode(`deaddrop/srp/kdf/v1:${username}:`), saltBytes);
+  const salt = concatBytes(enc.encode(`deaddrop/srp/kdf/v1:${username}:`), saltBytes);
   const bits = await crypto.subtle.deriveBits(
     { name: 'PBKDF2', hash: 'SHA-256', salt, iterations }, base, 256,
   );
@@ -103,7 +105,7 @@ export class ClientLogin {
     const k = await kParam();
     const stretched = await stretch(this.username, this.password, salt, kdf);
     const x = await computeX(salt, this.username, stretched);
-    const u = bytesToBig(await sha256(concat(pad(this.A), pad(B))));
+    const u = bytesToBig(await sha256(concatBytes(pad(this.A), pad(B))));
     if (u === 0n) throw new Error('SRP: u ≡ 0');
 
     // S = (B - k * g^x) ^ (a + u*x) mod N
@@ -113,8 +115,8 @@ export class ClientLogin {
 
     const Sp = pad(S);
     this.K = bytesToHex(await sha256(Sp));
-    const M1 = await sha256(concat(pad(this.A), pad(B), Sp));
-    this._expectedM2 = bytesToHex(await sha256(concat(pad(this.A), M1, Sp)));
+    const M1 = await sha256(concatBytes(pad(this.A), pad(B), Sp));
+    this._expectedM2 = bytesToHex(await sha256(concatBytes(pad(this.A), M1, Sp)));
     return { M1: bytesToHex(M1) };
   }
 
@@ -128,7 +130,7 @@ export class ClientLogin {
 
 async function computeX(saltBytes, username, password) {
   const inner = await sha256(new TextEncoder().encode(`${username}:${password}`));
-  return bytesToBig(await sha256(concat(saltBytes, inner)));
+  return bytesToBig(await sha256(concatBytes(saltBytes, inner)));
 }
 
 // Square-and-multiply with a data-dependent branch on the exponent, which here
@@ -154,13 +156,6 @@ async function sha256(bytes) {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
 }
 
-function concat(...arrs) {
-  const total = arrs.reduce((n, a) => n + a.length, 0);
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const a of arrs) { out.set(a, off); off += a.length; }
-  return out;
-}
 
 /** Big-endian bytes of x, left-padded to N_LEN. */
 function pad(x) {
@@ -213,4 +208,4 @@ function timingSafeHexEqual(a, b) {
 }
 
 // Exposed for the cross-implementation self-test only.
-export const _srp = { N, g, N_LEN, kParam, computeX, modpow, pad, bytesToBig, bigToHex, hexToBig, bytesToHex, sha256, concat };
+export const _srp = { N, g, N_LEN, kParam, computeX, modpow, pad, bytesToBig, bigToHex, hexToBig, bytesToHex, sha256, concat: concatBytes };

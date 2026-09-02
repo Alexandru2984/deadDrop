@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"deaddrop/internal/dnsname"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -643,7 +644,7 @@ func normalizeOrigin(raw string) (string, error) {
 	scheme := strings.ToLower(u.Scheme)
 	hostname := strings.ToLower(u.Hostname())
 	ip := net.ParseIP(hostname)
-	if hostname == "" || strings.Contains(hostname, "%") || (ip == nil && !validOriginDNSHostname(hostname)) {
+	if hostname == "" || strings.Contains(hostname, "%") || (ip == nil && !dnsname.Valid(hostname)) {
 		return "", fmt.Errorf("%q has an invalid host", raw)
 	}
 	secureHTTPHost := hostname == "localhost" || strings.HasSuffix(hostname, ".onion")
@@ -660,38 +661,6 @@ func normalizeOrigin(raw string) (string, error) {
 		}
 	}
 	return scheme + "://" + strings.ToLower(u.Host), nil
-}
-
-func validOriginDNSHostname(host string) bool {
-	if len(host) == 0 || len(host) > 253 {
-		return false
-	}
-	numeric := true
-	for _, c := range host {
-		if c < '0' || c > '9' {
-			if c != '.' {
-				numeric = false
-			}
-		}
-	}
-	if numeric { // avoid ambiguous non-canonical IPv4-looking names
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if len(label) == 0 || len(label) > 63 || !isOriginAlphaNum(label[0]) || !isOriginAlphaNum(label[len(label)-1]) {
-			return false
-		}
-		for i := 1; i < len(label)-1; i++ {
-			if !isOriginAlphaNum(label[i]) && label[i] != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isOriginAlphaNum(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
 }
 
 // findAvailablePort tries the preferred port, then increments up to 100 times.

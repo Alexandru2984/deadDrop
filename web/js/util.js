@@ -72,3 +72,22 @@ function validIceHost(host) {
   return host.split('.').every((label) => label.length >= 1 && label.length <= 63
     && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label));
 }
+
+/**
+ * Concatenate byte sequences.
+ *
+ * Lived in three copies — crypto.js, handshake.js and identity.js — and they had
+ * already drifted: the identity one wrote its inputs straight into the output,
+ * which silently truncates anything handed an ArrayBuffer rather than a typed
+ * array. One copy, and it wraps.
+ */
+export function concatBytes(...parts) {
+  const chunks = parts.map((part) => (part instanceof Uint8Array ? part : new Uint8Array(part)));
+  const out = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}

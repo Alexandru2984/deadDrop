@@ -15,7 +15,7 @@
  * browser/OS still controls physical memory and may retain copies.
  */
 
-import { bufToB64, b64ToBuf } from './util.js';
+import { bufToB64, b64ToBuf, concatBytes } from './util.js';
 import { ml_kem768 } from './vendor/noble/ml-kem.js';
 
 export const PROTOCOL_VERSION = 5;
@@ -518,16 +518,6 @@ function decodeIV(value) {
   return iv;
 }
 
-function concatBytes(...arrs) {
-  const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0));
-  let off = 0;
-  for (const arr of arrs) {
-    const bytes = new Uint8Array(arr);
-    out.set(bytes, off);
-    off += bytes.length;
-  }
-  return out;
-}
 
 function padBucket(n) {
   for (const bucket of PAD_BUCKETS) {

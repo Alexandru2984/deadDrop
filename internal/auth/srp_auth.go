@@ -993,6 +993,35 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 	jsonErr(w, "invalid credentials", http.StatusUnauthorized)
 }
 
+// requireLiveSession is the preamble every credential-changing endpoint shares:
+// POST only, a session cookie, and a session that is still live. It writes the
+// error response itself and reports whether the caller should continue.
+//
+// The three handlers below had these lines copied between them. The risk is not
+// the repetition: it is that a check added to one and missed in another looks
+// like nothing at all in a diff.
+//
+// The fresh-proof check is deliberately *not* folded in. Each handler calls it
+// on its own line, where it can be seen.
+func (h *Handler) requireLiveSession(w http.ResponseWriter, r *http.Request) (username string, duress bool, cookie *http.Cookie, ok bool) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return "", false, nil, false
+	}
+	c, err := sessionCookie(r)
+	if err != nil {
+		jsonErr(w, "not authenticated", http.StatusUnauthorized)
+		return "", false, nil, false
+	}
+	name, isDuress, live := h.sess.getMeta(c.Value)
+	if !live {
+		jsonErr(w, "not authenticated", http.StatusUnauthorized)
+		return "", false, nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
+	return name, isDuress, c, true
+}
+
 // SetVerifier installs a new salt+verifier for the logged-in user. It requires a
 // fresh SRP proof of the credential the session was opened with, so possession of
 // a session cookie is not by itself enough to rekey the account.
@@ -1003,21 +1032,10 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 // verifier — derived from a password the decoy user never typed — stays untouched
 // and the real owner is never locked out.
 func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	c, err := sessionCookie(r)
-	if err != nil {
-		jsonErr(w, "not authenticated", http.StatusUnauthorized)
-		return
-	}
-	username, duress, ok := h.sess.getMeta(c.Value)
+	username, duress, c, ok := h.requireLiveSession(w, r)
 	if !ok {
-		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body struct {
 		Salt     string `json:"salt"`
 		Verifier string `json:"verifier"`
@@ -1063,21 +1081,10 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 // browser computes (salt, verifier) from the duress password — it never reaches
 // the server. A duress session must not be allowed to change the duress credential.
 func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	c, err := sessionCookie(r)
-	if err != nil {
-		jsonErr(w, "not authenticated", http.StatusUnauthorized)
-		return
-	}
-	username, duress, ok := h.sess.getMeta(c.Value)
+	username, duress, _, ok := h.requireLiveSession(w, r)
 	if !ok {
-		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body struct {
 		Salt     string `json:"salt"`
 		Verifier string `json:"verifier"`
@@ -1121,21 +1128,10 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 // the coerced user surrendered genuinely stops working: a coercer who watches the
 // deletion and then retries that password must not find the account still alive.
 func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	c, err := sessionCookie(r)
-	if err != nil {
-		jsonErr(w, "not authenticated", http.StatusUnauthorized)
-		return
-	}
-	username, duress, ok := h.sess.getMeta(c.Value)
+	username, duress, _, ok := h.requireLiveSession(w, r)
 	if !ok {
-		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	var body struct {
 		Token string `json:"token"`
 		M1    string `json:"M1"`

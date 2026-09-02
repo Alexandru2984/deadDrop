@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1" // #nosec G505 -- coturn REST credentials require HMAC-SHA1; payload encryption does not use SHA-1
+	"deaddrop/internal/dnsname"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -146,10 +147,10 @@ func validateICEURL(raw string, turn bool) error {
 	scheme := raw[:separator]
 	if turn {
 		if scheme != "turn" && scheme != "turns" {
-			return errors.New("expected turn: or turns:")
+			return errors.New("expected a turn: or turns: URL")
 		}
 	} else if scheme != "stun" && scheme != "stuns" {
-		return errors.New("expected stun: or stuns:")
+		return errors.New("expected a stun: or stuns: URL")
 	}
 	rest := raw[separator+1:]
 	if rest == "" || strings.HasPrefix(rest, "//") {
@@ -160,7 +161,7 @@ func validateICEURL(raw string, turn bool) error {
 		return errors.New("malformed ICE URL")
 	}
 	hostname := u.Hostname()
-	if hostname == "" || strings.Contains(hostname, "%") || (net.ParseIP(hostname) == nil && !validDNSHostname(hostname)) {
+	if hostname == "" || strings.Contains(hostname, "%") || (net.ParseIP(hostname) == nil && !dnsname.Valid(hostname)) {
 		return errors.New("invalid ICE host")
 	}
 	if port := u.Port(); port != "" {
@@ -187,36 +188,4 @@ func validateICEURL(raw string, turn bool) error {
 		return errors.New("TURN query may only select udp or tcp transport")
 	}
 	return nil
-}
-
-func validDNSHostname(host string) bool {
-	if len(host) == 0 || len(host) > 253 {
-		return false
-	}
-	numeric := true
-	for _, c := range host {
-		if c < '0' || c > '9' {
-			if c != '.' {
-				numeric = false
-			}
-		}
-	}
-	if numeric { // reject ambiguous non-canonical IPv4-looking hostnames
-		return false
-	}
-	for _, label := range strings.Split(host, ".") {
-		if len(label) == 0 || len(label) > 63 || !isAlphaNum(label[0]) || !isAlphaNum(label[len(label)-1]) {
-			return false
-		}
-		for i := 1; i < len(label)-1; i++ {
-			if !isAlphaNum(label[i]) && label[i] != '-' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func isAlphaNum(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }

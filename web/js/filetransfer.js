@@ -119,13 +119,6 @@ export class FileTransferManager {
     }
   }
 
-  abort(id, scope = '') {
-    const key = this._key(scope, id);
-    const outbound = this.outbound.get(key);
-    if (outbound) outbound.aborted = true;
-    this._discardInbound(key);
-  }
-
   abortScope(scope) {
     const prefix = `${scope}\0`;
     for (const [key, transfer] of this.outbound) {

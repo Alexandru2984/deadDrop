@@ -14,7 +14,7 @@
  * observers but a malicious signaling/transport service can still interpose.
  */
 
-import { bufToB64, b64ToBuf } from './util.js';
+import { bufToB64, b64ToBuf, concatBytes } from './util.js';
 import { compareBytes, PROTOCOL_VERSION } from './crypto.js';
 
 const COMMIT_NONCE_BYTES = 16;
@@ -277,16 +277,6 @@ function handshakeTranscript(encapsulator, decapsulator, ciphertext) {
   );
 }
 
-function concatBytes(...arrs) {
-  const out = new Uint8Array(arrs.reduce((n, a) => n + a.length, 0));
-  let off = 0;
-  for (const arr of arrs) {
-    const bytes = new Uint8Array(arr);
-    out.set(bytes, off);
-    off += bytes.length;
-  }
-  return out;
-}
 
 function isZero(bytes) {
   let acc = 0;

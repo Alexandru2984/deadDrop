@@ -13,6 +13,11 @@ export class MessageManager {
    */
   constructor(onDestroyed, { maxEntries = 500, maxBlobBytes = 100 * 1024 * 1024 } = {}) {
     this.messages = new Map();
+    // Reverse index for removeElement, which is called once per rendered message
+    // when the transcript is trimmed. Scanning every tracked message to find the
+    // one owning a node made that O(n) on the render path. Weak, so a node the
+    // app drops elsewhere does not keep its entry alive.
+    this.byElement = new WeakMap();
     this.onDestroyed = onDestroyed;
     this.maxEntries = maxEntries;
     this.maxBlobBytes = maxBlobBytes;
@@ -48,6 +53,7 @@ export class MessageManager {
         : 0,
     };
     this.messages.set(id, entry);
+    if (element) this.byElement.set(element, id);
     this.blobBytes += entry.blobBytes;
 
     if (ttl > 0) {
@@ -99,13 +105,10 @@ export class MessageManager {
   }
 
   removeElement(element) {
-    for (const [id, message] of this.messages) {
-      if (message.element === element) {
-        this._remove(id, false, true);
-        return true;
-      }
-    }
-    return false;
+    const id = this.byElement.get(element);
+    if (id === undefined || !this.messages.has(id)) return false;
+    this._remove(id, false, true);
+    return true;
   }
 
   _remove(id, notify, immediate = false) {
@@ -128,6 +131,7 @@ export class MessageManager {
     }
 
     this.messages.delete(id);
+    if (m.element) this.byElement.delete(m.element);
     if (notify) this.onDestroyed(m.wireId, m.peerId);
   }
 

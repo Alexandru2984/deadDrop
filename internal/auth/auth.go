@@ -318,8 +318,6 @@ func NewHandler(dataDir string) (*Handler, error) {
 	}, nil
 }
 
-const maxAuthBody = 4096 // 4 KB max for auth JSON payloads
-
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

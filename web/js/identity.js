@@ -18,6 +18,8 @@
  * can never read the key itself.
  */
 
+import { concatBytes } from './util.js';
+
 const DB_NAME = 'deaddrop-identity';
 const DB_VERSION = 1;
 const KEY_STORE = 'identity';
@@ -120,7 +122,7 @@ export async function signTranscript(privateKey, transcriptHash) {
   const signature = await crypto.subtle.sign(
     { name: 'ECDSA', hash: 'SHA-256' },
     privateKey,
-    concat(enc.encode(SIG_CONTEXT), transcriptHash),
+    concatBytes(enc.encode(SIG_CONTEXT), transcriptHash),
   );
   return new Uint8Array(signature);
 }
@@ -146,7 +148,7 @@ export async function verifyTranscript(publicKeyRaw, transcriptHash, signature) 
       { name: 'ECDSA', hash: 'SHA-256' },
       key,
       signature,
-      concat(enc.encode(SIG_CONTEXT), transcriptHash),
+      concatBytes(enc.encode(SIG_CONTEXT), transcriptHash),
     );
   } catch {
     return false;
@@ -199,13 +201,3 @@ export async function forgetContact(fp) {
   } catch { /* already gone */ }
 }
 
-function concat(...arrays) {
-  const total = arrays.reduce((n, a) => n + a.length, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const a of arrays) {
-    out.set(a, offset);
-    offset += a.length;
-  }
-  return out;
-}
