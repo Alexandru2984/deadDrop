@@ -8,7 +8,7 @@
   <meta name="referrer" content="no-referrer" />
   <meta name="robots" content="noindex, nofollow, noarchive" />
   <title>💀 Dead Drop</title>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-lT9owl+jn2w2Ve4m0rxOzFZV5kG5B5QZ9xBmkD4LJPQ=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-gVU7QKcdOiBAgdbh/safTes2888tagT+muDyWw5fTss=" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icon.svg" />
@@ -17,6 +17,22 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 </head>
 <body>
+
+  <!-- ─── Boot ───
+       Shown until the app has confirmed the browser can actually run it. Every
+       other page starts hidden, so if this text is what stays on screen, the
+       client never started — which is exactly what it says. -->
+  <div id="boot" class="page boot-page">
+    <div class="logo">💀</div>
+    <h1>DEAD DROP</h1>
+    <p id="boot-msg" data-i18n="boot.checking">Checking this browser…</p>
+    <div id="boot-detail" class="boot-detail hidden"></div>
+    <noscript>
+      <p class="boot-fail">Dead Drop needs JavaScript. Everything that protects a
+      conversation runs in your browser, so there is nothing useful to show
+      without it.</p>
+    </noscript>
+  </div>
 
   <!-- ─── Auth ─── -->
   <div id="auth" class="page auth-page hidden">
@@ -212,6 +228,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-YSwTVa4o5NEylu4ynxG6sNrGcpE6/hERo4shxbOrD8A="></script>
+  <script type="module" src="js/app.js" integrity="sha256-5EAd0HKiv0IqOAVIyF8sLvsiHfmY6PRQK7y415m4uhs="></script>
 </body>
 </html>

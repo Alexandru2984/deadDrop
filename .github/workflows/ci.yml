@@ -109,6 +109,11 @@ jobs:
           # Trusted Types violation from an innerHTML assignment that crept back
           # in. The layout assertions prove the page is usable on a phone; the
           # screenshots show what it actually looks like, which no assertion can.
+          # Everything protecting a conversation runs in the browser, so a
+          # missing primitive is not cosmetic. This breaks one on purpose and
+          # checks the app refuses instead of taking a password it cannot hold.
+          - name: browser support
+            suite: browser.support.mjs
           - name: smoke
             suite: browser.smoke.mjs
           # Two isolated contexts, one real WebRTC session between them: a

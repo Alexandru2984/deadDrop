@@ -41,6 +41,11 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 (one audio/video call, with the DTLS fingerprint binding checked against the
 certificates actually in use) drive headless Chrome over the DevTools Protocol.
+`browser.support.mjs` breaks one required crypto primitive at a time and checks
+the app refuses to start rather than hand a password box to a browser that
+cannot protect it — and that an optional capability going missing degrades a
+feature instead of blocking the session.
+
 `browser.hostile.mjs` adds a peer that does not follow the protocol: its bundle
 is rewritten on the way into the browser so it can emit any frame at any moment
 over a real, properly encrypted, safety-code-confirmed session. Every assertion

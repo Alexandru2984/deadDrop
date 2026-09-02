@@ -54,7 +54,7 @@ select {
 
 /* ── Auth page ── */
 
-.auth-page {
+.auth-page, .boot-page {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -180,7 +180,7 @@ select {
   50% { transform: scale(1.05); }
 }
 
-.landing h1, .auth-page h1 {
+.landing h1, .auth-page h1, .boot-page h1 {
   font-size: clamp(22px, 5vw, 32px);
   letter-spacing: clamp(4px, 1.5vw, 8px);
   color: var(--accent);
@@ -1207,4 +1207,22 @@ select { cursor: pointer; width: auto; }
   font-size: 11px;
   color: var(--dim);
   word-break: break-all;
+}
+
+/* Boot / unsupported-browser notice. Deliberately plain: it has to render on a
+   browser that could not run the app, so it leans on nothing the app provides. */
+.boot-detail {
+  max-width: 34rem;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.55;
+}
+.boot-detail ul { margin: 8px 0 0; padding-left: 1.2em; }
+.boot-detail li { margin: 4px 0; }
+.boot-fail { color: #ff6b6b; max-width: 34rem; text-align: center; }
+.boot-note {
+  max-width: 30rem;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.75;
 }

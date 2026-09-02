@@ -9,6 +9,14 @@
 const STRINGS = {
   en: {
     'tagline': 'Pseudonymous · Verified E2EE · Ephemeral',
+    'boot.checking': 'Checking this browser…',
+    'boot.unsupported': 'This browser cannot run Dead Drop safely.',
+    'boot.explain': 'Everything protecting a conversation runs in your browser, '
+      + 'and this one is missing something it needs. Rather than take your password '
+      + 'and encrypt nothing, Dead Drop stops here.',
+    'boot.suggest': 'A current Firefox, Safari, Chrome or Edge will work.',
+    'boot.degraded': 'Not available in this browser',
+    'boot.stillSafe': 'Messages are protected either way.',
     'auth.user': 'Username',
     'auth.pass': 'Password',
     'auth.invite': 'Invite code (only to register)',
@@ -93,6 +101,14 @@ const STRINGS = {
   },
   ro: {
     'tagline': 'Pseudonim · E2EE verificat · Efemer',
+    'boot.checking': 'Se verifică browserul…',
+    'boot.unsupported': 'Acest browser nu poate rula Dead Drop în siguranță.',
+    'boot.explain': 'Tot ce protejează o conversație rulează în browserul tău, '
+      + 'iar acestuia îi lipsește ceva de care are nevoie. În loc să îți ia parola '
+      + 'și să nu cripteze nimic, Dead Drop se oprește aici.',
+    'boot.suggest': 'Un Firefox, Safari, Chrome sau Edge recent va funcționa.',
+    'boot.degraded': 'Indisponibil în acest browser',
+    'boot.stillSafe': 'Mesajele sunt protejate oricum.',
     'auth.user': 'Utilizator',
     'auth.pass': 'Parolă',
     'auth.invite': 'Cod de invitație (doar pentru înregistrare)',

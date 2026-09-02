@@ -21,6 +21,7 @@ import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
+import { checkSupport } from './support.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -531,6 +532,7 @@ class DeadDrop {
   /* ── Page navigation ── */
 
   _showPage(name) {
+    document.querySelector('#boot')?.classList.add('hidden');
     this.el.auth.classList.add('hidden');
     this.el.landing.classList.add('hidden');
     this.el.chatWrap.classList.add('hidden');
@@ -2073,7 +2075,44 @@ class DeadDrop {
   }
 }
 
-new DeadDrop();
+/**
+ * Refuse, in as much detail as we have, rather than hand a password box to a
+ * browser that cannot protect it. Built with the DOM directly: this runs on
+ * whatever the browser turned out to be, so it uses nothing the app provides.
+ */
+function renderUnsupported(missing) {
+  const detail = document.querySelector('#boot-detail');
+  const message = document.querySelector('#boot-msg');
+  if (!detail || !message) return;
+  message.textContent = t('boot.unsupported');
+  message.className = 'boot-fail';
+  detail.append(
+    h('p', { text: t('boot.explain') }),
+    // The capability names stay in English on purpose: they are the algorithm
+    // names, and a user pasting one into a search or a bug report is better
+    // served by the term the rest of the world uses.
+    h('ul', {}, ...missing.map((item) => h('li', { text: `${item.label} — ${item.reason}` }))),
+    h('p', { text: t('boot.suggest') }),
+  );
+  detail.classList.remove('hidden');
+}
+
+/** Say what is unavailable, without pretending the session is less protected. */
+function renderDegraded(degraded) {
+  const form = document.querySelector('#auth-form');
+  if (!form || degraded.length === 0) return;
+  form.after(h('p', { class: 'boot-note',
+    text: `${t('boot.degraded')}: ${degraded.map((d) => d.label).join(', ')}. `
+      + t('boot.stillSafe') }));
+}
+
+const support = await checkSupport();
+if (support.ok) {
+  new DeadDrop();
+  renderDegraded(support.degraded);
+} else {
+  renderUnsupported(support.missing);
+}
 
 // Retire the former offline service worker and its caches. A cached cryptographic
 // client can outlive a security deployment and mix protocol versions, while the
