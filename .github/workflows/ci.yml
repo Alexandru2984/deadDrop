@@ -73,6 +73,12 @@ jobs:
         run: node test/fingerprint.selftest.mjs
       - name: Call-signaling state machine
         run: node test/callsignal.selftest.mjs
+      # Randomised, with the seed derived from the run so successive pushes
+      # explore different input rather than re-checking the same shapes.
+      - name: Browser parser properties
+        env:
+          DD_SEED: ${{ github.run_id }}
+        run: node test/property.selftest.mjs
       - name: STUN/TURN response validation
         run: node test/config.selftest.mjs
       - name: Strict integrity manifest parser

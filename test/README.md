@@ -30,6 +30,27 @@ from exactly one state per side. A peer whose safety code was confirmed can
 still be running a patched client, and an offer accepted at the wrong moment
 turns on a camera nobody agreed to.
 
+## Parser fuzzing and property tests
+
+The Go parsers that read attacker-controlled bytes are fuzzed natively:
+
+```bash
+go test -fuzz FuzzDecodeObject -fuzztime 30s ./internal/strictjson/
+```
+
+Targets cover the strict JSON decoder (every API body and WebSocket frame), the
+invite-file parser, the DNS hostname validator, the relay envelope, and room
+codes. They assert invariants rather than hunting for panics — the one that
+matters for the JSON decoder is that its duplicate-key scan and encoding/json
+never disagree about what a body says, since that disagreement is the shape of
+an auth bypass. Seed corpora run as ordinary `go test`; CI explores 30s per
+target on each push.
+
+`node test/property.selftest.mjs` is the browser-side equivalent, since Node has
+no fuzzer: it generates structurally plausible garbage for `sanitizeIceConfig`
+and `extractFingerprints` and checks the properties that must hold for every
+input. `DD_SEED` makes a failure reproducible; CI varies it per run.
+
 ## ICE configuration self-test
 
 `node test/config.selftest.mjs` checks that only bounded STUN/TURN URL shapes
