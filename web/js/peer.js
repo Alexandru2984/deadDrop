@@ -16,6 +16,9 @@ const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
 const REKEY_INTERVAL_MS = 10 * 60 * 1000; // periodic DH key evolution
 const REKEY_TIMEOUT_MS = 30 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 30 * 1000;   // fail an unfinished handshake instead of hanging forever
+// The exchange is four messages; holding a couple covers the open-event race
+// without letting a peer make us buffer on its behalf.
+const MAX_EARLY_KEX = 4;
 const TRAFFIC_WINDOW_MS = 10 * 1000;
 const MAX_MESSAGES_PER_WINDOW = 1500; // accommodates a complete 25 MB file
 const MAX_BYTES_PER_WINDOW = 128 * 1024 * 1024;
@@ -279,9 +282,18 @@ export class PeerConnection {
   }
 
   _wireDataChannel(ch) {
+    // The peer's first key-exchange message can arrive before this side's open
+    // handler has run. Browsers disagree about that ordering — Chromium happens
+    // to deliver the open event first, Gecko delivers the peer's commit first —
+    // and a dropped commit does not merely delay the exchange: our reveal then
+    // reaches a peer that never saw the commit it is supposed to open, and the
+    // whole session is torn down as malformed. So hold anything that arrives
+    // early and replay it in order once we are ready for it.
+    this._earlyKex = [];
+
     ch.onopen = async () => {
       // Authenticated key exchange (commit-reveal) over the data channel.
-      this.handshake = new Handshake(this.crypto, (m) => this._dcSend(m), {
+      const handshake = new Handshake(this.crypto, (m) => this._dcSend(m), {
         identityPub: this.identity?.publicKeyRaw ?? null,
         onEstablished: (sas) => this._onEstablished(sas),
         onError: (reason) => {
@@ -298,7 +310,13 @@ export class PeerConnection {
         }
       }, HANDSHAKE_TIMEOUT_MS);
       try {
-        await this.handshake.start();
+        // Publish it only once our own commit is out, so nothing the peer sent
+        // is processed against a half-initialised state machine.
+        await handshake.start();
+        this.handshake = handshake;
+        const early = this._earlyKex || [];
+        this._earlyKex = null;
+        for (const msg of early) await handshake.handle(msg);
       } catch (err) {
         console.warn('[peer] handshake start failed:', err);
         this._terminateInsecure('handshake start failed');
@@ -327,6 +345,10 @@ export class PeerConnection {
       if (msg.type.startsWith('kex-')) {
         if (this.handshake) {
           try { await this.handshake.handle(msg); } catch (err) { console.warn('[peer] kex error', err); }
+        } else if (this._earlyKex && this._earlyKex.length < MAX_EARLY_KEX) {
+          // Bounded: the exchange is four messages, so anything beyond a couple
+          // is a peer trying to make us buffer on its behalf.
+          this._earlyKex.push(msg);
         }
         return;
       }

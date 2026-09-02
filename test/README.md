@@ -41,6 +41,26 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 (one audio/video call, with the DTLS fingerprint binding checked against the
 certificates actually in use) drive headless Chrome over the DevTools Protocol.
+## Second engine
+
+`firefox.pair.mjs` runs the core two-peer session on Gecko over WebDriver BiDi
+(`test/lib/firefox.mjs` — Firefox dropped CDP, so the suites cannot share a
+driver). Everything else here drives Chrome, which on its own only ever says the
+app works on Blink, and the client is the whole security product.
+
+It found the app completely broken on Firefox: no session could be established
+at all, because a key-exchange message arriving before the data channel's open
+event was silently dropped.
+
+```bash
+FIREFOX_PATH=/path/to/firefox DD_URL=… DD_INVITE=… DD_INVITE2=… \
+  node test/firefox.pair.mjs
+```
+
+It skips when no Firefox is present; CI sets `DD_REQUIRE_FIREFOX=1`.
+
+## Browser suites, continued
+
 `browser.support.mjs` breaks one required crypto primitive at a time and checks
 the app refuses to start rather than hand a password box to a browser that
 cannot protect it — and that an optional capability going missing degrades a

@@ -187,3 +187,57 @@ jobs:
       - name: Stop server
         if: always()
         run: kill "$(cat server.pid)" 2>/dev/null || true
+
+  # A second engine. Everything above drives Chrome, so on its own it only ever
+  # says the app works on Blink — and the client is the whole security product
+  # here. Gecko differs in the places it leans on: WebCrypto surfaces, SDP and
+  # ICE behaviour, storage partitioning, and data-channel event ordering, which
+  # is what broke the handshake before anyone had run it here.
+  firefox:
+    name: Browser — Gecko two peers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Fetched straight from Mozilla rather than through a third-party action:
+      # this is the browser the security tests run in, and its provenance should
+      # be as short a chain as the rest of the toolchain.
+      - name: Fetch Firefox
+        run: |
+          mkdir -p "$RUNNER_TEMP/ff" && cd "$RUNNER_TEMP/ff"
+          curl -sSL -o ff.tar.xz \
+            "https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US"
+          tar -xf ff.tar.xz
+          echo "FIREFOX_PATH=$RUNNER_TEMP/ff/firefox/firefox" >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/ff/firefox/firefox" --version
+
+      - name: Build server
+        run: go build -o deaddrop ./cmd/server/
+      - name: Start server
+        run: .github/start-server.sh
+      - name: Mint invites
+        id: invites
+        run: |
+          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: Two peers on Gecko
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.invites.outputs.a }}
+          DD_INVITE2: ${{ steps.invites.outputs.b }}
+          DD_REQUIRE_FIREFOX: '1'
+        run: node test/firefox.pair.mjs
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat server.log || true
+      - name: Stop server
+        if: always()
+        run: kill "$(cat server.pid)" 2>/dev/null || true
