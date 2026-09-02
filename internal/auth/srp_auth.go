@@ -479,23 +479,41 @@ func ImportInvitesForDir(dataDir string, codes []string) (added, skipped int, er
 
 // ParseInviteCodes reads invite codes from raw input in either form: a JSON
 // array (["DD-…", …], as produced by export) or plain whitespace/newline
-// separated tokens. Malformed tokens are dropped.
-func ParseInviteCodes(raw []byte) []string {
+// separated tokens.
+//
+// It returns the well-formed codes and how many tokens it discarded, so an
+// operator can tell "there was nothing to import" from "none of that was an
+// invite code". The store validates again on the way in — this is not the last
+// line of defence — but a parser that hands back tokens it has already judged
+// malformed makes every count downstream of it a guess.
+//
+// Input that opens with '[' must be a JSON array. Falling back to whitespace
+// splitting would read a truncated export as a pile of junk tokens and report
+// them as ordinary malformed input, hiding the fact that the file is damaged.
+func ParseInviteCodes(raw []byte) (codes []string, dropped int, err error) {
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
-		return nil
+		return nil, 0, nil
 	}
-	var out []string
+
+	var tokens []string
 	if strings.HasPrefix(trimmed, "[") {
-		var arr []string
-		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
-			out = arr
+		if err := json.Unmarshal([]byte(trimmed), &tokens); err != nil {
+			return nil, 0, fmt.Errorf("input starts as a JSON array but does not parse: %w", err)
 		}
+	} else {
+		tokens = strings.Fields(trimmed)
 	}
-	if out == nil {
-		out = strings.Fields(trimmed)
+
+	for _, token := range tokens {
+		code := strings.ToUpper(strings.TrimSpace(token))
+		if !validInviteCode(code) {
+			dropped++
+			continue
+		}
+		codes = append(codes, code)
 	}
-	return out
+	return codes, dropped, nil
 }
 
 func (iv *invites) load(root *os.Root, name string) ([]invite, error) {

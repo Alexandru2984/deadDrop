@@ -31,6 +31,22 @@ jobs:
           go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1
           -exclude-generated -nosec-require-rules
           -nosec-require-justification ./...
+      # The seed corpora run as ordinary tests above; this explores new input on
+      # every push. Short on purpose — it is a net that widens over time, not a
+      # gate that has to find something today.
+      - name: Fuzz the parsers
+        run: |
+          for target in \
+            "FuzzDecodeObject ./internal/strictjson/" \
+            "FuzzParseInviteCodes ./internal/auth/" \
+            "FuzzValid ./internal/dnsname/" \
+            "FuzzRelayEnvelope ./internal/signaling/" \
+            "FuzzValidateRoomCode ./internal/signaling/"; do
+            set -- $target
+            echo "── $1"
+            go test -run '^$' -fuzz "$1" -fuzztime 30s "$2"
+          done
+
       - name: Git history secret scan
         run: >-
           go run github.com/zricethezav/gitleaks/v8@v8.30.1 git

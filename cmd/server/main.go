@@ -205,11 +205,16 @@ func runInviteCLI(args []string) {
 		if err != nil {
 			log.Fatalf("invites import: %v", err)
 		}
-		added, skipped, err := auth.ImportInvitesForDir(inviteDataDir, auth.ParseInviteCodes(raw))
+		codes, malformed, err := auth.ParseInviteCodes(raw)
 		if err != nil {
 			log.Fatalf("invites import: %v", err)
 		}
-		fmt.Fprintf(os.Stderr, "imported %d new code(s), skipped %d (malformed or duplicate)\n", added, skipped)
+		added, duplicate, err := auth.ImportInvitesForDir(inviteDataDir, codes)
+		if err != nil {
+			log.Fatalf("invites import: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "imported %d new code(s), %d malformed, %d already present\n",
+			added, malformed, duplicate)
 
 	default:
 		log.Fatal("unknown invites subcommand (use: list, export, import)")

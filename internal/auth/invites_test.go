@@ -78,15 +78,15 @@ func TestImportInvitesDedupAndValidate(t *testing.T) {
 
 func TestParseInviteCodes(t *testing.T) {
 	// JSON array form (what `invites export` writes).
-	if got := ParseInviteCodes([]byte(`["DD-AAAA-BBBB-CCCC", "DD-DDDD-EEEE-FFFF"]`)); len(got) != 2 {
+	if got, _, err := ParseInviteCodes([]byte(`["DD-AAAA-BBBB-CCCC", "DD-DDDD-EEEE-FFFF"]`)); err != nil || len(got) != 2 {
 		t.Fatalf("json form: want 2, got %d", len(got))
 	}
 	// Plain whitespace / newline form.
-	if got := ParseInviteCodes([]byte("DD-AAAA-BBBB-CCCC\nDD-DDDD-EEEE-FFFF\n")); len(got) != 2 {
+	if got, _, err := ParseInviteCodes([]byte("DD-AAAA-BBBB-CCCC\nDD-DDDD-EEEE-FFFF\n")); err != nil || len(got) != 2 {
 		t.Fatalf("line form: want 2, got %d", len(got))
 	}
 	// Whitespace-only input yields nothing (not a bogus one-element slice).
-	if got := ParseInviteCodes([]byte("   \n\t")); len(got) != 0 {
+	if got, _, err := ParseInviteCodes([]byte("   \n\t")); err != nil || len(got) != 0 {
 		t.Fatalf("empty input: want 0, got %d", len(got))
 	}
 }
