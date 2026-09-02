@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Snapshot Dead Drop's account state.
+#
+# The server writes every state file atomically (temp + fsync + rename), so a
+# snapshot taken while it runs sees either the old file or the new one, never a
+# torn one. There is no need to stop the service.
+#
+# The archive holds SRP verifiers and the anti-enumeration dummy key. Verifiers
+# are not password-equivalent — that is the point of SRP, and the client stretches
+# with 600k PBKDF2 rounds before the server ever sees one — but the dummy key
+# would let a holder tell a real account from a fabricated reply. So this lives
+# root-only, 0600, exactly like the originals.
+set -Eeuo pipefail
+
+umask 077
+DATA=/home/micu/deaddrop/data
+BACKUP=/srv/backups/deaddrop
+STATE=(users.json invites.json srp_dummy.key)
+
+stamp="$(date -u +'%Y-%m-%dT%H%M%SZ')"
+tmp="${BACKUP}/.deaddrop-${stamp}.tar.gz.tmp"
+verify="${BACKUP}/.deaddrop-${stamp}.verify"
+final="${BACKUP}/deaddrop-${stamp}.tar.gz"
+
+cleanup() { rm -rf "${tmp}" "${verify}"; }
+trap cleanup EXIT
+
+test -d "${BACKUP}"
+cd "${DATA}"
+for f in "${STATE[@]}"; do test -f "${f}"; done
+
+tar -czf "${tmp}" "${STATE[@]}"
+gzip -t "${tmp}"
+
+# Unpack what was actually written and check it is usable, not merely present.
+# A backup nobody has restored is a guess, so restore every one of them here.
+mkdir -p "${verify}"
+# --no-same-owner: this copy exists to be parsed and thrown away, and the
+# service runs without CAP_CHOWN on purpose.
+tar -xzf "${tmp}" -C "${verify}" --no-same-owner
+python3 -c "
+import json, sys, pathlib
+root = pathlib.Path('${verify}')
+json.loads((root / 'users.json').read_text())
+json.loads((root / 'invites.json').read_text())
+key = (root / 'srp_dummy.key').read_bytes()
+if len(key) != 32:
+    sys.exit(f'dummy key is {len(key)} bytes, expected 32')
+"
+
+mv "${tmp}" "${final}"
+sha256sum "${final}" > "${final}.sha256"
+
+find "${BACKUP}" -xdev -type f \
+  \( -name 'deaddrop-*.tar.gz' -o -name 'deaddrop-*.tar.gz.sha256' \) \
+  -mtime +14 -delete
+
+cleanup
+trap - EXIT
+printf '%s backed up Dead Drop account state (%s)\n' \
+  "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$(du -h "${final}" | cut -f1)"

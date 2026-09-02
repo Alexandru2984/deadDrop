@@ -220,3 +220,45 @@ Test through Tor: `curl --socks5-hostname 127.0.0.1:9050 http://<onion>.onion/`.
 > not establish over the onion — the onion is for **private access** to load the
 > app and run signalling without Cloudflare/DNS exposure. Actual peer-to-peer chat
 > still needs a non-Tor transport (or TURN-over-TCP, which reveals the relay IP).
+
+## 7. Backups
+
+Account state is three files in `data/`: `users.json` (SRP verifiers and salts),
+`invites.json`, and `srp_dummy.key`. Nothing else on the box is irreplaceable —
+the binary is rebuilt from the repo, and message content never touches the disk.
+
+```bash
+sudo install -m 0700 scripts/deaddrop-backup /usr/local/sbin/deaddrop-backup
+sudo install -d -m 0700 /srv/backups/deaddrop
+sudo cp scripts/deaddrop-backup.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now deaddrop-backup.timer
+```
+
+Daily at 04:10 UTC. The server writes every state file atomically (temp, fsync,
+rename), so a snapshot taken while it runs sees the old file or the new one and
+never a torn one — the service does not need to stop.
+
+Each run unpacks what it just wrote and parses it before publishing the archive,
+so a backup that cannot be restored fails loudly on the day it is taken rather
+than on the day it is needed. Fourteen days are kept.
+
+**Restore:**
+
+```bash
+sudo systemctl stop deaddrop
+cd /srv/backups/deaddrop && sha256sum -c deaddrop-<stamp>.tar.gz.sha256
+sudo tar -xzf deaddrop-<stamp>.tar.gz -C /home/micu/deaddrop/data --no-same-owner
+sudo chown micu:micu /home/micu/deaddrop/data/*
+sudo chmod 600 /home/micu/deaddrop/data/*
+sudo systemctl start deaddrop
+```
+
+`--no-same-owner` then an explicit `chown`: the archive records root's ownership
+because the backup runs as root, and the service reads these as `micu`.
+
+The archive holds SRP verifiers and the anti-enumeration dummy key. Verifiers are
+not password-equivalent — that is the point of SRP, and the client applies 600k
+PBKDF2 rounds before the server sees anything — but the dummy key would let a
+holder tell a real account from a fabricated reply. Keep the backup directory as
+restricted as `data/` itself: root-only, mode 0700.

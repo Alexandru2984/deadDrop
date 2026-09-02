@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Dead Drop account-state backup
+
+[Timer]
+OnCalendar=*-*-* 04:10:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
