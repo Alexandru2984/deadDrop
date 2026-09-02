@@ -78,9 +78,12 @@ ok(await waitFor(() => alice.callable(), { timeout: 20000 })
 // If the client trusted a self-declared flag instead of comparing certificates,
 // everything above would still pass and a DTLS man-in-the-middle would go
 // unnoticed. So read the fingerprints straight out of both descriptions.
+// Not [0]: the browser-support gate opens a throwaway RTCPeerConnection at boot
+// to check WebRTC works at all, and the instrumentation records that one too.
+// Take the connection that actually negotiated something.
 const fingerprintsOf = (peer, which) => peer.eval(`
   (() => {
-    const pc = (window.__ddPeerConnections || [])[0];
+    const pc = (window.__ddPeerConnections || []).find((c) => c.${which});
     const sdp = pc && pc.${which} ? pc.${which}.sdp : '';
     return [...sdp.matchAll(/^a=fingerprint:(\\S+) (\\S+)\\s*$/gim)]
       .map((m) => (m[1] + ' ' + m[2]).toLowerCase()).sort();
