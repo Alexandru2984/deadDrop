@@ -39,6 +39,15 @@ type Hub struct {
 	slots          chan struct{}
 	slotMu         sync.Mutex
 	principalSlots map[string]int
+	stats          chan chan Stats
+}
+
+// Stats is a point-in-time view of what the hub is holding. The rooms map is
+// owned by Run alone and has no lock, so it is answered on Run's own goroutine
+// rather than read from outside.
+type Stats struct {
+	Rooms int
+	Peers int
 }
 
 type Room struct {
@@ -74,7 +83,16 @@ func NewHub() *Hub {
 		relay:          make(chan *relayRequest),
 		slots:          make(chan struct{}, MaxConnections),
 		principalSlots: make(map[string]int),
+		stats:          make(chan chan Stats),
 	}
+}
+
+// Snapshot reports what the hub currently holds. It blocks on Run, so it also
+// answers a question no counter can: whether the hub is still serving at all.
+func (h *Hub) Snapshot() Stats {
+	reply := make(chan Stats, 1)
+	h.stats <- reply
+	return <-reply
 }
 
 func (h *Hub) reserveConnection(principal string) bool {
@@ -124,6 +142,13 @@ func (h *Hub) releasePrincipal(principal string) {
 func (h *Hub) Run() {
 	for {
 		select {
+		case reply := <-h.stats:
+			stats := Stats{Rooms: len(h.rooms)}
+			for _, room := range h.rooms {
+				stats.Peers += len(room.Peers)
+			}
+			reply <- stats
+
 		case req := <-h.register:
 			if req.peer == nil || !ValidateRoomCode(req.code) {
 				req.response <- nil
