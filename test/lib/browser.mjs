@@ -441,6 +441,26 @@ export class Peer {
     `);
   }
 
+  /** System lines — the app's own notices, not peer content. */
+  notices() {
+    return this.eval(`
+      [...document.querySelectorAll('.msg.system')].map((n) => n.textContent)
+    `);
+  }
+
+  /** Send with the burn-after-reading toggle set, the way the composer does. */
+  async sendBurning(text) {
+    return this.eval(`
+      (() => {
+        document.querySelector('#burn-toggle').checked = true;
+        document.querySelector('#msg-input').value = ${JSON.stringify(text)};
+        document.querySelector('#send-btn').click();
+        document.querySelector('#burn-toggle').checked = false;
+        return true;
+      })()
+    `);
+  }
+
   /* ── Calls ── */
 
   /** True once the call button is offered, i.e. the media path is bound. */

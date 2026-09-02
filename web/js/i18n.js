@@ -10,6 +10,7 @@ const STRINGS = {
   en: {
     'tagline': 'Pseudonymous · Verified E2EE · Ephemeral',
     'boot.checking': 'Checking this browser…',
+    'msg.peerRemoved': 'The other side removed a message',
     'boot.unsupported': 'This browser cannot run Dead Drop safely.',
     'boot.explain': 'Everything protecting a conversation runs in your browser, '
       + 'and this one is missing something it needs. Rather than take your password '
@@ -102,6 +103,7 @@ const STRINGS = {
   ro: {
     'tagline': 'Pseudonim · E2EE verificat · Efemer',
     'boot.checking': 'Se verifică browserul…',
+    'msg.peerRemoved': 'Interlocutorul a șters un mesaj',
     'boot.unsupported': 'Acest browser nu poate rula Dead Drop în siguranță.',
     'boot.explain': 'Tot ce protejează o conversație rulează în browserul tău, '
       + 'iar acestuia îi lipsește ceva de care are nevoie. În loc să îți ia parola '

@@ -85,6 +85,19 @@ export class MessageManager {
     return this.messages.has(id);
   }
 
+  /**
+   * True when this is one of our own messages that was sent to burn once read.
+   *
+   * A read receipt destroys the sender's copy, so it must only be honoured for
+   * a message that was actually sent with that promise. Otherwise a peer can
+   * fabricate receipts for ordinary messages and erase the other side of the
+   * conversation while keeping its own copy.
+   */
+  burnsOnRead(id) {
+    const m = this.messages.get(id);
+    return !!m && m.burnAfterReading === true && m.isMine === true;
+  }
+
   removeElement(element) {
     for (const [id, message] of this.messages) {
       if (message.element === element) {

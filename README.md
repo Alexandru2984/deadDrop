@@ -106,6 +106,15 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
 - Messages/files exist in browser memory and may be downloaded. TTL, burn, and
   bilateral-delete notices are cooperative UI behavior; a peer, extension,
   modified client, screenshot, crash dump, or OS can retain plaintext.
+- Cooperative removal runs in one direction only when it makes sense. A read
+  receipt destroys the sender's copy of a message that was sent to burn, and
+  nothing else — a peer cannot fabricate receipts for ordinary messages to erase
+  the other side of a conversation while keeping its own. Between two people, a
+  peer whose copy expires still withdraws it from the sender; that is the
+  feature, it is announced on screen rather than silent, and a modified client
+  can use it to remove messages from your view. In a room of three or more it
+  does not apply at all: every other member would keep the message, so the only
+  person who lost it would be whoever wrote it.
 - The panic action clears this tab's in-memory state, closes connections, and
   logs out on a best-effort basis. It cannot wipe the peer, infrastructure logs,
   browser/OS forensic traces, or anything already copied.

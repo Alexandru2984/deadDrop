@@ -13,7 +13,7 @@
  * session without comparing anything again.
  */
 
-import { Peer, launchBrowser, waitFor } from './lib/browser.mjs';
+import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITES = [process.env.DD_INVITE || '', process.env.DD_INVITE2 || ''];
@@ -80,6 +80,31 @@ await alice.eval(`
 `);
 ok(await waitFor(async () => (await bob.transcript()).includes(secret)),
   'a message sent by A is decrypted by B');
+
+// ── Burn after reading ──
+// The one message class that is meant to vanish from both sides. It works by the
+// reader telling the sender it was read, so if that stops working the message
+// quietly stops burning — and nothing would have noticed.
+const burning = 'burn this ' + suffix;
+await alice.sendBurning(burning);
+ok(await waitFor(async () => (await bob.transcript()).includes(burning)),
+  'a burn-after-reading message reaches B');
+ok(await waitFor(async () => !(await bob.transcript()).includes(burning), { timeout: 15000 }),
+  'and burns on the reader side');
+ok(await waitFor(async () => !(await alice.transcript()).includes(burning), { timeout: 15000 }),
+  "and the reader's receipt burns the sender's copy too");
+
+// An ordinary message must survive all of that: only what was sent to burn burns.
+const keeper = 'keep this ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(keeper)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(keeper)),
+  'an ordinary message still arrives');
+await sleep(4000);
+ok((await alice.transcript()).includes(keeper),
+  'and is still on the sender side after the burn window');
 
 // ── Files ──
 // filetransfer.js chunks, reassembles and re-checks the declared size against

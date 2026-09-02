@@ -1276,18 +1276,37 @@ class DeadDrop {
         }
         break;
       }
-      case 'read':
+      case 'read': {
         if (!this._validMessageID(msg.id)) return;
-        this.msgMgr.remoteDestroy(this._messageKey(null, msg.id));
-        break;
-      case 'delete':
-        if (!this._validMessageID(msg.id)) return;
-        if (this.msgMgr.has(this._messageKey(null, msg.id))) {
-          this.msgMgr.remoteDestroy(this._messageKey(null, msg.id));
-        } else {
-          this.msgMgr.remoteDestroy(this._messageKey(peerId, msg.id));
+        const own = this._messageKey(null, msg.id);
+        // Only a message we sent to burn once read may be destroyed by a
+        // receipt. The stock client only ever sends one for those; trusting the
+        // claim for anything else lets a peer fabricate receipts for ordinary
+        // messages and wipe our side of the conversation while keeping its own.
+        if (this.msgMgr.burnsOnRead(own)) {
+          this.msgMgr.remoteDestroy(own);
+          this._renderSystem(t('msg.peerRemoved'));
         }
         break;
+      }
+      case 'delete': {
+        if (!this._validMessageID(msg.id)) return;
+        const own = this._messageKey(null, msg.id);
+        if (!this.msgMgr.has(own)) {
+          // A peer withdrawing something it sent us: theirs to withdraw.
+          this.msgMgr.remoteDestroy(this._messageKey(peerId, msg.id));
+          break;
+        }
+        // A peer withdrawing something we wrote. Between two people that is the
+        // cooperative removal this app offers: afterwards neither side has it.
+        // In a room it is not — every other member keeps the message, and the
+        // only person who loses it is the one who wrote it.
+        if (this.peers.size === 1) {
+          this.msgMgr.remoteDestroy(own);
+          this._renderSystem(t('msg.peerRemoved'));
+        }
+        break;
+      }
 
       // ── File transfer messages ──
       case 'file':

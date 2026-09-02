@@ -156,6 +156,48 @@ await bob.eval(`
 ok(await waitFor(async () => (await mallory.transcript()).includes(probe)),
   'ordinary messages still flow after every rejected frame');
 
+// ── 5. Fabricated read receipts ──
+// A read receipt destroys the sender's copy — that is what makes a message burn
+// on both sides. The stock client only ever sends one for a message that was
+// sent to burn. Trusting the claim for anything else hands a peer the ability to
+// erase the other side of the conversation while keeping its own copy.
+const kept = [1, 2, 3].map((n) => `ordinary message ${n} of ${suffix}`);
+for (const text of kept) {
+  await bob.eval(`
+    document.querySelector('#msg-input').value = ${JSON.stringify(text)};
+    document.querySelector('#send-btn').click(); true
+  `);
+  await sleep(400);
+}
+ok(await waitFor(async () => (await mallory.transcript()).includes(kept[2])),
+  'B sends three ordinary messages, none of them set to burn');
+
+await mallory.eval(`
+  (async () => {
+    const app = window.__ddApp;
+    const conn = [...app.peers.values()][0].conn;
+    for (const key of [...app.msgMgr.messages.keys()]) {
+      await app._sendBestEffort(conn, { type: 'read', id: key.split(':').slice(1).join(':') });
+    }
+    return true;
+  })()
+`);
+await sleep(3000);
+const survivors = await bob.transcript();
+ok(kept.every((text) => survivors.includes(text)),
+  'replayed read receipts destroy none of them');
+
+// And the real thing still has to work, or the check above is satisfied by a
+// client that simply stopped honouring receipts.
+const burning = 'burn this ' + suffix;
+await bob.sendBurning(burning);
+ok(await waitFor(async () => (await mallory.transcript()).includes(burning)),
+  'a message actually sent to burn still reaches the peer');
+ok(await waitFor(async () => !(await bob.transcript()).includes(burning), { timeout: 15000 }),
+  'and its receipt still burns the sender copy');
+ok((await bob.notices()).some((n) => n.toLowerCase().includes('removed')),
+  'and the sender is told a message was removed rather than watching it vanish');
+
 // ── And B is still able to start a call of its own ──
 // Only as far as the far side ringing: the hostile peer wrecked its own
 // connection with three unanswered offers, so nothing past that point would be
