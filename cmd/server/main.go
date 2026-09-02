@@ -228,6 +228,9 @@ func main() {
 			}
 			fmt.Println("configuration valid")
 			return
+		case "doctor":
+			runDoctor()
+			return
 		}
 	}
 
@@ -277,6 +280,37 @@ func main() {
 
 	mux.HandleFunc("/api/logout", authRL.Wrap(middleware.RequireSameOrigin(authH.Logout)))
 	mux.HandleFunc("/api/me", authH.Me)
+
+	// Liveness (no auth). A monitor that only fetches a page proves nginx is up
+	// and the process has not exited; it proves nothing about the goroutine that
+	// actually routes signaling. Answering here requires a round trip through
+	// that goroutine, so a wedged hub fails this while the page still loads.
+	//
+	// It reports liveness and nothing else on purpose. Room and peer counts are
+	// metadata about how many people are using the service and who might be
+	// talking right now, and this endpoint is reachable by anyone.
+	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		done := make(chan struct{})
+		go func() {
+			hub.Snapshot()
+			close(done)
+		}()
+		select {
+		case <-done:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case <-time.After(5 * time.Second):
+			// Never hang the monitor: a hub that cannot answer in five seconds is
+			// exactly the failure this endpoint exists to report.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"hub unresponsive"}`))
+		}
+	})
 
 	// Public client config (no auth) — lets the UI know whether to require an invite.
 	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {

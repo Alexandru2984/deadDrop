@@ -262,3 +262,53 @@ not password-equivalent — that is the point of SRP, and the client applies 600
 PBKDF2 rounds before the server sees anything — but the dummy key would let a
 holder tell a real account from a fabricated reply. Keep the backup directory as
 restricted as `data/` itself: root-only, mode 0700.
+
+## 8. Preflight and monitoring
+
+```bash
+sudo -E ./deaddrop doctor
+```
+
+`check-config` reads the environment and says whether the settings are legal.
+That stays true while the service is down, the backup silently stops running, or
+the binary serves a bundle nobody recognises. `doctor` asks what is true of the
+machine right now:
+
+| Check | What it would catch |
+| --- | --- |
+| configuration | an env file that will not start |
+| served bundle | a binary built from a tampered tree, or an embed that dropped a file |
+| service | a process that is up while the hub goroutine is wedged |
+| backups | a daily timer that has been failing every day |
+
+It exits non-zero on failure, so it works as a cron entry or as a gate before
+handing out invites. Run it as root, or the backup check reports that it could
+not look rather than that anything is wrong.
+
+`GET /api/health` answers only after a round trip through the goroutine that
+routes signaling, so a wedged hub fails it while the page still loads. Point the
+uptime monitor there rather than at `/`. It reports liveness and nothing else:
+room and peer counts would tell anyone who asks how many people are using the
+service and when, so they are not exposed.
+
+## 9. When it breaks
+
+**The site is down.** `systemctl status deaddrop` and `journalctl -u deaddrop -n
+50`. The unit restarts on failure, so a process that is *repeatedly* dead is
+usually a bad `/etc/deaddrop.env` — `./deaddrop check-config` names the field.
+
+**The page loads but nothing works.** `./deaddrop doctor`. A 404 on `/api/health`
+means the running binary predates that endpoint; anything else there means the
+hub is not answering and the service needs a restart.
+
+**Calls connect but carry no audio.** Almost always TURN. Re-run the
+`turnutils_uclient` check in section 4 — a relay that stops working is invisible
+to everyone whose network happens not to need it.
+
+**A bad deploy.** `scripts/deploy.sh` keeps the previous binary and restores it
+on a failed health check. To go back by hand: put the old binary in place and
+`systemctl restart deaddrop`. The bundle is embedded, so the binary is the whole
+client — there is no second thing to roll back.
+
+**Losing account state.** Restore from section 7. Everything else is rebuilt from
+the repo, and no message content is ever on the disk to lose.
