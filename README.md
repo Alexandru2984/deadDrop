@@ -5,6 +5,17 @@ Conversation content is not stored by the server. Dead Drop is pseudonymous, not
 anonymous by default: the service and its network providers can observe metadata,
 and deletion from another person's device can never be guaranteed.
 
+The landing page and the security model are indexable; the live verifier and
+error pages are not. Nothing on any page is loaded from another origin — no
+analytics, no CDN font, no verification script — and `test/seo.selftest.mjs`
+fails the build if one appears. The preview card is rendered by
+`scripts/render-og-image.mjs` and served from here, so unfurling a link to Dead
+Drop involves no third party.
+
+A fork should change the host in `web/robots.txt`, `web/sitemap.xml` and the
+canonical/`og:` tags. Those are static because the bundle is hashed: a server
+that rewrote them per deployment would no longer match its own manifest.
+
 ## Security model at a glance
 
 Dead Drop protects message/file content against passive network observers and the

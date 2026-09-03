@@ -452,6 +452,20 @@ func main() {
 
 func embeddedWebHandler(files fs.FS) http.Handler {
 	server := http.FileServer(http.FS(files))
+	// Read once at startup: the page is embedded, so there is nothing to reread,
+	// and a miss should not touch the filesystem abstraction twice.
+	notFound, notFoundErr := fs.ReadFile(files, "404.html")
+	missing := func(w http.ResponseWriter, r *http.Request) {
+		if notFoundErr != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusNotFound)
+		if r.Method != http.MethodHead {
+			_, _ = w.Write(notFound)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -464,16 +478,16 @@ func embeddedWebHandler(files fs.FS) http.Handler {
 		if requestPath == "/" {
 			name = "."
 		} else if requestPath == "" || cleanPath != requestPath || strings.HasSuffix(requestPath, "/") {
-			http.NotFound(w, r)
+			missing(w, r)
 			return
 		}
 		if !fs.ValidPath(name) {
-			http.NotFound(w, r)
+			missing(w, r)
 			return
 		}
 		info, err := fs.Stat(files, name)
 		if err != nil || (info.IsDir() && name != ".") {
-			http.NotFound(w, r)
+			missing(w, r)
 			return
 		}
 		server.ServeHTTP(w, r)

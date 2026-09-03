@@ -1,0 +1,22 @@
+# Dead Drop
+#
+# The landing page and the security model are meant to be found: the service is
+# not a secret, and someone deciding whether to trust it should be able to read
+# what it does and does not protect before registering.
+#
+# Nothing sensitive lives at a path. Room codes travel in the URL fragment
+# (#join=…), which a browser never sends to a server and a crawler never sees,
+# and no message or file is ever stored here to be crawled.
+
+User-agent: *
+Allow: /$
+Allow: /about.html
+Allow: /og.png
+
+# The verifier reports what *this* server is currently serving. An indexed copy
+# would be a snapshot of a check that only means anything live.
+Disallow: /verify.html
+# Nothing here answers a GET worth indexing.
+Disallow: /api/
+
+Sitemap: https://dead.micutu.com/sitemap.xml
