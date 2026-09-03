@@ -17,7 +17,6 @@ import {
   loadIdentity, ensureIdentity, clearIdentity,
   pinContact, findContact, forgetContact, listContacts,
 } from './identity.js';
-import qrcode from './vendor/qrcode.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
@@ -605,21 +604,33 @@ class DeadDrop {
         setTimeout(() => (btn.textContent = t('share.copy')), 1500);
       });
     });
-    const qr = this._qrDataURL(link);
-    if (qr) {
+    this.el.messages.appendChild(el);
+    // The link is the useful half and appears at once; the QR joins it when the
+    // generator has loaded.
+    this._qrDataURL(link).then((qr) => {
+      if (!qr || !el.isConnected) return;
       const img = document.createElement('img');
       img.className = 'share-qr';
       img.src = qr;
       img.alt = 'QR code — scan to join';
       el.appendChild(img);
-    }
-    this.el.messages.appendChild(el);
+      this.el.messages.scrollTop = this.el.messages.scrollHeight;
+    });
     this._pruneRenderedNodes();
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
   }
 
-  _qrDataURL(text) {
+  /**
+   * The 55KB generator is fetched only when a QR is actually drawn.
+   *
+   * Responses are served no-store so a cached client cannot outlive a fix,
+   * which means every static import is paid again on every visit. This was the
+   * largest one — bigger than crypto.js and peer.js together — for a feature
+   * most visits never reach. The scanner was already lazy; this matches it.
+   */
+  async _qrDataURL(text) {
     try {
+      const { default: qrcode } = await import('./vendor/qrcode.js');
       const qr = qrcode(0, 'M');
       qr.addData(text);
       qr.make();
@@ -1062,7 +1073,7 @@ class DeadDrop {
     let token;
     try { token = 'dd-sas:' + s.crypto.computeSASToken(); } catch { return; }
     this._qrPeerId = peerId;
-    const qr = this._qrDataURL(token);
+    const qr = await this._qrDataURL(token);
     if (qr) this.el.qrVerifyImg.src = qr;
     this.el.qrVerifyStatus.textContent = `${s.label} — ${t('qr.scanning')}`;
     this.el.qrVerifyStatus.classList.remove('match', 'mismatch');

@@ -99,10 +99,13 @@ class CDP {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Returns what the condition produced, not merely that it held, so an assertion
+// can report the value it waited for instead of the word "true".
 async function waitFor(fn, { timeout = 8000, interval = 100 } = {}) {
   const deadline = Date.now() + timeout;
   for (;;) {
-    if (await fn()) return true;
+    const value = await fn();
+    if (value) return value;
     if (Date.now() > deadline) return false;
     await sleep(interval);
   }
@@ -287,6 +290,28 @@ const shareRendered = await sessionEval(`
   })()
 `);
 ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder');
+
+// The QR generator is fetched on demand rather than on every page load, so the
+// image arrives after the row. Nothing tested it before the change, which means
+// a green suite said nothing about whether it still worked — and a QR that
+// silently stopped rendering is a verification path quietly gone.
+const qrDecoded = await waitFor(async () => sessionEval(`
+  (async () => {
+    const img = document.querySelector('.share-link .share-qr');
+    if (!img || !img.src.startsWith('data:image/')) return false;
+    // Decode it: a data URL that is present but not an image would still pass a
+    // src check, and the QR is only useful if a camera can read it.
+    // Decoded through an Image, not fetch: connect-src is 'self', so the page
+    // may not fetch a data: URL — img-src is what allows one, and it is the
+    // path the browser actually uses to show this.
+    const probe = new Image();
+    probe.src = img.src;
+    await probe.decode();
+    return probe.naturalWidth > 0 && probe.naturalWidth === probe.naturalHeight
+      ? probe.naturalWidth : false;
+  })()
+`), { timeout: 15000 });
+ok(qrDecoded, `the share QR is generated on demand and decodes (${qrDecoded}px square)`);
 
 /* ── Saved contacts (opt-in identity) ──
  * The privacy claim is that nothing long-lived exists unless the user asks for
