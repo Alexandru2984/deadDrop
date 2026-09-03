@@ -28,25 +28,50 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-const VENDOR = join(ROOT, 'web/js/vendor/noble');
+const VENDOR = join(ROOT, 'web/js/vendor');
 const CACHE = join(tmpdir(), 'deaddrop-vendor-cache');
 
-/** Pinned exactly as web/js/vendor/noble/README.md records them. */
 const PACKAGES = {
   '@noble/post-quantum': '0.6.1',
   '@noble/hashes': '2.2.0',
   '@noble/curves': '2.2.0',
+  jsqr: '1.4.0',
+  'qrcode-generator': '1.5.2',
 };
 
-/** vendored file → [package, path inside the tarball] */
+/**
+ * Every vendored file, where it came from, and the one modification it carries.
+ *
+ * `dir` is relative to web/js/vendor. `mode` names the accepted difference:
+ *
+ *   specifiers  — bare imports rewritten to relative paths, plus the utils.js
+ *                 renames the flat noble directory forced. Statements only.
+ *   prefix      — a provenance comment prepended. Every added line must be a
+ *                 comment, and the rest has to match upstream exactly.
+ *   suffix      — an exact trailing string appended, declared here in full so
+ *                 there is nothing to interpret.
+ *
+ * Anything outside that is a difference nobody approved.
+ */
+const QRCODE_ESM_SUFFIX =
+  '\n// ── ESM export (vendored verbatim above; MIT, Kazuhiko Arase) ──\nexport default qrcode;\n';
+
 const FILES = {
-  'ml-kem.js': ['@noble/post-quantum', 'ml-kem.js'],
-  '_crystals.js': ['@noble/post-quantum', '_crystals.js'],
-  'pq-utils.js': ['@noble/post-quantum', 'utils.js'],
-  'sha3.js': ['@noble/hashes', 'sha3.js'],
-  'hash-utils.js': ['@noble/hashes', 'utils.js'],
-  '_u64.js': ['@noble/hashes', '_u64.js'],
-  'fft.js': ['@noble/curves', 'abstract/fft.js'],
+  'noble/ml-kem.js': { pkg: '@noble/post-quantum', path: 'ml-kem.js', mode: 'specifiers' },
+  'noble/_crystals.js': { pkg: '@noble/post-quantum', path: '_crystals.js', mode: 'specifiers' },
+  'noble/pq-utils.js': { pkg: '@noble/post-quantum', path: 'utils.js', mode: 'specifiers' },
+  'noble/sha3.js': { pkg: '@noble/hashes', path: 'sha3.js', mode: 'specifiers' },
+  'noble/hash-utils.js': { pkg: '@noble/hashes', path: 'utils.js', mode: 'specifiers' },
+  'noble/_u64.js': { pkg: '@noble/hashes', path: '_u64.js', mode: 'specifiers' },
+  'noble/fft.js': { pkg: '@noble/curves', path: 'abstract/fft.js', mode: 'specifiers' },
+  // Reads pixels from the camera during safety-code verification, so it parses
+  // input an attacker can put in front of the lens.
+  'jsqr.js': { pkg: 'jsqr', path: 'dist/jsQR.js', mode: 'prefix' },
+  // Draws the verification QR. Its qrcode.js is byte-identical across 1.4.4,
+  // 1.5.0 and 1.5.2; 1.5.2 is the newest of those. The 2.x line restructured
+  // the package and has no qrcode.js at the root, so moving to it is a real
+  // change rather than a version bump.
+  'qrcode.js': { pkg: 'qrcode-generator', path: 'qrcode.js', mode: 'suffix', suffix: QRCODE_ESM_SUFFIX },
 };
 
 /**
@@ -124,18 +149,51 @@ for (const [name, version] of Object.entries(PACKAGES)) {
 }
 console.log();
 
+/**
+ * Reduce the vendored text to what should equal upstream, or explain why it
+ * cannot. Returns { body, note } or { error }.
+ */
+function strip(actual, spec) {
+  if (spec.mode === 'specifiers') return { body: actual };
+  if (spec.mode === 'suffix') {
+    if (!actual.endsWith(spec.suffix)) {
+      return { error: 'the declared trailing addition is missing or altered' };
+    }
+    return { body: actual.slice(0, -spec.suffix.length), note: 'ESM export appended' };
+  }
+  if (spec.mode === 'prefix') {
+    const lines = actual.split('\n');
+    let n = 0;
+    while (n < lines.length && lines[n].startsWith('//')) n++;
+    if (n === 0) return { error: 'the provenance comment is missing' };
+    return { body: lines.slice(n).join('\n'), note: `${n} comment line(s) prepended` };
+  }
+  return { error: `unknown mode ${spec.mode}` };
+}
+
 let mismatches = 0;
-for (const [vendored, [pkg, original]] of Object.entries(FILES)) {
+for (const [vendored, spec] of Object.entries(FILES)) {
+  const { pkg, path: original } = spec;
   const upstreamPath = join(roots[pkg], original);
   if (!existsSync(upstreamPath)) {
     console.error(`  ✗ ${vendored}: ${pkg}/${original} is not in the published tarball`);
     mismatches++;
     continue;
   }
-  const expected = rewrite(readFileSync(upstreamPath, 'utf8'), pkg);
-  const actual = readFileSync(join(VENDOR, vendored), 'utf8');
+  const raw = readFileSync(join(VENDOR, vendored), 'utf8');
+  const stripped = strip(raw, spec);
+  if (stripped.error) {
+    console.error(`  ✗ ${vendored}: ${stripped.error}`);
+    mismatches++;
+    continue;
+  }
+  const actual = stripped.body;
+  const expected = spec.mode === 'specifiers'
+    ? rewrite(readFileSync(upstreamPath, 'utf8'), pkg)
+    : readFileSync(upstreamPath, 'utf8');
   if (expected === actual) {
-    console.log(`  ✓ ${vendored.padEnd(16)} ${sha256(actual).slice(0, 16)}  (${pkg}/${original})`);
+    const note = stripped.note ? `  [${stripped.note}]` : '';
+    console.log(`  ✓ ${vendored.padEnd(20)} ${sha256(raw).slice(0, 16)}  (${pkg}/${original})${note}`);
     continue;
   }
 
@@ -162,4 +220,4 @@ if (mismatches > 0) {
   process.exit(1);
 }
 console.log('\nEvery vendored file matches its pinned upstream release, after the'
-  + '\nimport-specifier rewrite and nothing else. ✅');
+  + '\nmodification declared for it and nothing else. ✅');
