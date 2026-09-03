@@ -53,6 +53,34 @@ export async function launchBrowser(prefix, { extraArgs = [] } = {}) {
     process.exit(0);
   }
 
+  // Shared CI runners are sometimes slow enough that Chrome needs well over a
+  // minute to write its port file, and a suite that reads that as "no browser"
+  // spends a red build on someone else's noisy neighbour. Wait longer, and try
+  // a second time with a fresh profile before giving up.
+  const STARTUP_MS = Number(process.env.DD_BROWSER_STARTUP_MS || 120000);
+  const ATTEMPTS = 2;
+
+  let lastStderr = '';
+  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const started = await startChrome(chromePath, prefix, extraArgs, STARTUP_MS);
+    if (started.endpoint) {
+      return { cdp: await CDP.connect(started.endpoint), cleanup: started.cleanup };
+    }
+    started.cleanup();
+    lastStderr = started.stderr;
+    if (attempt < ATTEMPTS) {
+      console.error(`${prefix}: Chromium did not start within ${STARTUP_MS / 1000}s — retrying once`);
+    }
+  }
+
+  console.error(`${prefix}: Chromium never reported a debugging endpoint `
+    + `(${ATTEMPTS} attempts, ${STARTUP_MS / 1000}s each)`);
+  if (lastStderr) console.error(lastStderr);
+  process.exit(1);
+}
+
+/** One spawn, with its own profile, so a retry cannot inherit a wedged one. */
+async function startChrome(chromePath, prefix, extraArgs, startupMs) {
   const profile = mkdtempSync(join(tmpdir(), `dd-${prefix}-`));
   const chrome = spawn(chromePath, [
     '--headless=new',
@@ -82,8 +110,8 @@ export async function launchBrowser(prefix, { extraArgs = [] } = {}) {
     detached: true,
   });
 
-  let stderrTail = '';
-  chrome.stderr.on('data', (c) => { stderrTail = (stderrTail + c.toString()).slice(-2000); });
+  let stderr = '';
+  chrome.stderr.on('data', (c) => { stderr = (stderr + c.toString()).slice(-2000); });
 
   const cleanup = () => {
     // Negative pid: the group, so the renderers go with it.
@@ -100,14 +128,9 @@ export async function launchBrowser(prefix, { extraArgs = [] } = {}) {
     if (!existsSync(file)) return false;
     const [port, path] = readFileSync(file, 'utf8').split('\n');
     return port && path ? `ws://127.0.0.1:${port.trim()}${path.trim()}` : false;
-  }, { timeout: 60000, interval: 100 });
+  }, { timeout: startupMs, interval: 100 });
 
-  if (!endpoint) {
-    console.error(`${prefix}: Chromium did not report a debugging endpoint`);
-    if (stderrTail) console.error(stderrTail);
-    process.exit(1);
-  }
-  return { cdp: await CDP.connect(endpoint), cleanup };
+  return { endpoint, cleanup, stderr };
 }
 
 /* ── CDP ── */
