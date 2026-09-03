@@ -34,16 +34,17 @@ fi
 echo "▸ checking committed integrity manifest…"
 node scripts/gen-integrity.mjs --check
 
+echo "▸ proving the vendored code is upstream's…"
+# Before anything else: a modified third-party file must never reach a build.
+# This is the only check here that looks outside the repository.
+node scripts/verify-vendor.mjs
+
 echo "▸ running pre-deploy tests…"
 go vet ./...
-go test ./...
-node test/crypto.selftest.mjs
-node test/lifecycle.selftest.mjs
-node test/mlkem.selftest.mjs
-node test/srp.selftest.mjs
-node test/fingerprint.selftest.mjs
-node test/config.selftest.mjs
-node test/manifest.selftest.mjs
+go test -race ./...
+for suite in crypto lifecycle mlkem srp fingerprint config manifest callsignal property; do
+  node "test/$suite.selftest.mjs"
+done
 
 echo "▸ building (prod flags)…"
 CANDIDATE="$(mktemp "$ROOT/.deaddrop-build.XXXXXX")"
@@ -94,6 +95,19 @@ else
     fi
     sleep 0.25
   done
+fi
+
+if [ "$healthy" = "1" ]; then
+  # The health check says the process came back. Doctor says whether the thing
+  # it came back as is the thing we meant to deploy, and whether what browsers
+  # receive still matches it.
+  echo "▸ post-deploy preflight…"
+  if [ -r /etc/deaddrop.env ]; then
+    ( set -a; . /etc/deaddrop.env; set +a; ./deaddrop doctor ) || echo "  ! doctor reported a problem"
+  else
+    sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a; ./deaddrop doctor' \
+      || echo "  ! doctor reported a problem"
+  fi
 fi
 
 if [ "$healthy" != "1" ]; then
