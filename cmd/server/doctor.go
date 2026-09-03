@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +41,7 @@ func runDoctor() {
 		checkConfiguration,
 		checkEmbeddedBundle,
 		checkServiceLiveness,
+		checkDeliveredBundle,
 		checkBackupFreshness,
 	}
 
@@ -108,6 +111,102 @@ func checkServiceLiveness() finding {
 			resp.StatusCode, strings.TrimSpace(string(body)))}
 	}
 	return finding{name: "service", detail: "hub answering on " + url}
+}
+
+// checkDeliveredBundle compares what the origin serves against what the public
+// URL actually delivers.
+//
+// Every other check here is about this machine. This one is about everything
+// between it and a browser — a CDN, a reverse proxy, anything that terminates
+// TLS. The client is the entire security product: an edge that rewrites one
+// script tag has replaced the cryptography, and the server would never know.
+//
+// The page is the important half. Its script tags carry subresource integrity
+// hashes, so a module rewritten anywhere downstream fails in the browser — as
+// long as the page itself is the one the origin sent. Checking the entry module
+// too costs one request and catches an edge that rewrites assets while leaving
+// the HTML alone.
+//
+// DEPLOY.md has asked for this comparison by hand after every deploy since the
+// Cloudflare front went up. Nobody runs it by hand after every deploy.
+func checkDeliveredBundle() finding {
+	public := publicOrigin()
+	if public == "" {
+		return finding{name: "delivered bundle", warn: true,
+			err: errors.New("no public origin in ALLOWED_ORIGINS — nothing to compare against")}
+	}
+	port, _, host, err := configuredListenAddress()
+	if err != nil {
+		return finding{name: "delivered bundle", err: err}
+	}
+	origin := "http://" + joinHostPort(host, port)
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	return compareDelivery(client, origin, public, deliveryPaths)
+}
+
+// deliveryPaths is the minimal set worth comparing. The page carries the
+// subresource-integrity hashes for everything else, so a module rewritten
+// downstream fails in the browser as long as the page is the origin's. The entry
+// module is checked too, for an edge that leaves HTML alone and rewrites assets.
+var deliveryPaths = []string{"/", "/js/app.js"}
+
+// compareDelivery is separated from the check so a test can watch it fail: a
+// security check that has only ever been seen passing is not a check.
+func compareDelivery(client *http.Client, origin, public string, paths []string) finding {
+	for _, path := range paths {
+		local, err := fetchDigest(client, origin+path)
+		if err != nil {
+			return finding{name: "delivered bundle", err: fmt.Errorf("origin %s: %w", path, err)}
+		}
+		remote, err := fetchDigest(client, public+path)
+		if err != nil {
+			// Being unable to reach the public URL from the box itself is
+			// common and is not evidence of tampering.
+			return finding{name: "delivered bundle", warn: true,
+				err: fmt.Errorf("cannot reach %s%s from here: %v", public, path, err)}
+		}
+		if local != remote {
+			return finding{name: "delivered bundle", err: fmt.Errorf(
+				"%s differs between the origin and %s (%s vs %s) — something in front of "+
+					"this server is rewriting what browsers receive",
+				path, public, local[:16], remote[:16])}
+		}
+	}
+	return finding{name: "delivered bundle", detail: public + " serves exactly what this origin does"}
+}
+
+// publicOrigin picks the first non-loopback, non-onion origin to compare against.
+// An onion is reachable only through Tor, which this process has no client for.
+func publicOrigin() string {
+	for _, raw := range strings.Split(os.Getenv("ALLOWED_ORIGINS"), ",") {
+		candidate := strings.TrimSpace(raw)
+		if candidate == "" || strings.Contains(candidate, ".onion") {
+			continue
+		}
+		if strings.HasPrefix(candidate, "https://") {
+			return strings.TrimRight(candidate, "/")
+		}
+	}
+	return ""
+}
+
+func fetchDigest(client *http.Client, url string) (string, error) {
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	// Bounded: the bundle is small, and an edge that returns something enormous
+	// is a finding in itself rather than a reason to fill memory.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(body)), nil
 }
 
 // checkBackupFreshness looks at the archives themselves rather than at whether

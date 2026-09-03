@@ -279,7 +279,24 @@ machine right now:
 | configuration | an env file that will not start |
 | served bundle | a binary built from a tampered tree, or an embed that dropped a file |
 | service | a process that is up while the hub goroutine is wedged |
+| delivered bundle | a CDN or proxy rewriting the page browsers actually receive |
 | backups | a daily timer that has been failing every day |
+
+The delivered-bundle check is the one that is not about this machine. It fetches
+the page and the entry module from the loopback origin and from the public URL
+and compares them: everything between the two — Cloudflare, nginx, anything that
+terminates TLS — can replace the client, and the client is the whole security
+product. The page matters most, because its script tags carry the subresource
+integrity hashes that make every other module tamper-evident in the browser.
+
+Section 3 asked for this comparison by hand after every deploy. Do it on a timer
+instead:
+
+```
+# /etc/cron.d/deaddrop-doctor
+17 * * * * root . /etc/deaddrop.env; ./deaddrop doctor \
+  || logger -t deaddrop-doctor "preflight failed"
+```
 
 It exits non-zero on failure, so it works as a cron entry or as a gate before
 handing out invites. Run it as root, or the backup check reports that it could
