@@ -26,7 +26,6 @@
 .verify-mark { width: 1em; flex-shrink: 0; }
 .verify-row.verify-ok .verify-mark { color: var(--accent); }
 .verify-row.verify-bad .verify-mark { color: var(--danger); }
-.verify-row.verify-pending .verify-mark { color: var(--dim); }
 .verify-path { color: var(--text); font-family: var(--font); word-break: break-all; }
 .verify-detail { color: var(--danger); font-weight: 600; }
 .verify-cmd {

@@ -295,12 +295,28 @@ type lockEntry struct {
 type lockout struct {
 	mu sync.Mutex
 	m  map[string]*lockEntry
+	// A saturated table stops recording failures, which quietly removes the
+	// per-account throttle for everyone not already in it. At most one line a
+	// minute, and no key: the table is keyed by username and an HMAC of the
+	// address, and writing those to disk would build the record this service
+	// exists not to keep.
+	lastSaturationLog time.Time
 }
 
 func newLockout() *lockout {
 	l := &lockout{m: make(map[string]*lockEntry)}
 	go l.reap()
 	return l
+}
+
+// noteSaturationLocked reports a degraded throttle without letting the report
+// become its own flood. The caller holds l.mu.
+func (l *lockout) noteSaturationLocked(now time.Time) {
+	if now.Sub(l.lastSaturationLog) < time.Minute {
+		return
+	}
+	l.lastSaturationLog = now
+	log.Printf("[auth] lockout table full (%d) — failed-login throttling is degraded", maxLockoutEntries)
 }
 
 func lockKey(username, ip string) string { return username + "|" + ip }
@@ -325,8 +341,12 @@ func (l *lockout) fail(username, ip string) {
 	e := l.m[key]
 	if e == nil {
 		if len(l.m) >= maxLockoutEntries {
-			l.removeStaleLocked(time.Now())
+			now := time.Now()
+			l.removeStaleLocked(now)
 			if len(l.m) >= maxLockoutEntries {
+				// Refuse to record rather than evict: evicting would let an
+				// attacker clear a victim's active lockout by filling the table.
+				l.noteSaturationLocked(now)
 				return
 			}
 		}

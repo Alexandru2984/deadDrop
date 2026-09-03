@@ -1,12 +1,44 @@
 /** Strict parser for the generated browser-asset integrity manifest. */
 
+/**
+ * Every module the bundle can load, and the entry page.
+ *
+ * The verifier checks what the manifest lists and nothing else, so a manifest
+ * that simply omits a file leaves that file unchecked while the page still
+ * reports success. ES module imports carry no subresource integrity — index.html
+ * pins app.js, but app.js pins nothing it imports — so this list is the only
+ * thing standing between a trimmed manifest and a green result.
+ *
+ * It held six entries while the bundle grew to twenty-three, leaving srp.js,
+ * which turns a password into an SRP proof, and the whole post-quantum
+ * implementation unguarded. `test/manifest.selftest.mjs` now fails when a module
+ * exists on disk and is missing here, so the list cannot drift again.
+ */
 export const REQUIRED_INTEGRITY_PATHS = Object.freeze([
   'index.html',
   'js/app.js',
+  'js/callsignal.js',
   'js/crypto.js',
+  'js/filetransfer.js',
   'js/handshake.js',
+  'js/i18n.js',
+  'js/identity.js',
   'js/manifest.js',
+  'js/messages.js',
   'js/peer.js',
+  'js/srp.js',
+  'js/support.js',
+  'js/util.js',
+  'js/vendor/jsqr.js',
+  'js/vendor/noble/_crystals.js',
+  'js/vendor/noble/_u64.js',
+  'js/vendor/noble/fft.js',
+  'js/vendor/noble/hash-utils.js',
+  'js/vendor/noble/ml-kem.js',
+  'js/vendor/noble/pq-utils.js',
+  'js/vendor/noble/sha3.js',
+  'js/vendor/qrcode.js',
+  'js/verify.js',
 ]);
 
 export function parseIntegrityManifest(text, {

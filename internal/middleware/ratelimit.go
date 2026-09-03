@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -13,7 +14,25 @@ import (
 const maxRateLimitVisitors = 50_000
 
 // RateLimiter provides per-IP token-bucket rate limiting.
+// saturationNotice keeps a degraded security control from being a silent one,
+// without letting the reporting become its own flood: at most one line a minute.
+type saturationNotice struct {
+	mu   sync.Mutex
+	last time.Time
+}
+
+func (n *saturationNotice) report(format string, args ...any) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if time.Since(n.last) < time.Minute {
+		return
+	}
+	n.last = time.Now()
+	log.Printf(format, args...)
+}
+
 type RateLimiter struct {
+	saturated         *saturationNotice
 	mu                sync.Mutex
 	visitors          map[string]*bucket
 	rate              int           // tokens added per interval
@@ -34,10 +53,11 @@ func NewRateLimiter(rate, burst int, interval time.Duration) *RateLimiter {
 		panic("rate limiter values must be positive")
 	}
 	rl := &RateLimiter{
-		visitors: make(map[string]*bucket),
-		rate:     rate,
-		burst:    burst,
-		interval: interval,
+		saturated: &saturationNotice{},
+		visitors:  make(map[string]*bucket),
+		rate:      rate,
+		burst:     burst,
+		interval:  interval,
 	}
 	go rl.cleanup()
 	return rl
@@ -59,6 +79,12 @@ func (rl *RateLimiter) Allow(ip string) bool {
 				rl.lastCapacitySweep = now
 			}
 			if len(rl.visitors) >= maxRateLimitVisitors {
+				// Fail closed, but say so. Turning away every new client is the
+				// safe answer and an outage; an operator should not have to
+				// infer it from complaints. No key is logged: the table is
+				// keyed by an HMAC of the address, and writing those to disk
+				// would build the record this service exists not to keep.
+				rl.saturated.report("[ratelimit] visitor table full (%d) — refusing all new clients", maxRateLimitVisitors)
 				return false
 			}
 		}
