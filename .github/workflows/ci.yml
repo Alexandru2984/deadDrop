@@ -334,16 +334,18 @@ jobs:
           DD_REQUIRE_WEBKIT: '1'
         run: node test/webkit.boot.mjs
 
-      # Two peers needs two Safari sessions, which its driver is stricter about.
-      # Kept separate so a concurrency limit reads as its own failure rather than
-      # burying the answer above.
-      - name: Two peers on WebKit
+      # Not two Safaris: macOS runs one, and its driver refuses to pair a second
+      # session with it. That limit made for a better test — two people on the
+      # same browser is already covered, while an iPhone talking to a laptop is
+      # the case that actually happens and the one where a disagreement between
+      # engines has somewhere to hide.
+      - name: Safari talking to Chrome
         env:
           DD_URL: http://127.0.0.1:8100
           DD_INVITE: ${{ steps.invites.outputs.b }}
           DD_INVITE2: ${{ steps.invites.outputs.c }}
           DD_REQUIRE_WEBKIT: '1'
-        run: node test/webkit.pair.mjs
+        run: node test/webkit.cross.mjs
 
       - name: Server log (on failure)
         if: failure()

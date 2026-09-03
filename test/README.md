@@ -77,24 +77,33 @@ session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 certificates actually in use) drive headless Chrome over the DevTools Protocol.
 ## Third engine — WebKit
 
-`webkit.boot.mjs` (one session) and `webkit.pair.mjs` (two) run on macOS against
-real Safari, over classic W3C WebDriver (`test/lib/webdriver.mjs`). WebKit is the
-engine every browser on iOS uses, and the one that cannot be driven from Linux —
-Safari has no port, and WebKitGTK ships no driver on the distributions here.
+`webkit.boot.mjs` (one Safari session) and `webkit.cross.mjs` (Safari on one side,
+Chrome on the other) run on macOS over classic W3C WebDriver
+(`test/lib/webdriver.mjs`). WebKit is the engine every browser on iOS uses, and
+the one that cannot be driven from Linux — Safari has no port, and WebKitGTK
+ships no driver on the distributions here.
+
+It is not two Safaris because it cannot be: macOS runs one, and its driver
+refuses to pair a second session with it. That turned out better. Two peers on
+one browser is already covered three times over; someone on an iPhone talking to
+someone on a laptop is the case that actually happens.
 
 The driver client was built and checked against `chromedriver`, which speaks the
 same protocol, so the only thing CI is trying for the first time is Safari
 itself. Locally:
 
 ```bash
-DD_WEBDRIVER=/path/to/chromedriver DD_DRIVER_PORT=4455 \
-DD_CAPABILITIES='{"browserName":"chrome", ...}' \
-DD_URL=… DD_INVITE=… DD_INVITE2=… node test/webkit.pair.mjs
+DD_WEBDRIVER_A=/path/to/chromedriver DD_CAPABILITIES_A='{"browserName":"chrome", ...}' \
+DD_WEBDRIVER_B=/path/to/chromedriver DD_CAPABILITIES_B='{"browserName":"chrome", ...}' \
+DD_URL=… DD_INVITE=… DD_INVITE2=… node test/webkit.cross.mjs
 ```
 
-They are separate jobs on purpose: Safari's driver is strict about concurrent
-sessions, so a concurrency limit shows up as its own failure instead of burying
-the question the boot check answers.
+Separate jobs on purpose: the boot check answers whether the client runs on
+WebKit at all, and should not be buried by anything the cross-engine run hits.
+
+Safari 26.5.2 passes the boot check — the app starts, every required primitive
+is present, nothing is degraded, an account registers, a room opens, and the
+vendored ML-KEM agrees with itself there.
 
 ## Second engine
 
