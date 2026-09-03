@@ -286,3 +286,69 @@ jobs:
       - name: Stop server
         if: always()
         run: kill "$(cat server.pid)" 2>/dev/null || true
+
+  # The third engine, and the one that matters most: every browser on iOS is
+  # WebKit underneath, so this is as close to "does it work on an iPhone" as CI
+  # can get. It cannot run on Linux — Safari has no port and WebKitGTK ships no
+  # driver here — so it runs on macOS against the real thing.
+  #
+  # Firefox was the second engine, and its first run found a handshake race that
+  # broke every Gecko session outright: no session at all, and nothing would have
+  # said so until a user tried. There is no reason to expect WebKit to be kinder.
+  webkit:
+    name: Browser — WebKit (Safari)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Safari will not accept automation until this is turned on, and it needs
+      # privilege to do it.
+      - name: Allow Safari automation
+        run: sudo safaridriver --enable
+
+      - name: Build server
+        run: go build -o deaddrop ./cmd/server/
+      - name: Start server
+        run: .github/start-server.sh
+      # Three: invites are single-use, and the boot check registers an account
+      # before the pair suite registers two more.
+      - name: Mint invites
+        id: invites
+        run: |
+          echo "a=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "c=$(./deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      # One session, so nothing here can be refused for concurrency. Whatever
+      # else happens, this answers whether the client runs on WebKit at all.
+      - name: Does it run on WebKit
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.invites.outputs.a }}
+          DD_REQUIRE_WEBKIT: '1'
+        run: node test/webkit.boot.mjs
+
+      # Two peers needs two Safari sessions, which its driver is stricter about.
+      # Kept separate so a concurrency limit reads as its own failure rather than
+      # burying the answer above.
+      - name: Two peers on WebKit
+        env:
+          DD_URL: http://127.0.0.1:8100
+          DD_INVITE: ${{ steps.invites.outputs.b }}
+          DD_INVITE2: ${{ steps.invites.outputs.c }}
+          DD_REQUIRE_WEBKIT: '1'
+        run: node test/webkit.pair.mjs
+
+      - name: Server log (on failure)
+        if: failure()
+        run: cat server.log || true
+      - name: Stop server
+        if: always()
+        run: kill "$(cat server.pid)" 2>/dev/null || true
+

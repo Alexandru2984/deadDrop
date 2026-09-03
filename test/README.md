@@ -75,6 +75,27 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 (one audio/video call, with the DTLS fingerprint binding checked against the
 certificates actually in use) drive headless Chrome over the DevTools Protocol.
+## Third engine — WebKit
+
+`webkit.boot.mjs` (one session) and `webkit.pair.mjs` (two) run on macOS against
+real Safari, over classic W3C WebDriver (`test/lib/webdriver.mjs`). WebKit is the
+engine every browser on iOS uses, and the one that cannot be driven from Linux —
+Safari has no port, and WebKitGTK ships no driver on the distributions here.
+
+The driver client was built and checked against `chromedriver`, which speaks the
+same protocol, so the only thing CI is trying for the first time is Safari
+itself. Locally:
+
+```bash
+DD_WEBDRIVER=/path/to/chromedriver DD_DRIVER_PORT=4455 \
+DD_CAPABILITIES='{"browserName":"chrome", ...}' \
+DD_URL=… DD_INVITE=… DD_INVITE2=… node test/webkit.pair.mjs
+```
+
+They are separate jobs on purpose: Safari's driver is strict about concurrent
+sessions, so a concurrency limit shows up as its own failure instead of burying
+the question the boot check answers.
+
 ## Second engine
 
 `firefox.pair.mjs` runs the core two-peer session on Gecko over WebDriver BiDi
