@@ -102,10 +102,16 @@ if [ "$healthy" = "1" ]; then
   # it came back as is the thing we meant to deploy, and whether what browsers
   # receive still matches it.
   echo "▸ post-deploy preflight…"
+  # PORT and HOST live in the systemd unit, not the env file, so pass them the
+  # same way check-config does. Without them doctor cannot tell which service to
+  # look at, and it refuses to guess.
   if [ -r /etc/deaddrop.env ]; then
-    ( set -a; . /etc/deaddrop.env; set +a; ./deaddrop doctor ) || echo "  ! doctor reported a problem"
+    ( set -a; . /etc/deaddrop.env; set +a
+      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" ./deaddrop doctor
+    ) || echo "  ! doctor reported a problem"
   else
-    sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a; ./deaddrop doctor' \
+    sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a
+      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" ./deaddrop doctor' \
       || echo "  ! doctor reported a problem"
   fi
 fi

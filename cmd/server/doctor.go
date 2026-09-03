@@ -90,11 +90,11 @@ func checkEmbeddedBundle() finding {
 // health route answers only after a round trip through the goroutine that
 // routes signaling, so a wedged hub fails here while the page still loads.
 func checkServiceLiveness() finding {
-	port, _, host, err := configuredListenAddress()
+	addr, err := liveAddress()
 	if err != nil {
-		return finding{name: "service", err: err}
+		return finding{name: "service", warn: true, err: err}
 	}
-	url := fmt.Sprintf("http://%s/api/health", joinHostPort(host, port))
+	url := fmt.Sprintf("http://%s/api/health", addr)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -112,6 +112,24 @@ func checkServiceLiveness() finding {
 			resp.StatusCode, strings.TrimSpace(string(body)))}
 	}
 	return finding{name: "service", detail: "hub answering on " + url}
+}
+
+// liveAddress is the address of the service to interrogate.
+//
+// It refuses to guess. Without PORT set, configuredListenAddress returns a
+// development default, and a live check aimed at a default probes whatever
+// happens to be listening there — on the machine this was written for, that was
+// an unrelated service, which doctor cheerfully reported as a healthy hub. A
+// preflight that silently checks the wrong thing is worse than none.
+func liveAddress() (string, error) {
+	port, pinned, host, err := configuredListenAddress()
+	if err != nil {
+		return "", err
+	}
+	if !pinned {
+		return "", errors.New("PORT is not set, so there is no way to know which service to check")
+	}
+	return joinHostPort(host, port), nil
 }
 
 // checkDeployedBundle asks whether the service that is running is serving the
@@ -133,11 +151,11 @@ func checkDeployedBundle() finding {
 		return finding{name: "deployed bundle", warn: true,
 			err: fmt.Errorf("no checkout here to compare against: %v", err)}
 	}
-	port, _, host, err := configuredListenAddress()
+	addr, err := liveAddress()
 	if err != nil {
-		return finding{name: "deployed bundle", err: err}
+		return finding{name: "deployed bundle", warn: true, err: err}
 	}
-	url := fmt.Sprintf("http://%s/SHA256SUMS", joinHostPort(host, port))
+	url := fmt.Sprintf("http://%s/SHA256SUMS", addr)
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -184,11 +202,11 @@ func checkDeliveredBundle() finding {
 		return finding{name: "delivered bundle", warn: true,
 			err: errors.New("no public origin in ALLOWED_ORIGINS — nothing to compare against")}
 	}
-	port, _, host, err := configuredListenAddress()
+	addr, err := liveAddress()
 	if err != nil {
-		return finding{name: "delivered bundle", err: err}
+		return finding{name: "delivered bundle", warn: true, err: err}
 	}
-	origin := "http://" + joinHostPort(host, port)
+	origin := "http://" + addr
 
 	client := &http.Client{Timeout: 20 * time.Second}
 	return compareDelivery(client, origin, public, deliveryPaths)
