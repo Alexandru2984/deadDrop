@@ -65,7 +65,15 @@ jobs:
         run: node test/crypto.selftest.mjs
       - name: Bounded message and file lifecycle
         run: node test/lifecycle.selftest.mjs
-      - name: Vendored ML-KEM-768
+      # The post-quantum half of the handshake is the one part of this repository
+      # nobody here wrote. Vendoring kept the client free of package managers and
+      # third-party origins, but it moved the supply chain from "npm resolves it"
+      # to "somebody copied these files once".
+      - name: Vendored cryptography matches upstream
+        run: node scripts/verify-vendor.mjs
+      # Sizes and round trips only say the thing agrees with itself. These are
+      # NIST's own vectors, so they say it computes the standard.
+      - name: Vendored ML-KEM-768 (incl. NIST vectors)
         run: node test/mlkem.selftest.mjs
       - name: SRP client↔server (PBKDF2 kdf)
         run: node test/srp.selftest.mjs

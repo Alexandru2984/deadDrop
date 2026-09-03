@@ -30,6 +30,19 @@ from exactly one state per side. A peer whose safety code was confirmed can
 still be running a patched client, and an offer accepted at the wrong moment
 turns on a camera nobody agreed to.
 
+## Vendored cryptography
+
+`node scripts/verify-vendor.mjs` proves the vendored post-quantum code is
+upstream noble's, byte for byte. It fetches the pinned npm tarballs, applies the
+two documented rewrites (bare specifiers to relative paths, and the `utils.js`
+renames the flat vendor directory forced), and diffs. `--offline` reuses a
+previously fetched cache.
+
+`test/mlkem.selftest.mjs` then runs NIST's published ACVP vectors. This matters
+more than it sounds: an implementation that dropped the implicit-rejection seed
+passes every round-trip and size check — verified, it does — and fails all 25
+key-generation vectors.
+
 ## Parser fuzzing and property tests
 
 The Go parsers that read attacker-controlled bytes are fuzzed natively:
