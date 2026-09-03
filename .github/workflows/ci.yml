@@ -24,6 +24,21 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race ./...
+      # A build that is not deterministic cannot be checked by anyone: two people
+      # at the same commit would get different binaries and neither could say
+      # which was right. -trimpath keeps host paths out; this keeps it honest.
+      - name: Build is reproducible
+        run: |
+          go build -trimpath -ldflags="-s -w" -o /tmp/build-a ./cmd/server/
+          go build -trimpath -ldflags="-s -w" -o /tmp/build-b ./cmd/server/
+          a=$(sha256sum /tmp/build-a | cut -d' ' -f1)
+          b=$(sha256sum /tmp/build-b | cut -d' ' -f1)
+          echo "sha256 $a  (commit ${GITHUB_SHA})"
+          if [ "$a" != "$b" ]; then
+            echo "::error::the same source produced two different binaries"
+            exit 1
+          fi
+
       - name: Known-vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Go security static analysis

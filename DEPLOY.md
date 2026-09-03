@@ -279,6 +279,7 @@ machine right now:
 | configuration | an env file that will not start |
 | served bundle | a binary built from a tampered tree, or an embed that dropped a file |
 | service | a process that is up while the hub goroutine is wedged |
+| deployed bundle | a running service older than the source tree beside it |
 | delivered bundle | a CDN or proxy rewriting the page browsers actually receive |
 | backups | a daily timer that has been failing every day |
 
@@ -321,6 +322,17 @@ hub is not answering and the service needs a restart.
 **Calls connect but carry no audio.** Almost always TURN. Re-run the
 `turnutils_uclient` check in section 4 — a relay that stops working is invisible
 to everyone whose network happens not to need it.
+
+**Is what is running what we meant to ship?** The bundle is embedded, so the
+manifest the service serves identifies the client inside the binary exactly.
+`doctor` compares it with `web/SHA256SUMS` on disk; a mismatch means the source
+moved on and the deploy did not. That is not hypothetical — production ran a
+three-day-old binary while every fix since sat unshipped, and nothing said so.
+
+The build is reproducible: `go build -trimpath -ldflags="-s -w" -o deaddrop
+./cmd/server/` at a given commit yields the same bytes on any machine with the
+same Go version, and CI checks that on every push. So the binary can be verified
+rather than trusted — rebuild the commit and compare `sha256sum`.
 
 **A bad deploy.** `scripts/deploy.sh` keeps the previous binary and restores it
 on a failed health check. To go back by hand: put the old binary in place and

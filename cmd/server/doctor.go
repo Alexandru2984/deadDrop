@@ -41,6 +41,7 @@ func runDoctor() {
 		checkConfiguration,
 		checkEmbeddedBundle,
 		checkServiceLiveness,
+		checkDeployedBundle,
 		checkDeliveredBundle,
 		checkBackupFreshness,
 	}
@@ -111,6 +112,54 @@ func checkServiceLiveness() finding {
 			resp.StatusCode, strings.TrimSpace(string(body)))}
 	}
 	return finding{name: "service", detail: "hub answering on " + url}
+}
+
+// checkDeployedBundle asks whether the service that is running is serving the
+// client this checkout builds.
+//
+// checkEmbeddedBundle proves a binary is internally consistent, and it is happy
+// to say so about a binary from months ago. Nothing noticed that production had
+// been running a build from three days earlier while every fix since sat in the
+// tree unshipped — and the fixes it was missing were the reason the tree had
+// moved.
+//
+// The bundle is embedded, so the manifest the service hands out identifies the
+// client inside the binary exactly. Comparing it with the one on disk costs a
+// single request and answers the only version question that matters.
+func checkDeployedBundle() finding {
+	onDisk, err := os.ReadFile("web/SHA256SUMS")
+	if err != nil {
+		// Running from somewhere other than a checkout is legitimate.
+		return finding{name: "deployed bundle", warn: true,
+			err: fmt.Errorf("no checkout here to compare against: %v", err)}
+	}
+	port, _, host, err := configuredListenAddress()
+	if err != nil {
+		return finding{name: "deployed bundle", err: err}
+	}
+	url := fmt.Sprintf("http://%s/SHA256SUMS", joinHostPort(host, port))
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return finding{name: "deployed bundle", err: fmt.Errorf("cannot read %s: %w", url, err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return finding{name: "deployed bundle", err: fmt.Errorf("%s returned HTTP %d", url, resp.StatusCode)}
+	}
+	served, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return finding{name: "deployed bundle", err: err}
+	}
+
+	if string(served) == string(onDisk) {
+		return finding{name: "deployed bundle", detail: "the running service serves this checkout's client"}
+	}
+	return finding{name: "deployed bundle", err: fmt.Errorf(
+		"the running service serves a different client from this checkout "+
+			"(served %s, on disk %s) — the source has moved on and the deploy has not",
+		fmt.Sprintf("%x", sha256.Sum256(served))[:16],
+		fmt.Sprintf("%x", sha256.Sum256(onDisk))[:16])}
 }
 
 // checkDeliveredBundle compares what the origin serves against what the public
