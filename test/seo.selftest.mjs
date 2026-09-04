@@ -89,5 +89,27 @@ ok(locs.every((u) => u.startsWith(OURS)), 'every sitemap URL is on this origin')
 ok(!locs.some((u) => u.endsWith('/verify.html')),
   'the sitemap does not advertise a page robots.txt disallows');
 
+console.log('\nthe app speaks one language at a time');
+
+// Eighteen error strings were hardcoded English in a bilingual app, so a
+// Romanian user got Romanian until something went wrong — including "do not
+// trust this connection", the one message you least want misread. Nothing was
+// watching, which is why they drifted.
+const appjs = readFileSync(join(WEB, 'js/app.js'), 'utf8');
+const shown = [...appjs.matchAll(
+  /(?:_renderSystem|_showAuthError|_showCallStatus)\(\s*(['"])(.*?)\1/g)]
+  .map((m) => m[2])
+  .filter((text) => /[a-z]{3}/.test(text));
+ok(shown.length === 0,
+  `every message shown to a user goes through the translator${shown.length ? ': ' + shown.slice(0, 5).join(' | ') : ''}`);
+
+const i18n = readFileSync(join(WEB, 'js/i18n.js'), 'utf8');
+const keysIn = (block) => new Set([...block.matchAll(/^\s*'([\w.]+)':/gm)].map((m) => m[1]));
+const en = keysIn(i18n.slice(i18n.indexOf('en: {'), i18n.indexOf('ro: {')));
+const ro = keysIn(i18n.slice(i18n.indexOf('ro: {')));
+const untranslated = [...en].filter((k) => !ro.has(k));
+ok(untranslated.length === 0,
+  `every string has both languages${untranslated.length ? ': missing ' + untranslated.join(', ') : ` (${en.size})`}`);
+
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);

@@ -7,7 +7,10 @@
   --surface:  #111118;
   --border:   #222230;
   --text:     #d0d0d8;
-  --dim:      #666680;
+  /* 4.93:1 on the page and 4.70:1 on a surface, both above the 4.5 WCAG AA
+     asks for body text. The previous value was 3.55, which put every hint,
+     caption and explanatory paragraph below the line. */
+  --dim:      #7d7d96;
   --accent:   #00e87b;
   --danger:   #ff4455;
   --mine:     #161628;

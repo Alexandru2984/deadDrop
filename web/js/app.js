@@ -348,7 +348,7 @@ class DeadDrop {
       const primaryOK = client.verifyServer(auth.data.M2);
       const duressOK = !!clientD && clientD.verifyServer(auth.data.M2);
       if (!primaryOK && !duressOK) {
-        this._showAuthError('Server authentication failed — do not trust this connection.');
+        this._showAuthError(t('err.serverAuth'));
         return;
       }
       const usedDuress = !primaryOK && duressOK;
@@ -366,7 +366,7 @@ class DeadDrop {
       }
       this._afterAuth();
     } catch {
-      this._showAuthError('Connection failed');
+      this._showAuthError(t('err.connection'));
     } finally {
       this._setAuthBusy(false);
     }
@@ -394,7 +394,7 @@ class DeadDrop {
     const password = this.el.authPass.value;
     const invite = this.el.authInvite.value.trim();
     if (!username || !password) return;
-    if (password.length < 8) { this._showAuthError('Password must be at least 8 characters'); return; }
+    if (password.length < 8) { this._showAuthError(t('err.shortPassword')); return; }
     // Invite requirement is enforced by the server; the field is hidden when
     // registration is open, so don't block on it here.
 
@@ -410,7 +410,7 @@ class DeadDrop {
         this._showAuthError(res.data.error || 'Registration failed');
       }
     } catch {
-      this._showAuthError('Connection failed');
+      this._showAuthError(t('err.connection'));
     } finally {
       this._setAuthBusy(false);
     }
@@ -565,12 +565,12 @@ class DeadDrop {
       const res = await fetch('/api/room', { method: 'POST' });
       const data = await res.json();
       if (!res.ok || typeof data.code !== 'string' || !ROOM_CODE_RE.test(data.code)) {
-        this._renderSystem(data.error || 'Failed to create room');
+        this._renderSystem(data.error || t('err.roomCreate'));
         return;
       }
       this.roomCode = data.code;
     } catch {
-      this._renderSystem('Failed to create room');
+      this._renderSystem(t('err.roomCreate'));
       return;
     }
     await this._loadIceServers();
@@ -578,7 +578,7 @@ class DeadDrop {
       await this._connectSignaling();
       this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
     } catch {
-      this._renderSystem('Failed to connect to signaling server');
+      this._renderSystem(t('err.signaling'));
       return;
     }
     this._enterChat(this.roomCode);
@@ -642,14 +642,14 @@ class DeadDrop {
     const code = this.el.roomInput.value.trim().toLowerCase();
     if (!code) return;
     if (!ROOM_CODE_RE.test(code)) {
-      this._renderSystem('Invalid room code');
+      this._renderSystem(t('err.roomCode'));
       return;
     }
     await this._loadIceServers();
     try {
       await this._connectSignaling();
     } catch {
-      this._renderSystem('Failed to connect to signaling server');
+      this._renderSystem(t('err.signaling'));
       return;
     }
     this.roomCode = code;
@@ -1150,7 +1150,7 @@ class DeadDrop {
   async sendFile(file) {
     if (!this.encrypted) return;
     if (file.size > MAX_FILE_SIZE) {
-      this._renderSystem(`File too large — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+      this._renderSystem(`${t('err.fileTooLarge')} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
       return;
     }
 
@@ -1182,7 +1182,7 @@ class DeadDrop {
     }
     if (results.some((r) => r.status === 'rejected')) {
       console.error('File send failed:', results.find((r) => r.status === 'rejected')?.reason);
-      this._renderSystem('File transfer failed for at least one peer');
+      this._renderSystem(t('err.fileFailed'));
     }
   }
 
@@ -1204,7 +1204,7 @@ class DeadDrop {
       this.el.recordBtn.textContent = '⏹️';
       this._recTimer = setTimeout(() => this._stopRecording(), 120000); // 2 min cap
     } catch {
-      this._renderSystem('Microphone access denied');
+      this._renderSystem(t('err.micDenied'));
     }
   }
 
@@ -1235,7 +1235,7 @@ class DeadDrop {
     const text = this.el.msgInput.value.trim();
     if (!text || !this.encrypted) return;
     if (text.length > MAX_TEXT_LEN) {
-      this._renderSystem('Message too large');
+      this._renderSystem(t('err.messageTooLarge'));
       return;
     }
 
@@ -1345,7 +1345,7 @@ class DeadDrop {
             document.getElementById(
               this._domMessageId(this._messageKey(result.scope || peerId, result.id)),
             )?.remove();
-            this._renderSystem(`⚠️ File transfer failed: ${result.error}`);
+            this._renderSystem(`⚠️ ${t('err.fileTransfer')}: ${result.error}`);
             break;
         }
         break;
@@ -1386,7 +1386,7 @@ class DeadDrop {
       );
     } catch (err) {
       console.error('File decryption failed:', err.message);
-      this._renderSystem('Failed to decrypt file');
+      this._renderSystem(t('err.fileDecrypt'));
     } finally {
       new Uint8Array(result.ciphertext).fill(0);
       if (fileData) new Uint8Array(fileData).fill(0);
@@ -1419,7 +1419,7 @@ class DeadDrop {
     this.callState = 'requesting';
     this._callVideo = video;
     await this._sendBestEffort(this._callConn(), { type: 'call-req', video });
-    this._showCallStatus('📞 Calling…');
+    this._showCallStatus(`📞 ${t('call.calling')}`);
     this._toggleCallOverlay(true);
   }
 
@@ -1433,13 +1433,13 @@ class DeadDrop {
       console.error('getUserMedia failed:', err);
       await this._sendBestEffort(this._callConn(), { type: 'call-reject', reason: 'media-error' });
       this._endCallCleanup();
-      this._renderSystem('Failed to access camera/microphone');
+      this._renderSystem(t('err.media'));
       return;
     }
 
     this.el.localVideo.srcObject = this.localStream;
     this._toggleCallOverlay(true);
-    this._showCallStatus('🔄 Connecting…');
+    this._showCallStatus(`🔄 ${t('call.connecting')}`);
     await this._sendBestEffort(this._callConn(), { type: 'call-accept' });
   }
 
@@ -1507,12 +1507,12 @@ class DeadDrop {
       console.error('getUserMedia failed:', err);
       await this._sendBestEffort(this._callConn(), { type: 'call-end' });
       this._endCallCleanup();
-      this._renderSystem('Failed to access camera/microphone');
+      this._renderSystem(t('err.media'));
       return;
     }
 
     this.el.localVideo.srcObject = this.localStream;
-    this._showCallStatus('🔄 Connecting media…');
+    this._showCallStatus(`🔄 ${t('call.connectingMedia')}`);
 
     try {
       const offer = await this._callConn().startMedia(this.localStream);
@@ -1527,7 +1527,7 @@ class DeadDrop {
 
   _onCallReject() {
     this._endCallCleanup();
-    this._renderSystem('Call declined');
+    this._renderSystem(t('call.declined'));
   }
 
   async _onCallOffer(msg) {
@@ -1561,7 +1561,7 @@ class DeadDrop {
 
   _onCallEnd() {
     this._endCallCleanup();
-    this._renderSystem('Call ended');
+    this._renderSystem(t('call.ended'));
   }
 
   _onCallMute(msg) {

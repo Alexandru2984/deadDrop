@@ -136,6 +136,57 @@ for (const [id, role] of [['qr-verify', 'dialog'], ['incoming-call', 'alertdialo
   ok(got === role && label.length > 2, `#${id} is a ${role} with a name ("${label}")`);
 }
 
+console.log('\ncontrast');
+
+// Computed from what the browser actually paints, not from the palette: text
+// inherits colours through places nobody thinks to check, and a token that
+// passes in isolation can still land on a surface where it does not.
+const lowContrast = await peer.eval(`
+  (() => {
+    const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    const rgb = (s) => (s.match(/\\d+/g) || []).slice(0, 3).map(Number);
+    const alpha = (s) => { const m = s.match(/rgba?\\([^)]*?([\\d.]+)\\s*\\)/); return m ? Number(m[1]) : 1; };
+
+    // The first ancestor that actually paints something behind this text.
+    const backdrop = (el) => {
+      for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+        const bg = getComputedStyle(n).backgroundColor;
+        if (bg && alpha(bg) > 0.5) return rgb(bg);
+      }
+      return rgb(getComputedStyle(document.body).backgroundColor) || [0, 0, 0];
+    };
+
+    const ratio = (a, b) => {
+      const [x, y] = [lum(a), lum(b)];
+      return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+    };
+
+    const bad = [];
+    for (const el of document.querySelectorAll('body *')) {
+      // Only elements holding their own visible text.
+      const own = [...el.childNodes].filter((n) => n.nodeType === 3 && n.textContent.trim()).length;
+      if (!own) continue;
+      const r = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (r.width < 1 || r.height < 1 || style.visibility === 'hidden' || Number(style.opacity) < 0.5) continue;
+
+      const size = parseFloat(style.fontSize);
+      const bold = Number(style.fontWeight) >= 700;
+      // WCAG's own definition of large text: 24px, or 18.66px when bold.
+      const large = size >= 24 || (bold && size >= 18.66);
+      const need = large ? 3 : 4.5;
+      const got = ratio(rgb(style.color), backdrop(el));
+      if (got < need) {
+        bad.push(\`\${el.id || el.className || el.tagName}: \${got.toFixed(2)} (needs \${need})\`);
+      }
+    }
+    return [...new Set(bad)];
+  })()
+`);
+ok(lowContrast.length === 0,
+  `every piece of visible text meets WCAG AA${lowContrast.length ? ': ' + lowContrast.slice(0, 6).join('; ') : ''}`);
+
 console.log('\ndecoration is not announced');
 ok(await peer.eval(`[...document.querySelectorAll('.logo')].every((el) => el.getAttribute('aria-hidden') === 'true')`),
   'the logo is hidden from assistive technology');
