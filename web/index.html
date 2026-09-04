@@ -15,6 +15,8 @@
   <meta property="og:description" content="Browser-based peer-to-peer chat with mutually verified end-to-end encryption and a post-quantum handshake. Messages never touch the server. Invite only, open source." />
   <meta property="og:url" content="https://dead.micutu.com/" />
   <meta property="og:image" content="https://dead.micutu.com/og.png" />
+  <meta property="og:locale" content="en" />
+  <meta property="og:locale:alternate" content="ro" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta property="og:image:alt" content="Dead Drop — verified end-to-end encryption, peer to peer" />
@@ -23,7 +25,7 @@
   <meta name="twitter:description" content="Browser-based peer-to-peer chat with mutually verified end-to-end encryption and a post-quantum handshake. Messages never touch the server. Invite only, open source." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/","applicationCategory":"CommunicationApplication","operatingSystem":"Any modern browser","description":"Browser-based peer-to-peer chat with mutually verified end-to-end encryption and a post-quantum handshake. Messages never touch the server. Invite only, open source.","offers":{"@type":"Offer","price":"0","priceCurrency":"EUR"},"featureList":["Mutually verified end-to-end encryption","Hybrid post-quantum handshake (P-256 + ML-KEM-768)","Peer-to-peer WebRTC transport","No message storage on the server","Invite-only registration","Tor onion access"],"isAccessibleForFree":true}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-gVU7QKcdOiBAgdbh/safTes2888tagT+muDyWw5fTss=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-OzCSGZhxe8cKeg4QV0oJcP709CH2POn4Q8NKN628gjk=" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icon.svg" />
@@ -74,6 +76,35 @@
       </p>
       <a href="/about.html" class="about-link" data-i18n="about.link">🔐 How your privacy is protected</a>
     </form>
+
+    <!-- Prose, not chrome. Someone arriving cold used to get a password box and
+         three words, and a search engine got the same: UI labels with nothing to
+         index. Both problems have the same answer, and it costs a paragraph. -->
+    <section class="intro">
+      <h2 data-i18n="intro.title">What this is</h2>
+      <p data-i18n="intro.lead">Dead Drop is a browser-based chat that carries messages
+        directly between two people. The server introduces you and then has nothing
+        to relay: no message, file, or call ever passes through it, and none is
+        stored anywhere.</p>
+      <ul>
+        <li><strong data-i18n="intro.verifiedTitle">Verified, not assumed.</strong>
+          <span data-i18n="intro.verified">Both sides compare a six-emoji safety code
+          before anything can be sent. Until they match, the app refuses to send —
+          which is what separates encryption you can check from encryption you are
+          promised.</span></li>
+        <li><strong data-i18n="intro.pqTitle">Post-quantum handshake.</strong>
+          <span data-i18n="intro.pq">Keys are agreed with classical P-256 and
+          ML-KEM-768 together, so a recording made today is not opened by a quantum
+          computer later.</span></li>
+        <li><strong data-i18n="intro.nothingTitle">Nothing kept.</strong>
+          <span data-i18n="intro.nothing">No email, no phone number, no message
+          history, no password on the server — logging in proves the password
+          without sending it. Registration needs an invite.</span></li>
+      </ul>
+      <p class="intro-limits" data-i18n="intro.limits">It does not make you anonymous.
+        The service can still see who connects, when, and to whom — and it says so
+        plainly rather than leaving you to find out.</p>
+    </section>
   </div>
 
   <!-- ─── Landing ─── -->

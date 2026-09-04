@@ -58,7 +58,10 @@ select {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* `safe` matters once the page has real content: plain centring pushes the
+     top out of reach when the column is taller than the screen, and a first
+     visitor lands below the title with no way to scroll back up to it. */
+  justify-content: safe center;
   height: 100dvh;
   gap: 12px;
   padding: 20px;
@@ -1225,4 +1228,31 @@ select { cursor: pointer; width: auto; }
   text-align: center;
   font-size: 13px;
   opacity: 0.75;
+}
+
+/* The introduction under the sign-in form. Prose has to earn its place on a
+   phone, so it is narrow, quiet, and below the action rather than above it. */
+.intro {
+  max-width: 34rem;
+  margin: 28px auto 8px;
+  text-align: left;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+.intro h2 {
+  font-size: 15px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg);
+  margin: 0 0 8px;
+}
+.intro p { margin: 0 0 12px; }
+.intro ul { margin: 0 0 12px; padding-left: 1.1em; }
+.intro li { margin: 0 0 8px; }
+.intro strong { color: var(--fg); font-weight: 600; }
+.intro-limits {
+  border-left: 2px solid var(--danger, #c8102e);
+  padding-left: 10px;
+  margin-bottom: 0;
 }

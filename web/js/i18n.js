@@ -10,6 +10,22 @@ const STRINGS = {
   en: {
     'tagline': 'Pseudonymous · Verified E2EE · Ephemeral',
     'boot.checking': 'Checking this browser…',
+    'intro.title': 'What this is',
+    'intro.lead': 'Dead Drop is a browser-based chat that carries messages directly '
+      + 'between two people. The server introduces you and then has nothing to relay: '
+      + 'no message, file, or call ever passes through it, and none is stored anywhere.',
+    'intro.verifiedTitle': 'Verified, not assumed.',
+    'intro.verified': 'Both sides compare a six-emoji safety code before anything can be '
+      + 'sent. Until they match, the app refuses to send — which is what separates '
+      + 'encryption you can check from encryption you are promised.',
+    'intro.pqTitle': 'Post-quantum handshake.',
+    'intro.pq': 'Keys are agreed with classical P-256 and ML-KEM-768 together, so a '
+      + 'recording made today is not opened by a quantum computer later.',
+    'intro.nothingTitle': 'Nothing kept.',
+    'intro.nothing': 'No email, no phone number, no message history, no password on the '
+      + 'server — logging in proves the password without sending it. Registration needs an invite.',
+    'intro.limits': 'It does not make you anonymous. The service can still see who '
+      + 'connects, when, and to whom — and it says so plainly rather than leaving you to find out.',
     'msg.peerRemoved': 'The other side removed a message',
     'boot.unsupported': 'This browser cannot run Dead Drop safely.',
     'boot.explain': 'Everything protecting a conversation runs in your browser, '
@@ -103,6 +119,22 @@ const STRINGS = {
   ro: {
     'tagline': 'Pseudonim · E2EE verificat · Efemer',
     'boot.checking': 'Se verifică browserul…',
+    'intro.title': 'Ce este',
+    'intro.lead': 'Dead Drop e un chat din browser care duce mesajele direct între doi '
+      + 'oameni. Serverul vă face cunoștință și apoi nu mai are ce transporta: niciun '
+      + 'mesaj, fișier sau apel nu trece prin el și nimic nu se stochează nicăieri.',
+    'intro.verifiedTitle': 'Verificat, nu presupus.',
+    'intro.verified': 'Ambele părți compară un cod de siguranță din șase emoji înainte '
+      + 'să se poată trimite ceva. Până când se potrivesc, aplicația refuză să trimită — '
+      + 'asta desparte criptarea pe care o poți verifica de cea care ți-e doar promisă.',
+    'intro.pqTitle': 'Handshake post-cuantic.',
+    'intro.pq': 'Cheile se stabilesc cu P-256 clasic și ML-KEM-768 împreună, deci o '
+      + 'înregistrare făcută azi nu se deschide mai târziu cu un calculator cuantic.',
+    'intro.nothingTitle': 'Nimic păstrat.',
+    'intro.nothing': 'Fără email, fără număr de telefon, fără istoric, fără parolă pe '
+      + 'server — autentificarea dovedește parola fără s-o trimită. Înregistrarea cere o invitație.',
+    'intro.limits': 'Nu te face anonim. Serviciul tot poate vedea cine se conectează, '
+      + 'când și cu cine — și o spune direct, în loc să te lase să afli singur.',
     'msg.peerRemoved': 'Interlocutorul a șters un mesaj',
     'boot.unsupported': 'Acest browser nu poate rula Dead Drop în siguranță.',
     'boot.explain': 'Tot ce protejează o conversație rulează în browserul tău, '
