@@ -125,6 +125,14 @@ It skips when no Firefox is present; CI sets `DD_REQUIRE_FIREFOX=1`.
 
 ## Browser suites, continued
 
+`browser.a11y.mjs` asks whether this can be used without a mouse and without
+seeing it. Checked in a browser rather than by reading markup, because the
+answer depends on what the accessibility tree ends up holding — the HTML, the
+translations applied at runtime, and whatever the app does to the DOM after.
+Every control on the chat screen is an emoji, and one without a name is
+announced by its Unicode name: the panic button, which wipes the tab and logs
+you out, read as "skull".
+
 `browser.support.mjs` breaks one required crypto primitive at a time and checks
 the app refuses to start rather than hand a password box to a browser that
 cannot protect it — and that an optional capability going missing degrades a

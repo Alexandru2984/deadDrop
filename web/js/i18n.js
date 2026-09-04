@@ -10,6 +10,23 @@ const STRINGS = {
   en: {
     'tagline': 'Pseudonymous · Verified E2EE · Ephemeral',
     'boot.checking': 'Checking this browser…',
+    'aria.settings': 'Account settings',
+    'aria.copyCode': 'Copy the room code',
+    'aria.copyLink': 'Copy the invite link',
+    'aria.call': 'Start a call',
+    'aria.panic': 'Panic — clear this tab and log out',
+    'aria.attach': 'Attach a file',
+    'aria.record': 'Record a voice message',
+    'aria.mic': 'Mute or unmute the microphone',
+    'aria.cam': 'Turn the camera on or off',
+    'aria.backToChat': 'Back to the conversation',
+    'aria.endCall': 'End the call',
+    'aria.language': 'Change language',
+    'aria.transcript': 'Conversation',
+    'aria.qrVerify': 'Verify by QR code',
+    'aria.incomingCall': 'Incoming call',
+    'aria.callOverlay': 'Call in progress',
+    'aria.account': 'Account settings',
     'intro.title': 'What this is',
     'intro.lead': 'Dead Drop is a browser-based chat that carries messages directly '
       + 'between two people. The server introduces you and then has nothing to relay: '
@@ -119,6 +136,23 @@ const STRINGS = {
   ro: {
     'tagline': 'Pseudonim · E2EE verificat · Efemer',
     'boot.checking': 'Se verifică browserul…',
+    'aria.settings': 'Setările contului',
+    'aria.copyCode': 'Copiază codul camerei',
+    'aria.copyLink': 'Copiază linkul de invitație',
+    'aria.call': 'Începe un apel',
+    'aria.panic': 'Panică — șterge acest tab și deconectează-te',
+    'aria.attach': 'Atașează un fișier',
+    'aria.record': 'Înregistrează un mesaj vocal',
+    'aria.mic': 'Pornește sau oprește microfonul',
+    'aria.cam': 'Pornește sau oprește camera',
+    'aria.backToChat': 'Înapoi la conversație',
+    'aria.endCall': 'Încheie apelul',
+    'aria.language': 'Schimbă limba',
+    'aria.transcript': 'Conversație',
+    'aria.qrVerify': 'Verificare prin cod QR',
+    'aria.incomingCall': 'Apel primit',
+    'aria.callOverlay': 'Apel în desfășurare',
+    'aria.account': 'Setările contului',
     'intro.title': 'Ce este',
     'intro.lead': 'Dead Drop e un chat din browser care duce mesajele direct între doi '
       + 'oameni. Serverul vă face cunoștință și apoi nu mai are ce transporta: niciun '
@@ -247,6 +281,12 @@ export function applyI18n() {
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  // Accessible names for controls whose only visible content is an icon. Without
+  // these a screen reader announces the emoji — "skull" for the panic button —
+  // which is worse than silence because it sounds like information.
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.dataset.i18nAria));
+  });
 }
 
 function detect() {

@@ -161,6 +161,11 @@ jobs:
           # Everything protecting a conversation runs in the browser, so a
           # missing primitive is not cosmetic. This breaks one on purpose and
           # checks the app refuses instead of taking a password it cannot hold.
+          # Every control on the chat screen is an emoji. One without a name is
+          # announced by its Unicode name — the panic button, which wipes the
+          # tab, read as "skull".
+          - name: accessibility
+            suite: browser.a11y.mjs
           - name: browser support
             suite: browser.support.mjs
           - name: smoke

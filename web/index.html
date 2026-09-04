@@ -40,7 +40,7 @@
        other page starts hidden, so if this text is what stays on screen, the
        client never started — which is exactly what it says. -->
   <div id="boot" class="page boot-page">
-    <div class="logo">💀</div>
+    <div class="logo" aria-hidden="true">💀</div>
     <h1>DEAD DROP</h1>
     <p id="boot-msg" data-i18n="boot.checking">Checking this browser…</p>
     <div id="boot-detail" class="boot-detail hidden"></div>
@@ -53,8 +53,8 @@
 
   <!-- ─── Auth ─── -->
   <div id="auth" class="page auth-page hidden">
-    <button id="lang-btn" class="lang-btn" data-i18n="lang.toggle" title="Language">RO</button>
-    <div class="logo">💀</div>
+    <button id="lang-btn" class="lang-btn" data-i18n="lang.toggle" title="Language" aria-label="…" data-i18n-aria="aria.language">RO</button>
+    <div class="logo" aria-hidden="true">💀</div>
     <h1>DEAD DROP</h1>
     <p class="tagline" data-i18n="tagline">Pseudonymous · Verified E2EE · Ephemeral</p>
 
@@ -111,11 +111,11 @@
   <div id="landing" class="page landing hidden">
     <div class="user-bar">
       <span>👤 <span id="user-display"></span></span>
-      <button id="settings-btn" class="btn btn-sm" title="Account">⚙️</button>
+      <button id="settings-btn" class="btn btn-sm" title="Account" aria-label="…" data-i18n-aria="aria.settings">⚙️</button>
       <button id="logout-btn" class="btn btn-sm" data-i18n="logout">Logout</button>
     </div>
 
-    <div id="account-panel" class="account-panel hidden">
+    <div id="account-panel" class="account-panel hidden" role="dialog" aria-label="…" data-i18n-aria="aria.account">
       <input id="current-pass" type="password" placeholder="Current password"
              data-i18n-ph="account.currentPh" autocomplete="current-password" />
       <input id="duress-pass" type="password" placeholder="Duress password (decoy)"
@@ -135,7 +135,7 @@
       <div id="contacts-list" class="contacts-list"></div>
     </div>
 
-    <div class="logo">💀</div>
+    <div class="logo" aria-hidden="true">💀</div>
     <h1>DEAD DROP</h1>
     <p class="tagline" data-i18n="tagline">Pseudonymous · Verified E2EE · Ephemeral</p>
 
@@ -167,13 +167,13 @@
         <span class="brand">💀 DD</span>
         <div id="room-info" class="room-info hidden">
           <code id="room-code"></code>
-          <button id="copy-code" class="btn-icon" title="Copy code">📋</button>
+          <button id="copy-code" class="btn-icon" title="Copy code" aria-label="…" data-i18n-aria="aria.copyCode">📋</button>
         </div>
       </div>
       <div class="header-right">
-        <button id="call-btn" class="btn-icon call-btn" title="Start call">📞</button>
-        <button id="panic-btn" class="btn-icon panic-btn" title="Panic — clear this tab and log out (or press Esc three times)">💣</button>
-        <div id="status" class="status waiting">⏳ Initializing…</div>
+        <button id="call-btn" class="btn-icon call-btn" title="Start call" aria-label="…" data-i18n-aria="aria.call">📞</button>
+        <button id="panic-btn" class="btn-icon panic-btn" title="Panic — clear this tab and log out (or press Esc three times)" aria-label="…" data-i18n-aria="aria.panic">💣</button>
+        <div id="status" class="status waiting" role="status">⏳ Initializing…</div>
       </div>
     </header>
 
@@ -188,7 +188,7 @@
     </div>
 
     <!-- QR safety-code verification overlay -->
-    <div id="qr-verify" class="qr-verify hidden" role="dialog" aria-modal="true">
+    <div id="qr-verify" class="qr-verify hidden" role="dialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.qrVerify">
       <div class="qr-verify-box">
         <h3 data-i18n="qr.title">📷 QR verification</h3>
         <p class="qr-verify-hint" data-i18n="qr.hint">
@@ -205,7 +205,7 @@
     </div>
 
     <!-- Incoming call notification -->
-    <div id="incoming-call" class="incoming-call hidden">
+    <div id="incoming-call" class="incoming-call hidden" role="alertdialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.incomingCall">
       <span class="incoming-call-icon">📞</span>
       <span data-i18n="call.incoming">Incoming call…</span>
       <div class="incoming-call-btns">
@@ -214,7 +214,7 @@
       </div>
     </div>
 
-    <div id="messages" class="messages"></div>
+    <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions" aria-label="…" data-i18n-aria="aria.transcript"></div>
 
     <!-- Privacy screen: hides messages when the tab loses focus -->
     <div id="privacy-screen" class="privacy-screen hidden">
@@ -245,8 +245,8 @@
         </select>
       </div>
       <div class="input-row">
-        <button id="attach-btn" class="btn-icon" title="Attach file (max 25 MB)">📎</button>
-        <button id="record-btn" class="btn-icon" title="Record a voice message">🎙️</button>
+        <button id="attach-btn" class="btn-icon" title="Attach file (max 25 MB)" aria-label="…" data-i18n-aria="aria.attach">📎</button>
+        <button id="record-btn" class="btn-icon" title="Record a voice message" aria-label="…" data-i18n-aria="aria.record">🎙️</button>
         <input id="msg-input" type="text" placeholder="Type a message…" data-i18n-ph="chat.msg"
                autocomplete="off" spellcheck="false" />
         <button id="send-btn" class="btn primary" data-i18n="chat.send">Send</button>
@@ -256,7 +256,7 @@
   </div>
 
   <!-- Call overlay (full-screen, over everything) -->
-  <div id="call-overlay" class="call-overlay hidden">
+  <div id="call-overlay" class="call-overlay hidden" role="dialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.callOverlay">
     <div id="call-status-bar" class="call-status-bar hidden"></div>
     <div class="call-videos">
       <video id="remote-video" autoplay playsinline></video>
@@ -267,10 +267,10 @@
       </div>
     </div>
     <div class="call-controls">
-      <button id="toggle-mic" class="call-ctrl" title="Mute microphone">🎤</button>
-      <button id="toggle-cam" class="call-ctrl" title="Turn off camera">📹</button>
-      <button id="back-to-chat" class="call-ctrl" title="Show chat">💬</button>
-      <button id="end-call" class="call-ctrl call-ctrl-end" title="End call">📵</button>
+      <button id="toggle-mic" class="call-ctrl" title="Mute microphone" aria-label="…" data-i18n-aria="aria.mic">🎤</button>
+      <button id="toggle-cam" class="call-ctrl" title="Turn off camera" aria-label="…" data-i18n-aria="aria.cam">📹</button>
+      <button id="back-to-chat" class="call-ctrl" title="Show chat" aria-label="…" data-i18n-aria="aria.backToChat">💬</button>
+      <button id="end-call" class="call-ctrl call-ctrl-end" title="End call" aria-label="…" data-i18n-aria="aria.endCall">📵</button>
     </div>
   </div>
 
