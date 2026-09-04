@@ -115,7 +115,7 @@
       <button id="logout-btn" class="btn btn-sm" data-i18n="logout">Logout</button>
     </div>
 
-    <div id="account-panel" class="account-panel hidden" role="dialog" aria-label="…" data-i18n-aria="aria.account">
+    <div id="account-panel" class="account-panel hidden" role="dialog" aria-label="…" data-i18n-aria="aria.account" tabindex="-1">
       <input id="current-pass" type="password" placeholder="Current password"
              data-i18n-ph="account.currentPh" autocomplete="current-password" />
       <input id="duress-pass" type="password" placeholder="Duress password (decoy)"
@@ -188,7 +188,7 @@
     </div>
 
     <!-- QR safety-code verification overlay -->
-    <div id="qr-verify" class="qr-verify hidden" role="dialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.qrVerify">
+    <div id="qr-verify" class="qr-verify hidden" role="dialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.qrVerify" tabindex="-1">
       <div class="qr-verify-box">
         <h3 data-i18n="qr.title">📷 QR verification</h3>
         <p class="qr-verify-hint" data-i18n="qr.hint">
@@ -205,7 +205,7 @@
     </div>
 
     <!-- Incoming call notification -->
-    <div id="incoming-call" class="incoming-call hidden" role="alertdialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.incomingCall">
+    <div id="incoming-call" class="incoming-call hidden" role="alertdialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.incomingCall" tabindex="-1">
       <span class="incoming-call-icon">📞</span>
       <span data-i18n="call.incoming">Incoming call…</span>
       <div class="incoming-call-btns">
@@ -256,7 +256,7 @@
   </div>
 
   <!-- Call overlay (full-screen, over everything) -->
-  <div id="call-overlay" class="call-overlay hidden" role="dialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.callOverlay">
+  <div id="call-overlay" class="call-overlay hidden" role="dialog" aria-modal="true" aria-label="…" data-i18n-aria="aria.callOverlay" tabindex="-1">
     <div id="call-status-bar" class="call-status-bar hidden"></div>
     <div class="call-videos">
       <video id="remote-video" autoplay playsinline></video>
@@ -274,6 +274,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-lR9uz0eZcPBbruk/R3g9tewoWvWEgcDbPpVDLdi1N0U="></script>
+  <script type="module" src="js/app.js" integrity="sha256-34b4wTZgSgClfl/Ts7qLlCWaUeT2JCjtNYHwmxLVKdU="></script>
 </body>
 </html>

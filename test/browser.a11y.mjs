@@ -107,6 +107,46 @@ ok(await peer.eval(`
 
 console.log('\nchat screen');
 ok(await peer.register(`zz_ax_${suffix}`, INVITE, PASS), 'an account is registered');
+console.log('\nkeyboard');
+
+// The account panel belongs to the landing page, so this runs before a room is
+// opened. Getting that wrong is how the first version of this test 'found' a
+// bug that was its own: it clicked a button the chat screen had hidden.
+const press = (key) => peer.eval(`
+  (() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(key)}, bubbles: true }));
+    return true;
+  })()
+`);
+const openPanel = () => peer.eval(`
+  (() => { const b = document.querySelector('#settings-btn'); b.focus(); b.click(); return true; })()
+`);
+
+// Opening a dialog has to take focus with it. Without that, the next Tab walks
+// through the page underneath — operating controls the user cannot see.
+await openPanel();
+ok(await waitFor(() => peer.eval(
+  `!document.querySelector('#account-panel').classList.contains('hidden')`)),
+  'the account panel opens');
+ok(await peer.eval(`document.querySelector('#account-panel').contains(document.activeElement)`),
+  'focus moves into it');
+
+await press('Escape');
+ok(await waitFor(() => peer.eval(
+  `document.querySelector('#account-panel').classList.contains('hidden')`)),
+  'Escape closes it');
+ok(await peer.eval(`document.activeElement === document.querySelector('#settings-btn')`),
+  'and focus returns to what opened it');
+
+// The trap this replaces: Escape was the panic gesture, so a user dismissing a
+// dialog the ordinary way was pressing the button that wipes their session.
+await openPanel();
+await waitFor(() => peer.eval(`!document.querySelector('#account-panel').classList.contains('hidden')`));
+for (let i = 0; i < 3; i++) await press('Escape');
+ok(await waitFor(() => peer.eval(
+  `!document.querySelector('#landing').classList.contains('hidden')`)),
+  'dismissing a dialog with Escape never counts toward the panic wipe');
+
 await peer.eval(`document.querySelector('#create-room').click(); true`);
 ok(await waitFor(() => peer.inChat()), 'a room opens');
 

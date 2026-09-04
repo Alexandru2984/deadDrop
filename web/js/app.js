@@ -218,7 +218,12 @@ class DeadDrop {
     this.el.logoutBtn.addEventListener('click', () => this._logout());
     this.el.settingsBtn.addEventListener('click', () => {
       this.el.accountPanel.classList.toggle('hidden');
-      if (!this.el.accountPanel.classList.contains('hidden')) this._renderContacts();
+      if (this.el.accountPanel.classList.contains('hidden')) {
+        this._restoreFocus();
+      } else {
+        this._renderContacts();
+        this._captureFocus(this.el.accountPanel);
+      }
     });
     this.el.contactsToggle.addEventListener('change', (e) => this._setContactsEnabled(e.target.checked));
     this.el.setDuressBtn.addEventListener('click', () => this._setDuress());
@@ -1078,6 +1083,7 @@ class DeadDrop {
     this.el.qrVerifyStatus.textContent = `${s.label} — ${t('qr.scanning')}`;
     this.el.qrVerifyStatus.classList.remove('match', 'mismatch');
     this.el.qrVerify.classList.remove('hidden');
+    this._captureFocus(this.el.qrVerify);
     await this._startQrScan(token);
   }
 
@@ -1143,6 +1149,7 @@ class DeadDrop {
   _closeQrVerify() {
     this._stopQrScan();
     this.el.qrVerify.classList.add('hidden');
+    this._restoreFocus();
   }
 
   /* ── File transfer ── */
@@ -1607,7 +1614,10 @@ class DeadDrop {
   }
 
   _toggleCallOverlay(show) {
+    const wasOpen = !this.el.callOverlay.classList.contains('hidden');
     this.el.callOverlay.classList.toggle('hidden', !show);
+    if (show && !wasOpen) this._captureFocus(this.el.callOverlay);
+    else if (!show && wasOpen) this._restoreFocus();
   }
 
   _showCallStatus(text) {
@@ -1921,10 +1931,69 @@ class DeadDrop {
 
   _onGlobalKey(e) {
     if (e.key !== 'Escape') return;
+
+    // Escape is the universal way out of a dialog, and here it was also the
+    // panic gesture — so someone pressing it to dismiss an overlay was pressing
+    // the button that wipes their session. Dismissal wins while anything is
+    // open, and does not count toward the wipe.
+    if (this._dismissTopDialog()) {
+      this._escTimes = [];
+      return;
+    }
+
     const now = Date.now();
     this._escTimes = (this._escTimes || []).filter((t) => now - t < 1000);
     this._escTimes.push(now);
     if (this._escTimes.length >= 3) { this._escTimes = []; this._panicWipe(); }
+  }
+
+  /**
+   * Close the innermost open overlay, and report whether there was one.
+   *
+   * An incoming call is deliberately absent: it has accept and reject, and
+   * resolving it with a stray keypress is not a kindness.
+   */
+  _dismissTopDialog() {
+    const open = [
+      [this.el.qrVerify, () => this._closeQrVerify()],
+      [this.el.callOverlay, () => this._toggleCallOverlay(false)],
+      [this.el.accountPanel, () => this.el.accountPanel.classList.add('hidden')],
+    ].find(([el]) => el && !el.classList.contains('hidden'));
+    if (!open) return false;
+    open[1]();
+    this._restoreFocus();
+    return true;
+  }
+
+  /**
+   * Remember where focus was, then move it into the dialog.
+   *
+   * Without this a keyboard or screen-reader user opens an overlay and stays
+   * behind it: the next Tab continues through the page underneath, which is
+   * both disorienting and a way to operate controls you cannot see.
+   */
+  _captureFocus(dialog) {
+    this._focusReturn = document.activeElement;
+    // Visible, not merely present: these panels hold sections that stay hidden
+    // until asked for, and focusing one of those moves focus nowhere at all.
+    const target = [...dialog.querySelectorAll(
+      'button:not([disabled]), a[href], input:not([disabled]), select, textarea')]
+      .find((el) => {
+        // Measured, not offsetParent: that is null for anything positioned
+        // fixed, which the call overlay is, so it would reject every control on
+        // a dialog that is plainly on screen.
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      });
+    // The container itself is the fallback, which is why it carries tabindex="-1":
+    // a dialog with nothing to focus should still put the reader inside it.
+    (target || dialog).focus?.();
+  }
+
+  _restoreFocus() {
+    const target = this._focusReturn;
+    this._focusReturn = null;
+    if (target && document.contains(target)) target.focus?.();
   }
 
   /**
