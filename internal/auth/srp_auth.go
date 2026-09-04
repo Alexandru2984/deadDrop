@@ -470,15 +470,7 @@ func validInviteCode(s string) bool {
 	return inviteRe.MatchString(strings.ToUpper(strings.TrimSpace(s)))
 }
 
-// GenerateInviteForDir creates and stores a new invite code in dataDir. For the
-// `deaddrop invite` CLI subcommand. The running server reads invites fresh on each
-// registration, so a code minted here is immediately usable.
-func GenerateInviteForDir(dataDir string) (string, error) {
-	return newInvites(dataDir).Generate()
-}
-
-// GenerateInvitesForDir mints n invite codes at once and returns them (bulk form
-// of GenerateInviteForDir). n must be >= 1.
+// GenerateInvitesForDir mints n invite codes at once and returns them. n must be >= 1.
 func GenerateInvitesForDir(dataDir string, n int) ([]string, error) {
 	if n < 1 {
 		return nil, errors.New("count must be at least 1")

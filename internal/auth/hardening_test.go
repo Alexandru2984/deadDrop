@@ -458,7 +458,7 @@ func TestPrivatePersistenceRejectsSymlinkDataRoot(t *testing.T) {
 	if _, err := NewHandler(linkDir); err == nil {
 		t.Fatal("symlink data root was accepted")
 	}
-	if _, err := GenerateInviteForDir(linkDir); err == nil {
+	if _, err := GenerateInvitesForDir(linkDir, 1); err == nil {
 		t.Fatal("invite store accepted a symlink data root")
 	}
 }

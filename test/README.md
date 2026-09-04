@@ -30,7 +30,34 @@ from exactly one state per side. A peer whose safety code was confirmed can
 still be running a patched client, and an offer accepted at the wrong moment
 turns on a camera nobody agreed to.
 
+## Cryptographic primitives, on their own
+
+`srp.selftest.mjs` runs the browser's SRP-6a against the vectors the Go server
+computes, so the two implementations cannot drift apart silently — a mismatch
+there is an account nobody can log into.
+
+`fingerprint.selftest.mjs` covers the SDP fingerprint parsing and set comparison
+that bind a call's DTLS certificate to the verified session: an overlap-only
+check would let an attacker smuggle a real certificate in beside its own.
+
+`manifest.selftest.mjs` covers the integrity-manifest parser, and fails when a
+module exists on disk without being a required path — the list guarded six of
+twenty-three modules before anything was watching it.
+
+`seo.selftest.mjs` checks the public surface: that no page loads a byte from
+another origin, that the pages meant to be found are indexable and the live
+verifier is not, and that no message shown to a user skips the translator.
+
+## Live server
+
+`srp.e2e.mjs` drives registration, login, duress, rekeying and account deletion
+against a running server over HTTP — the only suite that exercises the real
+handlers rather than the client alone. No browser needed.
+
 ## Vendored cryptography
+
+`scripts/fetch-mlkem-vectors.mjs` rebuilds `test/vectors/ml-kem-768.json` from
+NIST's published ACVP files, so the fixture need not be taken on trust.
 
 `node scripts/verify-vendor.mjs` proves the vendored post-quantum code is
 upstream noble's, byte for byte. It fetches the pinned npm tarballs, applies the
