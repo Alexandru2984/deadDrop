@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	appassets "deaddrop"
 	"deaddrop/internal/auth"
@@ -237,6 +238,17 @@ func main() {
 		case "doctor":
 			runDoctor()
 			return
+		case "version":
+			// Both halves: the release, and the digest of the client this binary
+			// actually serves. The first names it; the second is what someone
+			// checks it against.
+			fmt.Printf("deaddrop %s\n", appassets.Version)
+			if digest, err := appassets.BundleDigest(); err == nil {
+				fmt.Printf("bundle  sha256:%s\n", digest)
+			} else {
+				fmt.Printf("bundle  unavailable: %v\n", err)
+			}
+			return
 		}
 	}
 
@@ -385,7 +397,7 @@ func main() {
 
 	addr := listenAddress(host, port)
 	fmt.Println("┌─────────────────────────────────────────┐")
-	fmt.Println("│           💀 DEAD DROP v0.2.0           │")
+	fmt.Printf("│%s│\n", centre("💀 DEAD DROP v"+appassets.Version, 41))
 	fmt.Println("├─────────────────────────────────────────┤")
 	fmt.Printf("│  Listening on %-26s│\n", addr)
 	fmt.Println("│  Behind nginx → https://dead.micutu.com │")
@@ -492,6 +504,17 @@ func embeddedWebHandler(files fs.FS) http.Handler {
 		}
 		server.ServeHTTP(w, r)
 	})
+}
+
+// centre pads a banner line to width, accounting for the emoji counting as two
+// columns in a terminal while being one rune.
+func centre(text string, width int) string {
+	visible := utf8.RuneCountInString(text) + strings.Count(text, "💀")
+	if visible >= width {
+		return text
+	}
+	left := (width - visible) / 2
+	return strings.Repeat(" ", left) + text + strings.Repeat(" ", width-visible-left)
 }
 
 // warnIfRegistrationIsOpen reports the disabled invite gate on every start, so a

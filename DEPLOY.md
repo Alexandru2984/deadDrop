@@ -263,7 +263,22 @@ PBKDF2 rounds before the server sees anything — but the dummy key would let a
 holder tell a real account from a fabricated reply. Keep the backup directory as
 restricted as `data/` itself: root-only, mode 0700.
 
-## 8. Preflight and monitoring
+## 8. Releasing
+
+The version lives in `version.go` and nowhere else. To cut a release: bump it,
+update `CHANGELOG.md`, commit, tag, then deploy.
+
+```bash
+./deaddrop version      # the release, and the digest of the client it serves
+git tag -a v0.3.0 -m "0.3.0"
+```
+
+`deaddrop version` prints both halves because a name alone proves nothing. The
+build is reproducible — the same commit yields the same binary on any machine
+with the same Go version — so anybody can rebuild the tag and compare rather
+than trust the number.
+
+## 9. Preflight and monitoring
 
 ```bash
 sudo -E ./deaddrop doctor
@@ -309,7 +324,7 @@ uptime monitor there rather than at `/`. It reports liveness and nothing else:
 room and peer counts would tell anyone who asks how many people are using the
 service and when, so they are not exposed.
 
-## 9. When it breaks
+## 10. When it breaks
 
 **The site is down.** `systemctl status deaddrop` and `journalctl -u deaddrop -n
 50`. The unit restarts on failure, so a process that is *repeatedly* dead is

@@ -72,3 +72,14 @@ func VerifyEmbeddedBundle() error {
 	}
 	return errors.Join(problems...)
 }
+
+// BundleDigest is a single fingerprint for the client this binary serves: the
+// SHA-256 of its own integrity manifest, which in turn names every file and its
+// hash. One value to compare, rather than thirty-eight.
+func BundleDigest() (string, error) {
+	manifest, err := fs.ReadFile(WebFS(), "SHA256SUMS")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(manifest)), nil
+}
