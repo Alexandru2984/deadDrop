@@ -8,12 +8,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 CANDIDATE=""
-BACKUP=""
+DEPLOY_DIR=/opt/deaddrop
+DEPLOYED="$DEPLOY_DIR/deaddrop"
+STAGED=""
+ROLLBACK=""
 HAD_OLD=0
 
 cleanup() {
   [ -z "$CANDIDATE" ] || rm -f "$CANDIDATE"
-  [ -z "$BACKUP" ] || rm -f "$BACKUP"
+  [ -z "$STAGED" ] || sudo rm -f "$STAGED"
+  [ -z "$ROLLBACK" ] || sudo rm -f "$ROLLBACK"
 }
 trap cleanup EXIT
 
@@ -74,13 +78,19 @@ else
   PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" "$CANDIDATE" check-config
 fi
 
-if [ -e deaddrop ]; then
-  BACKUP="$(mktemp "$ROOT/.deaddrop-rollback.XXXXXX")"
-  cp -p deaddrop "$BACKUP"
+sudo install -d -o root -g root -m 0755 "$DEPLOY_DIR"
+STAGED="$(sudo mktemp "$DEPLOY_DIR/.deaddrop-build.XXXXXX")"
+sudo install -o root -g root -m 0555 "$CANDIDATE" "$STAGED"
+rm -f "$CANDIDATE"
+CANDIDATE=""
+
+if sudo test -e "$DEPLOYED"; then
+  ROLLBACK="$(sudo mktemp "$DEPLOY_DIR/.deaddrop-rollback.XXXXXX")"
+  sudo cp -p "$DEPLOYED" "$ROLLBACK"
   HAD_OLD=1
 fi
-mv -f "$CANDIDATE" deaddrop
-CANDIDATE=""
+sudo mv -f "$STAGED" "$DEPLOYED"
+STAGED=""
 
 echo "▸ restarting deaddrop.service…"
 if ! sudo systemctl restart deaddrop; then
@@ -106,24 +116,28 @@ if [ "$healthy" = "1" ]; then
   # same way check-config does. Without them doctor cannot tell which service to
   # look at, and it refuses to guess.
   if [ -r /etc/deaddrop.env ]; then
-    ( set -a; . /etc/deaddrop.env; set +a
-      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" ./deaddrop doctor
-    ) || echo "  ! doctor reported a problem"
+    if ! ( set -a; . /etc/deaddrop.env; set +a
+      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" "$DEPLOYED" doctor
+    ); then
+      healthy=0
+    fi
   else
-    sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a
-      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" ./deaddrop doctor' \
-      || echo "  ! doctor reported a problem"
+    if ! sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a
+      PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" "$1" doctor' \
+      _ "$DEPLOYED"; then
+      healthy=0
+    fi
   fi
 fi
 
 if [ "$healthy" != "1" ]; then
   echo "  ✗ deployment health check failed; restoring previous binary"
   if [ "$HAD_OLD" = "1" ]; then
-    mv -f "$BACKUP" deaddrop
-    BACKUP=""
+    sudo mv -f "$ROLLBACK" "$DEPLOYED"
+    ROLLBACK=""
     sudo systemctl restart deaddrop || true
   else
-    rm -f deaddrop
+    sudo rm -f "$DEPLOYED"
     sudo systemctl stop deaddrop || true
   fi
   sudo journalctl -u deaddrop -n 20 --no-pager

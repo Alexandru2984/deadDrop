@@ -13,7 +13,7 @@
 set -Eeuo pipefail
 
 umask 077
-DATA=/home/micu/deaddrop/data
+DATA=/var/lib/deaddrop/data
 BACKUP=/srv/backups/deaddrop
 STATE=(users.json invites.json srp_dummy.key)
 

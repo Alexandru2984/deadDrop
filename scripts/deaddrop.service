@@ -5,29 +5,32 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=micu
-Group=micu
-WorkingDirectory=/home/micu/deaddrop
-ExecStart=/home/micu/deaddrop/deaddrop
+User=deaddrop
+Group=deaddrop
+WorkingDirectory=/var/lib/deaddrop
+ExecStart=/opt/deaddrop/deaddrop
 Environment=PORT=8100
 Environment=HOST=127.0.0.1
 # Tor's HiddenServicePort must target ONION_PORT, never PORT: the onion
 # listener refuses proxy-header trust so onion clients cannot spoof X-Real-IP.
 Environment=ONION_PORT=8101
 EnvironmentFile=-/etc/deaddrop.env
+StateDirectory=deaddrop
+StateDirectoryMode=0700
 Restart=always
 RestartSec=2
 UMask=0077
 
 # The compiled binary embeds the complete browser bundle. Only account/invite
-# state is writable; source files and loose web assets are read-only in-service.
+# state is writable. The service cannot see the deploy user's home or checkout.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadOnlyPaths=/home/micu/deaddrop
-ReadWritePaths=/home/micu/deaddrop/data
+ProtectHome=tmpfs
+ReadOnlyPaths=/opt/deaddrop
+ReadWritePaths=/var/lib/deaddrop
 PrivateTmp=true
 PrivateDevices=true
+PrivateMounts=true
 ProtectClock=true
 ProtectControlGroups=true
 ProtectHostname=true
@@ -42,6 +45,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RemoveIPC=true
+KeyringMode=private
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
@@ -52,6 +56,8 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 TasksMax=256
 LimitNOFILE=4096
+LimitCORE=0
+MemoryHigh=384M
 MemoryMax=512M
 
 [Install]

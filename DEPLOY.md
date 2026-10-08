@@ -5,12 +5,15 @@ self-hosts STUN/TURN via coturn. Nothing below puts secrets in the repo.
 
 ## 1. App service (systemd)
 
-Install the reviewed unit template. It runs the binary as a non-root user, reads
-secrets from an env file, makes the source tree read-only, and permits writes
-only in `data/`:
+Install the reviewed unit template. It runs under a dedicated identity, reads
+secrets from a root-only env file, cannot see the source checkout or deploy
+user's home, and permits writes only below its private state directory:
 
 ```bash
-sudo install -d -o micu -g micu -m 0700 /home/micu/deaddrop/data
+sudo useradd --system --home-dir /var/lib/deaddrop --shell /usr/sbin/nologin deaddrop
+sudo install -d -o root -g root -m 0755 /opt/deaddrop
+sudo install -d -o deaddrop -g deaddrop -m 0700 /var/lib/deaddrop
+sudo install -d -o deaddrop -g deaddrop -m 0700 /var/lib/deaddrop/data
 sudo install -o root -g root -m 0644 scripts/deaddrop.service /etc/systemd/system/deaddrop.service
 sudo systemctl daemon-reload
 ```
@@ -20,7 +23,7 @@ Key settings:
 ```ini
 Environment=PORT=8100
 Environment=HOST=127.0.0.1            # loopback only — reachable only via nginx
-EnvironmentFile=-/etc/deaddrop.env    # TURN secret etc. (mode 600, root)
+EnvironmentFile=-/etc/deaddrop.env    # TURN secret etc. (root:root, mode 600)
 Restart=always
 ```
 
@@ -30,9 +33,7 @@ live-edited cryptographic JavaScript. Build only after the committed integrity
 manifest passes its read-only check:
 
 ```bash
-node scripts/gen-integrity.mjs --check
-go build -trimpath -ldflags="-s -w" -o deaddrop ./cmd/server/
-sudo systemctl restart deaddrop
+./scripts/deploy.sh
 ```
 
 `scripts/deploy.sh` additionally requires a clean working tree, runs all Go and
@@ -153,12 +154,12 @@ out stops working. Expired codes are pruned the next time the store is written.
 Mint invites from the CLI (codes go to stdout, status to stderr, so they pipe cleanly):
 
 ```bash
-cd /home/micu/deaddrop
-./deaddrop invite                 # mint one   → DD-FXAV-XKH6-JC22
-./deaddrop invite 10              # mint ten at once
-./deaddrop invites list           # show all unused codes (+ count on stderr)
-./deaddrop invites export backup.json   # creates a new 0600 JSON file; refuses overwrite
-./deaddrop invites import backup.json   # merge a backup (dedup; `-` reads stdin)
+cd /var/lib/deaddrop
+sudo -u deaddrop /opt/deaddrop/deaddrop invite                 # mint one
+sudo -u deaddrop /opt/deaddrop/deaddrop invite 10              # mint ten at once
+sudo -u deaddrop /opt/deaddrop/deaddrop invites list
+sudo -u deaddrop /opt/deaddrop/deaddrop invites export backup.json
+sudo -u deaddrop /opt/deaddrop/deaddrop invites import backup.json
 ```
 
 `import` accepts at most 4 MiB, from either the JSON array that `export` writes or plain
@@ -173,7 +174,7 @@ least 32 characters in `/etc/deaddrop.env`, then use:
 curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://dead.micutu.com/api/admin/invite
 ```
 
-Invites live in `data/invites.json` (single-use, consumed on registration). With an
+Invites live in `/var/lib/deaddrop/data/invites.json` (single-use, consumed on registration). With an
 empty list, registration is effectively closed. The running server re-reads the file
 on each registration, so codes minted/imported by the CLI are usable immediately —
 no restart needed.
@@ -223,7 +224,7 @@ Test through Tor: `curl --socks5-hostname 127.0.0.1:9050 http://<onion>.onion/`.
 
 ## 7. Backups
 
-Account state is three files in `data/`: `users.json` (SRP verifiers and salts),
+Account state is three files in `/var/lib/deaddrop/data/`: `users.json` (SRP verifiers and salts),
 `invites.json`, and `srp_dummy.key`. Nothing else on the box is irreplaceable —
 the binary is rebuilt from the repo, and message content never touches the disk.
 
@@ -248,14 +249,14 @@ than on the day it is needed. Fourteen days are kept.
 ```bash
 sudo systemctl stop deaddrop
 cd /srv/backups/deaddrop && sha256sum -c deaddrop-<stamp>.tar.gz.sha256
-sudo tar -xzf deaddrop-<stamp>.tar.gz -C /home/micu/deaddrop/data --no-same-owner
-sudo chown micu:micu /home/micu/deaddrop/data/*
-sudo chmod 600 /home/micu/deaddrop/data/*
+sudo tar -xzf deaddrop-<stamp>.tar.gz -C /var/lib/deaddrop/data --no-same-owner
+sudo chown deaddrop:deaddrop /var/lib/deaddrop/data/*
+sudo chmod 600 /var/lib/deaddrop/data/*
 sudo systemctl start deaddrop
 ```
 
 `--no-same-owner` then an explicit `chown`: the archive records root's ownership
-because the backup runs as root, and the service reads these as `micu`.
+because the backup runs as root, and the service reads these as `deaddrop`.
 
 The archive holds SRP verifiers and the anti-enumeration dummy key. Verifiers are
 not password-equivalent — that is the point of SRP, and the client applies 600k
@@ -269,7 +270,7 @@ The version lives in `version.go` and nowhere else. To cut a release: bump it,
 update `CHANGELOG.md`, commit, tag, then deploy.
 
 ```bash
-./deaddrop version      # the release, and the digest of the client it serves
+/opt/deaddrop/deaddrop version      # release and served-client digest
 git tag -a v0.3.0 -m "0.3.0"
 ```
 
@@ -281,7 +282,9 @@ than trust the number.
 ## 9. Preflight and monitoring
 
 ```bash
-sudo -E ./deaddrop doctor
+cd /home/micu/deaddrop
+sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a
+  PORT="${PORT:-8100}" HOST="${HOST:-127.0.0.1}" /opt/deaddrop/deaddrop doctor'
 ```
 
 `check-config` reads the environment and says whether the settings are legal.
@@ -310,7 +313,7 @@ instead:
 
 ```
 # /etc/cron.d/deaddrop-doctor
-17 * * * * root . /etc/deaddrop.env; ./deaddrop doctor \
+17 * * * * root cd /home/micu/deaddrop && . /etc/deaddrop.env && /opt/deaddrop/deaddrop doctor \
   || logger -t deaddrop-doctor "preflight failed"
 ```
 
