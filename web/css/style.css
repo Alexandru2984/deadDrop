@@ -490,12 +490,19 @@ select { cursor: pointer; width: auto; }
   font-size: 22px;
   letter-spacing: 4px;
   line-height: 1;
-  flex: 1;
-  min-width: 0;
-  word-break: keep-all;
+  /* Six emoji are one code: never break it across lines. When the row is too
+     narrow the buttons wrap below instead. */
+  flex: 1 0 auto;
+  white-space: nowrap;
 }
 
 .verify-btn { white-space: nowrap; }
+
+.verify-actions {
+  display: flex;
+  gap: inherit;
+  margin-left: auto;
+}
 
 .verify-method {
   flex-basis: 100%;
@@ -527,6 +534,15 @@ select { cursor: pointer; width: auto; }
 }
 
 .verify-bar.verified .verify-hint { display: none; }
+
+/* Once everyone is verified the bar has done its job; keep it as a compact
+   reminder of who is who and how they were checked, not a third of the screen. */
+.verify-bar.verified { padding-top: 6px; padding-bottom: 6px; }
+.verify-bar.verified > .verify-label { display: none; }
+.verify-bar.verified .verify-sas { font-size: 16px; letter-spacing: 2px; }
+.verify-bar.verified .verify-route,
+.verify-bar.verified .verify-method { font-size: 11px; }
+
 
 .verify-hint strong { color: var(--danger); }
 
@@ -712,9 +728,14 @@ select { cursor: pointer; width: auto; }
   .brand { font-size: 13px; letter-spacing: 1px; }
   .header-right {
     min-width: 0;
+    flex: 0 1 auto;
     justify-content: flex-end;
   }
-  .status { max-width: 42vw; }
+  /* Only text gives way: the status pill and the room code ellipsize, the
+     icon buttons keep their 44px touch size. Letting the icons shrink made
+     them spill left over the room code. */
+  .header-right > .btn-icon { flex-shrink: 0; }
+  .status { max-width: 42vw; flex-shrink: 1; min-width: 0; }
 }
 
 /* ── Responsive: very small ── */
@@ -1104,6 +1125,10 @@ select { cursor: pointer; width: auto; }
     min-height: 44px;
   }
 
+  /* The id rules above set narrower widths and outrank .btn-icon. */
+  #attach-btn,
+  #record-btn { min-width: 44px; }
+
   /* Verify-bar rows sit close together; keep their controls apart enough to
      hit the intended one. */
   .verify-row { gap: 10px; }
@@ -1281,4 +1306,26 @@ select { cursor: pointer; width: auto; }
   border-left: 2px solid var(--danger, #c8102e);
   padding-left: 10px;
   margin-bottom: 0;
+}
+
+/* Placed last: these override base rules of equal specificity defined above. */
+/* A phone on its side has ~360px of height for header, bar, conversation and
+   composer together. Give the conversation the room. */
+@media (max-height: 500px) {
+  .verify-bar { padding-top: 4px; padding-bottom: 4px; }
+  .verify-bar > .verify-label,
+  .verify-hint { display: none; }
+  .verify-bar.verified .verify-method { display: none; }
+  .verify-sas { font-size: 18px; }
+
+  /* Burn and timer beside the input rather than above it. */
+  .chat-footer {
+    flex-direction: row;
+    align-items: center;
+    padding-top: 6px;
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+  }
+  .chat-footer .controls { flex-shrink: 0; gap: 8px; }
+  .chat-footer .input-row { flex: 1; min-width: 0; }
+  .chat-header { padding-top: 6px; padding-bottom: 6px; }
 }

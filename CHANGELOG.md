@@ -105,6 +105,12 @@ compare rather than take a hash on trust.
   carries every other hash always showed "fetch failed". A host-wide
   `robots.txt` that nginx swapped in made a second mismatch. Both are fixed, and
   `doctor` now compares every file in the manifest, not two.
+- On phones between 420 and 600px wide, the header's call and panic buttons
+  were painted over the room code.
+- Phone layout: the safety code no longer breaks across lines, the bar shrinks
+  once everyone is verified, a phone on its side keeps the composer on one row
+  so the conversation has room, and the attach and record buttons get the
+  44px touch width the rest already had.
 - Voice notes arrived as a generic file instead of a player: the recorder's
   type carries a codec parameter, which the old type check rejected.
 

@@ -1130,7 +1130,9 @@ class DeadDrop {
         : (s.localVerified ? t('verify.waitingPeer') : t('verify.btn'));
       okBtn.disabled = s.localVerified;
       okBtn.addEventListener('click', () => this._markVerified(peerId, false, 'emoji'));
-      row.append(label, sas, qrBtn, okBtn);
+      // The two actions travel together: when the row is too narrow they
+      // wrap below the code as a pair, not one above and one below.
+      row.append(label, sas, h('div', { class: 'verify-actions' }, qrBtn, okBtn));
       if (s.route) {
         const route = document.createElement('span');
         route.className = `verify-route verify-route-${s.route}`;

@@ -492,7 +492,27 @@ async function measureLayout(pageLabel) {
         if (size < 16) zoomy.push(((el.id || el.tagName) + '@' + size + 'px').toString());
       }
 
+      // Controls painted over one another. Nothing spills off the screen when
+      // a header's icons slide left over the room code, so the overflow check
+      // above never saw it; at 430px the call button sat on the code.
+      const overlaps = [];
+      const controls = [...document.querySelectorAll('button, input, select, a[href], code, .status')]
+        .filter((el) => el.getClientRects().length && el.getBoundingClientRect().width > 0);
+      for (let i = 0; i < controls.length; i++) {
+        for (let j = i + 1; j < controls.length; j++) {
+          const a = controls[i], b = controls[j];
+          if (a.contains(b) || b.contains(a)) continue;
+          const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+          if (ra.left < rb.right - 1 && rb.left < ra.right - 1
+              && ra.top < rb.bottom - 1 && rb.top < ra.bottom - 1) {
+            const name = (el) => (el.id ? '#' + el.id : el.className || el.tagName).toString().slice(0, 40);
+            overlaps.push(name(a) + ' × ' + name(b));
+          }
+        }
+      }
+
       return {
+        overlaps: [...new Set(overlaps)].slice(0, 6),
         coarse: window.matchMedia('(pointer: coarse)').matches,
         overflowsPage,
         spillers: [...new Set(spillers)].slice(0, 6),
@@ -531,6 +551,9 @@ function assertLayout(report, label) {
   ok(report.small.length === 0,
     `${label}: every control is at least 44px tall${
       report.small.length ? ' — ' + report.small.join(', ') : ''}`);
+  ok(report.overlaps.length === 0,
+    `${label}: no two controls are painted over each other${
+      report.overlaps.length ? ' — ' + report.overlaps.join(', ') : ''}`);
   ok(report.zoomy.length === 0,
     `${label}: no input smaller than 16px (iOS zoom)${
       report.zoomy.length ? ' — ' + report.zoomy.join(', ') : ''}`);
