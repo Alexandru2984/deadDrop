@@ -793,7 +793,7 @@ class DeadDrop {
     this.roomCode = code;
     this.ws.send(JSON.stringify({ type: 'join', room: code }));
     this._enterChat(code);
-    this._setStatus('connecting', '🔄 Joining room…');
+    this._setStatus('connecting', t('st.joining'));
   }
 
   _enterChat(code) {
@@ -857,7 +857,7 @@ class DeadDrop {
       socket.onclose = () => {
         clearTimeout(timer);
         if (generation !== this._signalGeneration || this.ws !== socket) return;
-        this._setStatus('disconnected', '❌ Server disconnected');
+        this._setStatus('disconnected', t('st.serverLost'));
         if (!settled) {
           settled = true;
           reject(new Error('WebSocket closed before welcome'));
@@ -882,7 +882,7 @@ class DeadDrop {
         if (!this._validPeerID(msg.peerId) || msg.peerId === this.peerId) return;
         if (!this.peers.has(msg.peerId) && this.peers.size >= MAX_REMOTE_PEERS) return;
         if (!this.peers.has(msg.peerId)) {
-          this._setStatus('connecting', '🔗 Peer found — connecting P2P…');
+          this._setStatus('connecting', t('st.peerFound'));
         }
         // Deterministic initiator per pair: the lower peerId creates the offer.
         if (this.peerId < msg.peerId) {
@@ -897,7 +897,7 @@ class DeadDrop {
         break;
 
       case 'error':
-        this._setStatus('disconnected', `❌ ${msg.error || msg.peerId || 'Unknown error'}`);
+        this._setStatus('disconnected', t('st.error').replace('{e}', msg.error || msg.peerId || t('st.unknownError')));
         break;
 
       case 'offer': {
@@ -1000,7 +1000,7 @@ class DeadDrop {
     } else if (enc.length > 0) {
       this._setStatus('connecting', t('st.unverified'));
     } else if (this.peers.size > 0) {
-      this._setStatus('connecting', '🔗 P2P connected — exchanging keys…');
+      this._setStatus('connecting', t('st.exchanging'));
     } else {
       this.encrypted = false;
       this._setStatus('waiting', t('st.waiting'));
@@ -1053,7 +1053,7 @@ class DeadDrop {
     const s = this.peers.get(peerId);
     switch (state) {
       case 'connected':
-        if (!this.encrypted) this._setStatus('connected', '🔗 P2P connected — exchanging keys…');
+        if (!this.encrypted) this._setStatus('connected', t('st.exchanging'));
         break;
       case 'encrypted':
         if (!s) return;
@@ -2024,6 +2024,8 @@ class DeadDrop {
   _setStatus(cls, text) {
     this.el.status.className = `status ${cls}`;
     this.el.status.textContent = text;
+    // A phone header ellipsizes the pill; the full text stays one hover away.
+    this.el.status.title = text;
   }
 
   _pruneRenderedNodes() {
