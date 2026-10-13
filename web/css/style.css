@@ -662,8 +662,12 @@ select { cursor: pointer; width: auto; }
   border: none;
   color: var(--dim);
   font-size: 12px;
+  line-height: 1.4;
   max-width: 90%;
+  padding-top: 2px;
+  padding-bottom: 2px;
   text-align: center;
+  text-wrap: pretty;
 }
 
 /* One rule for this component. The link is long enough to wrap on any phone,
@@ -858,14 +862,7 @@ select { cursor: pointer; width: auto; }
 
 .file-preview-audio { width: 100%; min-width: 200px; }
 
-.file-generic {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
-}
-
-.file-icon-lg { font-size: 32px; }
+.file-icon { font-size: 22px; line-height: 1; }
 
 .file-details {
   display: flex;
@@ -882,18 +879,24 @@ select { cursor: pointer; width: auto; }
   font-weight: 500;
   word-break: break-all;
   min-width: 0;
+  flex: 1 1 8ch;
 }
 
 .file-size { white-space: nowrap; }
 
 .file-download {
   text-decoration: none;
-  font-size: 16px;
-  opacity: 0.7;
-  transition: opacity 0.2s;
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 10px;
+  margin-left: auto;
+  white-space: nowrap;
+  transition: border-color 0.2s;
 }
 
-.file-download:hover { opacity: 1; }
+.file-download:hover { border-color: var(--accent); }
 
 /* Attach button */
 
@@ -1195,6 +1198,11 @@ select { cursor: pointer; width: auto; }
   }
 
   .btn-sm { min-height: 44px; }
+  .file-download {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
 
   /* The label is the real target for a checkbox, so give it the height. */
   .toggle-label,

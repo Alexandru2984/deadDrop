@@ -1961,20 +1961,20 @@ class DeadDrop {
       });
     } else if (meta.fileType.startsWith('audio/')) {
       preview = h('audio', { src: blobUrl, controls: '', class: 'file-preview-audio' });
-    } else {
-      preview = h('div', { class: 'file-generic' },
-        h('span', { class: 'file-icon-lg', text: '📄' }));
     }
 
+    // Anything without a preview is one compact row — icon, name and size —
+    // rather than a tall card around a lone icon.
     appendPresent(el,
       this._senderTag(mine, sender),
-      h('div', { class: 'file-content' }, preview),
+      preview && h('div', { class: 'file-content' }, preview),
       h('div', { class: 'file-details' },
+        !preview && h('span', { class: 'file-icon', 'aria-hidden': 'true', text: '📄' }),
         h('span', { class: 'file-name', text: meta.fileName }),
         h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) }),
         h('a', {
           href: blobUrl, download: meta.fileName, class: 'file-download',
-          title: 'Download', text: '💾',
+          title: t('file.save'), text: `💾 ${t('file.save')}`,
         }),
       ),
       this._metaRow(burn, ttl),
