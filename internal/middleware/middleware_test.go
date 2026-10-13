@@ -412,3 +412,18 @@ func TestClientTagIsStableOpaqueAndPerSource(t *testing.T) {
 		t.Fatal("onion clients did not share a single tag")
 	}
 }
+
+func TestOnionLocationAdvertisesSamePath(t *testing.T) {
+	onion := "http://" + strings.Repeat("a", 56) + ".onion"
+	h := OnionLocation(onion, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/about.html?x=1", nil))
+	if got := rec.Header().Get("Onion-Location"); got != onion+"/about.html?x=1" {
+		t.Fatalf("Onion-Location = %q", got)
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/logout", nil))
+	if got := rec.Header().Get("Onion-Location"); got != "" {
+		t.Fatalf("a state-changing request was advertised: %q", got)
+	}
+}

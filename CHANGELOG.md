@@ -59,6 +59,10 @@ compare rather than take a hash on trust.
   may not be one of the shapes every guessing list tries first. Existing
   passwords still log in.
 
+- **Tor Browser is offered the onion service.** The clearnet site sends
+  `Onion-Location`, derived from the onion origin already in `ALLOWED_ORIGINS`,
+  so a Tor user can load the app without Cloudflare in the path.
+
 ### Fixed
 
 - Voice notes arrived as a generic file instead of a player: the recorder's

@@ -410,10 +410,17 @@ func main() {
 
 	// Wrap entire mux with security headers
 	handler := middleware.SecurityHeaders(mux)
+	// The onion listener serves `handler` directly; only the clearnet one
+	// advertises the onion, since an onion visitor is already there.
+	clearnet := handler
+	if onion := onionOrigin(origins); onion != "" {
+		clearnet = middleware.OnionLocation(onion, handler)
+		log.Printf("[onion] advertising the onion service to Tor Browser")
+	}
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           handler,
+		Handler:           clearnet,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -667,6 +674,19 @@ func allowedOrigins(port int) ([]string, error) {
 		return nil, fmt.Errorf("loopback development origins cannot be mixed with deployed origins")
 	}
 	return origins, nil
+}
+
+// onionOrigin returns the first .onion origin the deployment already allows,
+// or "". Reusing ALLOWED_ORIGINS means the advertised address can never point
+// somewhere the signalling server would refuse.
+func onionOrigin(origins []string) string {
+	for _, origin := range origins {
+		u, err := url.Parse(origin)
+		if err == nil && u.Scheme == "http" && strings.HasSuffix(strings.ToLower(u.Hostname()), ".onion") {
+			return origin
+		}
+	}
+	return ""
 }
 
 func isLoopbackOrigin(origin string) bool {

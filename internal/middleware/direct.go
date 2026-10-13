@@ -29,3 +29,20 @@ func directClientLabel(r *http.Request) (string, bool) {
 	label, ok := r.Context().Value(directClientKey{}).(string)
 	return label, ok
 }
+
+// OnionLocation advertises the same page on an onion service. Tor Browser reads
+// the header and offers to switch, which takes Cloudflare, public DNS and the
+// TLS terminator in front of this origin out of the path for page loads, API
+// calls and signalling. Ordinary browsers ignore it.
+//
+// Only the path and query are carried over. The fragment — where a room
+// invite lives — never reaches the server, so it cannot be copied here; the
+// switch lands on the same page without it.
+func OnionLocation(onionOrigin string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			w.Header().Set("Onion-Location", onionOrigin+r.URL.RequestURI())
+		}
+		next.ServeHTTP(w, r)
+	})
+}

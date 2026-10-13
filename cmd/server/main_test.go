@@ -356,3 +356,13 @@ func TestOpenRegistrationIsAnnouncedAtStartup(t *testing.T) {
 		t.Fatalf("invite-gated startup logged a spurious warning: %q", got)
 	}
 }
+
+func TestOnionOriginPicksTheAllowedOnion(t *testing.T) {
+	onion := "http://" + strings.Repeat("b", 56) + ".onion"
+	if got := onionOrigin([]string{"https://dead.example", onion}); got != onion {
+		t.Fatalf("onionOrigin = %q, want %q", got, onion)
+	}
+	if got := onionOrigin([]string{"https://dead.example"}); got != "" {
+		t.Fatalf("onionOrigin without an onion = %q", got)
+	}
+}

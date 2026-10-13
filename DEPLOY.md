@@ -215,6 +215,11 @@ the public clearnet domain with `http://`. Loopback development origins cannot
 be mixed with deployed origins. For a local-only server, omit
 `ALLOWED_ORIGINS` and set `ALLOW_LOCAL_ORIGINS=1`.
 
+Once the onion origin is listed there, the clearnet listener sends an
+`Onion-Location` header pointing at it, and Tor Browser offers the switch. No
+separate setting: the advertised address is always one the signalling server
+accepts.
+
 Test through Tor: `curl --socks5-hostname 127.0.0.1:9050 http://<onion>.onion/`.
 
 > **Limitation:** Tor carries TCP only, so the WebRTC P2P data channel (UDP) does
