@@ -587,6 +587,29 @@ for (const vp of VIEWPORTS) {
   }
 
   assertLayout(await measureLayout(vp.name), `${vp.name} (${vp.width}px)`);
+
+  // With the account panel open the landing column is taller than any phone.
+  // Centred without `safe`, its top overflowed upward where no scroll reaches,
+  // and the logout and account buttons were simply gone.
+  const reachable = await sessionEval(`(async () => {
+    const landing = document.querySelector('#landing');
+    const chat = document.querySelector('#chat-wrap');
+    const panel = document.querySelector('#account-panel');
+    const prefs = document.querySelector('.prefs');
+    chat.classList.add('hidden');
+    landing.classList.remove('hidden');
+    panel.classList.remove('hidden');
+    prefs.open = true;
+    landing.scrollTop = 0;
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const top = document.querySelector('#logout-btn').getBoundingClientRect().top;
+    panel.classList.add('hidden');
+    prefs.open = false;
+    landing.classList.add('hidden');
+    chat.classList.remove('hidden');
+    return top;
+  })()`);
+  ok(reachable >= 0, `${vp.name}: the account buttons stay on screen with every panel open (top ${Math.round(reachable)}px)`);
 }
 
 // The standalone pages carry the security explanations and the integrity

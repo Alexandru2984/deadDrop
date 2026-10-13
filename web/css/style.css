@@ -141,7 +141,9 @@ select {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* As on the auth page: with the account panel open, or on a short phone,
+     plain centring pushed the user bar above the top edge, out of reach. */
+  justify-content: safe center;
   height: 100dvh;
   gap: 12px;
   padding: 20px;
@@ -254,6 +256,31 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 .idle-toggle { justify-content: space-between; }
 .idle-toggle select { flex-shrink: 0; }
 .idle-toggle:has(select:not([data-off])) { color: var(--accent); }
+
+/* The protections are on by default, so they fold away; the summary still
+   flags the one setting that exposes something when it is switched off. */
+.prefs {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.prefs summary {
+  color: var(--dim);
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.prefs summary::-webkit-details-marker { display: none; }
+.prefs summary::after { content: ' ▾'; }
+.prefs[open] summary::after { content: ' ▴'; }
+.prefs:has(#relay-toggle:not(:checked)) summary { color: var(--warn); }
+.prefs:has(#relay-toggle:not(:checked)) summary::before { content: '⚠️ '; }
+.prefs summary:hover { color: var(--accent); }
+.prefs[open] summary { margin-bottom: 4px; }
 
 /* ── Buttons & inputs ── */
 
@@ -1114,7 +1141,8 @@ select { cursor: pointer; width: auto; }
 
   /* The label is the real target for a checkbox, so give it the height. */
   .toggle-label,
-  .relay-toggle {
+  .relay-toggle,
+  .prefs summary {
     min-height: 44px;
     align-items: center;
   }
