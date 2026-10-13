@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -425,5 +426,93 @@ func TestOnionLocationAdvertisesSamePath(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/logout", nil))
 	if got := rec.Header().Get("Onion-Location"); got != "" {
 		t.Fatalf("a state-changing request was advertised: %q", got)
+	}
+}
+
+func TestParseProxyLineAcceptsOnlyTorCircuits(t *testing.T) {
+	id, err := parseProxyLine("PROXY TCP6 fc00:dead:beef:4dad::1:2 ::1 65535 42\r\n")
+	if err != nil || id != "65538" {
+		t.Fatalf("tor header: id=%q err=%v", id, err)
+	}
+	for _, bad := range []string{
+		"PROXY TCP6 fc00:dead:beef:4dad::1:2 ::1 65535 42\n", // no CR
+		"PROXY TCP4 127.0.0.1 127.0.0.1 1 2\r\n",             // not tor's form
+		"PROXY TCP6 2001:db8::1 ::1 65535 42\r\n",            // outside the circuit range
+		"PROXY TCP6 fc00:dead:beef:4dad::1 ::1 65536 42\r\n", // port out of range
+		"PROXY TCP6 fc00:dead:beef:4dad::1 ::1 0080 42\r\n",  // non-canonical port
+		"PROXY TCP6 fc00:dead:beef:4dad::1  ::1 1 42\r\n",    // double space
+		"PROXY UNKNOWN\r\n",
+		"GET / HTTP/1.1\r\n",
+		"",
+	} {
+		if _, err := parseProxyLine(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestProxyListenerSeparatesCircuits(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags := make(chan string, 4)
+	srv := &http.Server{
+		Handler: DirectClientBoundary("onion", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tags <- ClientTag(r)
+		})),
+		ConnContext:       OnionConnContext,
+		ReadHeaderTimeout: 2 * time.Second,
+	}
+	go func() { _ = srv.Serve(ProxyProtocolListener(ln)) }()
+	defer srv.Close()
+
+	send := func(header string) (string, bool) {
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		_, _ = conn.Write([]byte(header + "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"))
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		buf := make([]byte, 64)
+		n, _ := conn.Read(buf)
+		if !strings.HasPrefix(string(buf[:n]), "HTTP/1.1 200") {
+			return "", false
+		}
+		select {
+		case tag := <-tags:
+			return tag, true
+		case <-time.After(time.Second):
+			return "", false
+		}
+	}
+	a, okA := send("PROXY TCP6 fc00:dead:beef:4dad::1 ::1 65535 42\r\n")
+	b, okB := send("PROXY TCP6 fc00:dead:beef:4dad::2 ::1 65535 42\r\n")
+	again, okAgain := send("PROXY TCP6 fc00:dead:beef:4dad::1 ::1 65535 42\r\n")
+	if !okA || !okB || !okAgain {
+		t.Fatal("a well-formed tor connection was not served")
+	}
+	if a == b {
+		t.Fatal("two circuits shared a rate-limit tag")
+	}
+	if a != again {
+		t.Fatal("one circuit received two different tags")
+	}
+	if _, served := send(""); served {
+		t.Fatal("a connection without a PROXY header was served")
+	}
+}
+
+func TestOnionCeilingCapsUnsafeRequestsOnly(t *testing.T) {
+	h := OnionCeiling(NewRateLimiter(1, 1, time.Hour), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	codes := []int{}
+	for _, method := range []string{http.MethodPost, http.MethodPost, http.MethodGet} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, "/api/srp/challenge", nil))
+		codes = append(codes, rec.Code)
+	}
+	if codes[0] != 200 || codes[1] != 429 || codes[2] != 200 {
+		t.Fatalf("codes = %v, want [200 429 200]", codes)
 	}
 }

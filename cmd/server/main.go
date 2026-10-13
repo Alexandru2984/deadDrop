@@ -434,9 +434,16 @@ func main() {
 	// this listener must never inherit the proxy-header trust the nginx port
 	// gets — DirectClientBoundary pins that down per request.
 	if onionEnabled {
+		onionHandler := middleware.DirectClientBoundary("onion", handler)
+		circuits := os.Getenv("ONION_PROXY_PROTOCOL") == "1"
+		if circuits {
+			// Per-circuit buckets, plus one ceiling across all circuits so a
+			// client building new ones cannot multiply its share without bound.
+			onionHandler = middleware.OnionCeiling(middleware.NewRateLimiter(120, 120, time.Minute), onionHandler)
+		}
 		onionServer := &http.Server{
 			Addr:              listenAddress("127.0.0.1", onionPort),
-			Handler:           middleware.DirectClientBoundary("onion", handler),
+			Handler:           onionHandler,
 			ReadHeaderTimeout: 5 * time.Second,
 			ReadTimeout:       15 * time.Second,
 			WriteTimeout:      30 * time.Second,
@@ -444,9 +451,21 @@ func main() {
 			MaxHeaderBytes:    32 << 10,
 		}
 		servers = append(servers, onionServer)
-		log.Printf("[onion] direct listener on %s (forwarded headers untrusted)", onionServer.Addr)
+		listener, err := net.Listen("tcp", onionServer.Addr)
+		if err != nil {
+			log.Fatalf("Onion listener failed: %v", err)
+		}
+		if circuits {
+			// Tor must be configured with HiddenServiceExportCircuitID haproxy;
+			// a connection without the header is refused, never guessed at.
+			listener = middleware.ProxyProtocolListener(listener)
+			onionServer.ConnContext = middleware.OnionConnContext
+			log.Printf("[onion] direct listener on %s (per-circuit limits via tor PROXY header)", onionServer.Addr)
+		} else {
+			log.Printf("[onion] direct listener on %s (forwarded headers untrusted)", onionServer.Addr)
+		}
 		go func() {
-			if err := onionServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := onionServer.Serve(listener); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("Onion listener failed: %v", err)
 			}
 		}()
@@ -591,7 +610,7 @@ func configuredListenAddress() (port int, pinned bool, host string, err error) {
 }
 
 func validateRuntimeEnvironment(port int) ([]string, turn.Config, error) {
-	for _, name := range []string{"ALLOW_PUBLIC_BIND", "ALLOW_LOCAL_ORIGINS", "ENABLE_ADMIN_API", "OPEN_REGISTRATION"} {
+	for _, name := range []string{"ALLOW_PUBLIC_BIND", "ALLOW_LOCAL_ORIGINS", "ENABLE_ADMIN_API", "OPEN_REGISTRATION", "ONION_PROXY_PROTOCOL"} {
 		if raw := strings.TrimSpace(os.Getenv(name)); raw != "" && raw != "0" && raw != "1" {
 			return nil, turn.Config{}, fmt.Errorf("%s must be 0 or 1", name)
 		}

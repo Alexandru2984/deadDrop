@@ -267,7 +267,28 @@ headers entirely and rate-limits all onion traffic as one shared source.
 ```
 HiddenServiceDir /var/lib/tor/deaddrop/
 HiddenServicePort 80 127.0.0.1:8101
+HiddenServiceExportCircuitID haproxy
+HiddenServicePoWDefensesEnabled 1
 ```
+
+and in `/etc/deaddrop.env`:
+
+```
+ONION_PROXY_PROTOCOL=1
+```
+
+Without circuit IDs every onion visitor arrives from the same loopback socket
+and shares one rate-limit bucket and one login lockout per account: a single
+visitor could spend everyone's attempts, or lock an account for every onion
+user. With them, tor prefixes each connection with a PROXY header naming its
+rendezvous circuit, and limits apply per circuit. A circuit is not an identity —
+clients can build new ones — so unsafe requests across all circuits share a
+ceiling of 120 a minute, and tor's proof-of-work defence makes building
+circuits in bulk expensive once the service is under load.
+
+The two settings change together: with `ONION_PROXY_PROTOCOL=1` a connection
+without the header is refused, and without it the header would be read as a
+malformed request. Restart deaddrop, then reload tor.
 
 The onion address is in `/var/lib/tor/deaddrop/hostname`. Add it to
 `ALLOWED_ORIGINS` in `/etc/deaddrop.env` (this env replaces the built-in list):

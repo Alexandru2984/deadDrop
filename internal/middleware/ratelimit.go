@@ -142,6 +142,9 @@ func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
 // so neither forwarded headers nor RemoteAddr identify the client.
 func ExtractIP(r *http.Request) string {
 	if label, ok := directClientLabel(r); ok {
+		if circuit, ok := circuitFrom(r); ok {
+			return label + "/" + circuit
+		}
 		return label
 	}
 	if isTrustedProxyRequest(r) {
