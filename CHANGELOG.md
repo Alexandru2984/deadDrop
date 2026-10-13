@@ -37,6 +37,8 @@ compare rather than take a hash on trust.
   now kept per /64, the block a provider actually hands out.
 - The unauthenticated endpoints (`/api/health`, `/api/me`, `/api/config`) are
   rate limited; each health probe parks a goroutine on the hub.
+- **Built with Go 1.26.9.** 1.26.7 carries eleven standard-library advisories
+  (net/http, net/textproto, crypto/tls, os) that govulncheck now reports.
 
 ### Fixed
 
