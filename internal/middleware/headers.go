@@ -42,10 +42,16 @@ func SecurityHeaders(next http.Handler, scriptHashes ...string) http.Handler {
 				"display-capture=(), geolocation=(), payment=(), usb=(), serial=(), "+
 				"hid=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), "+
 				"idle-detection=(), local-fonts=(), compute-pressure=(), "+
-				"screen-wake-lock=(), browsing-topics=(), interest-cohort=(), "+
+				"screen-wake-lock=(), "+
 				"otp-credentials=(), "+
 				"publickey-credentials-get=(), storage-access=()")
-		// attribution-reporting is deliberately absent: Chrome dropped the API,
+		// attribution-reporting, browsing-topics and interest-cohort are
+		// deliberately absent: Chrome removed those APIs (FLoC first, then
+		// Topics), and naming a feature the browser no longer knows makes it
+		// reject the token and log an error on every page load. There is
+		// nothing left for them to switch off.
+		//
+		// attribution-reporting likewise: Chrome dropped the API,
 		// and naming a feature the browser no longer knows makes it reject the
 		// token and log an error on every page load. Noise in the console is not
 		// free — it is where a real violation goes unnoticed.

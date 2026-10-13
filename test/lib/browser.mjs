@@ -579,7 +579,13 @@ export class Peer {
         if (request.url.endsWith('/js/app.js')) {
           text = text.replace('new DeadDrop();', 'window.__ddApp = new DeadDrop();');
         } else {
-          text = text.replace(/\s+integrity="[^"]*"/g, '');
+          // The patched client is the attacker's own browser, so it discards
+          // its own integrity checks: the SRI attributes, and the import map
+          // that pins every module's hash. Removed rather than edited — an
+          // edited map no longer matches the CSP hash and is refused.
+          text = text
+            .replace(/\s+integrity="[^"]*"/g, '')
+            .replace(/<script type="importmap">[^<]*<\/script>/, '');
         }
         await this.cdp.send('Fetch.fulfillRequest', {
           requestId,

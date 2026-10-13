@@ -406,16 +406,24 @@ func turnConfigProblem(conf string) string {
 }
 
 // journaldRetention returns the MaxRetentionSec value from a drop-in, or "".
+//
+// Reads go through an os.Root, like every other file this binary opens by a
+// name it did not write itself: an entry cannot lead the read outside dir.
 func journaldRetention(dir string) (string, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return "", err
 	}
 	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".conf") {
+		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".conf") {
 			continue
 		}
-		raw, err := os.ReadFile(dir + "/" + entry.Name())
+		raw, err := root.ReadFile(entry.Name())
 		if err != nil {
 			continue
 		}
