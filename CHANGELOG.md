@@ -96,6 +96,10 @@ compare rather than take a hash on trust.
 
 ### Fixed
 
+- **Every message in a two-person room showed the word "null"** above its
+  text, since the Trusted Types refactor on 30 August. The DOM's `append()`
+  prints a null child instead of skipping it; the tests only ever read the text
+  node.
 - **`/verify.html` told every visitor not to trust the page.** It refuses
   redirects, and the server answers `/index.html` with one, so the file that
   carries every other hash always showed "fetch failed". A host-wide

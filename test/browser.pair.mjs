@@ -92,6 +92,16 @@ await alice.eval(`
 ok(await waitFor(async () => (await bob.transcript()).includes(secret)),
   'a message sent by A is decrypted by B');
 
+// The whole bubble, not just its text node. A null child handed to the DOM's
+// append() is printed as "null"; for six weeks every message in a two-person
+// room carried that word above it, and checking .msg-text alone never saw it.
+const bubbles = async (p) => p.eval(`[...document.querySelectorAll('.msg:not(.system)')]
+  .flatMap((n) => [...n.childNodes])
+  .filter((c) => c.nodeType === Node.TEXT_NODE && /^(null|undefined|false)$/.test(c.data.trim()))
+  .map((c) => c.data)`);
+const stray = [...await bubbles(alice), ...await bubbles(bob)];
+ok(stray.length === 0, `no bubble renders a stray null or undefined (${stray[0] || 'none'})`);
+
 // ── Burn after reading ──
 // The one message class that is meant to vanish from both sides. It works by the
 // reader telling the sender it was read, so if that stops working the message

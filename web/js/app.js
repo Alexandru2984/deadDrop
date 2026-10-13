@@ -45,6 +45,19 @@ const CURRENT_KDF_ITERATIONS = Number(DEFAULT_KDF.split(':')[1]);
  * which is what lets the CSP refuse the innerHTML sink outright — see
  * require-trusted-types-for in internal/middleware/headers.go.
  */
+/**
+ * Element.append with h()'s rule for children: null, undefined and false mean
+ * "nothing here". The DOM's own append stringifies them, which is how every
+ * message in a two-person room came to read "null" above its text.
+ */
+function appendPresent(parent, ...children) {
+  for (const child of children) {
+    if (child === null || child === undefined || child === false) continue;
+    parent.append(child);
+  }
+  return parent;
+}
+
 function h(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
@@ -1865,7 +1878,7 @@ class DeadDrop {
     el.className = `msg ${mine ? 'mine' : 'theirs'}`;
     if (burn) el.classList.add('burn');
 
-    el.append(
+    appendPresent(el,
       this._senderTag(mine, sender),
       h('div', { class: 'msg-text', text: String(text) }),
       this._metaRow(burn, ttl),
@@ -1910,7 +1923,7 @@ class DeadDrop {
         h('span', { class: 'file-icon-lg', text: '📄' }));
     }
 
-    el.append(
+    appendPresent(el,
       this._senderTag(mine, sender),
       h('div', { class: 'file-content' }, preview),
       h('div', { class: 'file-details' },
