@@ -22,6 +22,7 @@ import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
+import { isScrubbable, scrubImage } from './scrub.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -81,7 +82,9 @@ class DeadDrop {
     this.encrypted = false; // true when ≥1 pairwise session is encrypted and SAS-verified
     this.iceConfig = { iceServers: [] };
     this._iceExpiresAt = 0;
-    this._relayOnly = false;
+    // On by default: a direct connection hands the other person your IP
+    // address. Falls back to direct only when no relay is configured, and says so.
+    this._relayOnly = true;
     this._coverEnabled = false; // decoy traffic to mask when real chatting happens
     this._coverTimer = null;
     this._signalWindowAt = Date.now();
@@ -164,6 +167,7 @@ class DeadDrop {
       roomInput:   $('#room-code-input'),
       relayToggle: $('#relay-toggle'),
       coverToggle: $('#cover-toggle'),
+      scrubToggle: $('#scrub-toggle'),
       // Chat
       chatWrap:    $('#chat-wrap'),
       roomInfo:    $('#room-info'),
@@ -805,7 +809,7 @@ class DeadDrop {
       cryptoLayer,
       (m) => this._onPeerMessage(peerId, m),
       (state, sas) => this._onConnState(peerId, state, sas),
-      { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly },
+      { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly && this._hasRelay() },
       this.identity,
     );
     conn.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
@@ -886,6 +890,16 @@ class DeadDrop {
       control.disabled = !this.encrypted;
     }
     this._renderVerifyBar();
+  }
+
+  _hasRelay() {
+    const relay = this.iceConfig.iceServers.some((server) => [server.urls].flat()
+      .some((url) => /^turns?:/.test(String(url))));
+    if (!relay && this._relayOnly && !this._warnedNoRelay) {
+      this._warnedNoRelay = true;
+      this._renderSystem(t('warn.noRelay'));
+    }
+    return relay;
   }
 
   /** Fetch self-hosted STUN/TURN ICE servers (with an ephemeral credential). */
@@ -1157,6 +1171,15 @@ class DeadDrop {
 
   async sendFile(file) {
     if (!this.encrypted) return;
+    if (this.el.scrubToggle.checked && isScrubbable(file)) {
+      try {
+        file = await scrubImage(file);
+      } catch (err) {
+        console.warn('metadata removal failed:', err?.message);
+        this._renderSystem(t('err.scrubFailed'));
+        return;
+      }
+    }
     if (file.size > MAX_FILE_SIZE) {
       this._renderSystem(`${t('err.fileTooLarge')} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
       return;

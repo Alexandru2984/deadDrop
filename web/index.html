@@ -148,12 +148,16 @@
         <button id="join-room" class="btn" data-i18n="landing.join">Join</button>
       </div>
       <label class="relay-toggle" title="Use TURN to hide your address from the peer; the VPS/TURN operator still sees it">
-        <input id="relay-toggle" type="checkbox" />
+        <input id="relay-toggle" type="checkbox" checked />
         <span><span data-i18n="relay.label">🛡️ Hide IP from peer</span> <small data-i18n="relay.sub">— TURN relay; VPS still sees it</small></span>
       </label>
       <label class="relay-toggle" title="Add occasional padded decoys; timing and traffic volume remain visible">
         <input id="cover-toggle" type="checkbox" />
         <span><span data-i18n="cover.label">🕶️ Cover traffic</span> <small data-i18n="cover.sub">— occasional decoys; does not hide traffic volume</small></span>
+      </label>
+      <label class="relay-toggle" title="Re-encode photos so GPS position, time and camera details never leave this device">
+        <input id="scrub-toggle" type="checkbox" checked />
+        <span><span data-i18n="scrub.label">🧽 Strip photo metadata</span> <small data-i18n="scrub.sub">— GPS, time and camera removed before sending</small></span>
       </label>
       <a href="/about.html" class="about-link" data-i18n="about.link.short">🔐 Security &amp; privacy</a>
       <a href="/verify.html" class="about-link" data-i18n="verify.code.link">🔎 Verify the code you're running</a>
@@ -274,6 +278,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-XTqEF5UFFUDnNZ2euKUNeNF+OEwRH6mhMtAtl+u4xbo="></script>
+  <script type="module" src="js/app.js" integrity="sha256-JWx2mCTLdpAvxnwzMRXEtUyxbxqvtZeuetr1HdU+LNM="></script>
 </body>
 </html>

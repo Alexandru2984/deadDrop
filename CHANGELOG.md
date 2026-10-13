@@ -40,6 +40,16 @@ compare rather than take a hash on trust.
 - **Built with Go 1.26.9.** 1.26.7 carries eleven standard-library advisories
   (net/http, net/textproto, crypto/tls, os) that govulncheck now reports.
 
+### Added
+
+- **Photos lose their metadata before they leave.** JPEG, PNG and WebP are
+  re-encoded on the device, so GPS position, capture time and camera details
+  never reach the other person. On by default; if a photo cannot be cleaned it
+  is not sent rather than sent as it was.
+- **Hiding your IP from the other person is now the default** whenever a relay
+  is configured. Without one the app falls back to a direct connection and says
+  so in the conversation.
+
 ### Fixed
 
 - Voice notes arrived as a generic file instead of a player: the recorder's

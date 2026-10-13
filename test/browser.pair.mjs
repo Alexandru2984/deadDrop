@@ -135,6 +135,32 @@ ok(pngBytes > 0, 'peer A sends a generated PNG');
 ok(await waitFor(async () => (await bob.decodedImageSize()) === '64x48', { timeout: 40000 }),
   'the received image decodes at its original dimensions');
 
+// A phone photo carries its GPS position in an EXIF block. Build a JPEG with
+// one, run it through the same scrubber the composer uses, and look for it.
+const scrubbed = await alice.eval(`
+  (async () => {
+    const { scrubImage } = await import('/js/scrub.js');
+    const canvas = document.createElement('canvas');
+    canvas.width = 40; canvas.height = 30;
+    canvas.getContext('2d').fillRect(0, 0, 20, 15);
+    const plain = new Uint8Array(await (await new Promise((r) => canvas.toBlob(r, 'image/jpeg'))).arrayBuffer());
+    const marker = new TextEncoder().encode('Exif\\0\\0GPS-DEADDROP-MARKER');
+    const app1 = new Uint8Array(4 + marker.length);
+    app1.set([0xff, 0xe1, (marker.length + 2) >> 8, (marker.length + 2) & 255]);
+    app1.set(marker, 4);
+    const tagged = new Uint8Array(plain.length + app1.length);
+    tagged.set(plain.subarray(0, 2)); tagged.set(app1, 2); tagged.set(plain.subarray(2), 2 + app1.length);
+    const text = (bytes) => new TextDecoder('latin1').decode(bytes);
+    const out = await scrubImage(new File([tagged], 'cat.jpg', { type: 'image/jpeg' }));
+    const bytes = new Uint8Array(await out.arrayBuffer());
+    return { before: text(tagged).includes('GPS-DEADDROP-MARKER'),
+             after: text(bytes).includes('GPS-DEADDROP-MARKER') || text(bytes).includes('Exif'),
+             type: out.type, name: out.name };
+  })()
+`);
+ok(scrubbed?.before && scrubbed.after === false && scrubbed.type === 'image/jpeg' && scrubbed.name === 'cat.jpg',
+  'a photo leaves without its EXIF block, still a JPEG under its own name');
+
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.
 const nastyName = '<img src=x onerror=alert(1)>.txt';
