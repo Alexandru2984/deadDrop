@@ -18,6 +18,7 @@ const DEFAULTS = Object.freeze({
   scrubMetadata: true,
   typingIndicator: true,
   idleLockMinutes: 0,
+  messageTtl: 30,
 });
 
 const VALID = {
@@ -26,6 +27,7 @@ const VALID = {
   scrubMetadata: (v) => typeof v === 'boolean',
   typingIndicator: (v) => typeof v === 'boolean',
   idleLockMinutes: (v) => [0, 5, 15, 30, 60].includes(v),
+  messageTtl: (v) => [0, 10, 30, 60, 300].includes(v),
 };
 
 function readAll() {

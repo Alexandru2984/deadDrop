@@ -83,6 +83,8 @@ compare rather than take a hash on trust.
   thirty seconds before. Off by default.
 - **Typing notices can be switched off**, so the other person never learns
   when you are composing.
+- The disappearing-message timer keeps the last lifetime you chose instead of
+  resetting to thirty seconds in every room.
 - **Settings are remembered** between visits — only switches, never people or
   rooms, and a damaged entry reads as the protective default rather than off.
   The panic wipe clears them.

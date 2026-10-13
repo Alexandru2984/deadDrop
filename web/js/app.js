@@ -258,6 +258,10 @@ class DeadDrop {
     this.el.scrubToggle.checked = getPref('scrubMetadata');
     this.el.typingToggle.checked = getPref('typingIndicator');
     this.el.idleSelect.value = String(getPref('idleLockMinutes'));
+    this.el.ttlSelect.value = String(getPref('messageTtl'));
+    this.el.ttlSelect.addEventListener('change', (e) => {
+      setPref('messageTtl', Number.parseInt(e.target.value, 10));
+    });
     this.el.idleSelect.toggleAttribute('data-off', this.el.idleSelect.value === '0');
     this.el.scrubToggle.addEventListener('change', (e) => setPref('scrubMetadata', e.target.checked));
     this.el.typingToggle.addEventListener('change', (e) => setPref('typingIndicator', e.target.checked));

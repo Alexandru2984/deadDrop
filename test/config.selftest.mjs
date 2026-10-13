@@ -71,6 +71,12 @@ ok(getPref('scrubMetadata') === true && getPref('relayOnly') === true,
 ok(getPref('idleLockMinutes') === 15, 'a valid stored value survives beside malformed ones');
 store.set('dd_prefs', '{not json');
 ok(getPref('scrubMetadata') === true, 'a corrupt store reads as defaults');
+store.clear();
+ok(getPref('messageTtl') === 30, 'disappearing messages default to thirty seconds');
+setPref('messageTtl', 300);
+ok(getPref('messageTtl') === 300, 'a chosen message lifetime is remembered');
+setPref('messageTtl', 86400);
+ok(getPref('messageTtl') === 300, 'a lifetime the composer does not offer is refused');
 let threw = false;
 try { getPref('nonsense'); } catch { threw = true; }
 ok(threw, 'an unknown preference name is a programming error, not a silent default');
