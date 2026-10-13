@@ -9,7 +9,11 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.4.0 — 2026-10-13
+
+**Update now.** The emoji safety code could be steered by whoever relays the
+handshake, which is the attack the code exists to stop. Protocol v6; a tab
+still running 0.3.0 cannot connect to one running 0.4.0 and must reload.
 
 ### Security
 
@@ -93,6 +97,18 @@ compare rather than take a hash on trust.
 - **Tor Browser is offered the onion service.** The clearnet site sends
   `Onion-Location`, derived from the onion origin already in `ALLOWED_ORIGINS`,
   so a Tor user can load the app without Cloudflare in the path.
+
+### Operations
+
+These live on the server, not in the binary; DEPLOY.md describes each.
+
+- The TURN relay keeps no logs, refuses every special-purpose address range,
+  and has 840 relay ports instead of 41. journald keeps seven days.
+- Onion visitors are limited per Tor circuit, with tor's proof-of-work defence
+  on.
+- `deaddrop doctor` runs hourly, compares every delivered file rather than
+  two, and fails if the relay starts logging again.
+- nginx no longer swaps in a host-wide `robots.txt` or names its version.
 
 ### Fixed
 
