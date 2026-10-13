@@ -76,3 +76,40 @@ func TestPublicOriginSkipsLoopbackAndOnion(t *testing.T) {
 	}
 	_ = os.Unsetenv("ALLOWED_ORIGINS")
 }
+
+func TestTurnConfigProblem(t *testing.T) {
+	good := strings.Join([]string{
+		"no-stdout-log", "log-file=/dev/null", "simple-log",
+		"denied-peer-ip=10.0.0.0-10.255.255.255", "denied-peer-ip=127.0.0.0-127.255.255.255",
+	}, "\n")
+	if p := turnConfigProblem(good); p != "" {
+		t.Fatalf("good config reported: %s", p)
+	}
+	for name, conf := range map[string]string{
+		"syslog":      good + "\nsyslog",
+		"stdout":      strings.Replace(good, "no-stdout-log", "", 1),
+		"deny all v4": good + "\ndenied-peer-ip=::",
+		"mapped":      good + "\ndenied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255",
+		"private":     strings.Replace(good, "denied-peer-ip=10.0.0.0-10.255.255.255", "", 1),
+	} {
+		if turnConfigProblem(conf) == "" {
+			t.Errorf("%s: defect not reported", name)
+		}
+	}
+	if turnConfigProblem(good+"\n# syslog") != "" {
+		t.Error("a commented-out directive was treated as set")
+	}
+}
+
+func TestJournaldRetention(t *testing.T) {
+	dir := t.TempDir()
+	if v, _ := journaldRetention(dir); v != "" {
+		t.Fatalf("empty dir gave %q", v)
+	}
+	if err := os.WriteFile(dir+"/retention.conf", []byte("[Journal]\nMaxRetentionSec=7day\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := journaldRetention(dir); v != "7day" {
+		t.Fatalf("retention = %q", v)
+	}
+}

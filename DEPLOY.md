@@ -224,6 +224,10 @@ sudo -u deaddrop /opt/deaddrop/deaddrop invites export backup.json
 sudo -u deaddrop /opt/deaddrop/deaddrop invites import backup.json
 ```
 
+Production does not set `ENABLE_ADMIN_API`, so there is no `ADMIN_TOKEN` in
+its env file either: a credential for a disabled endpoint is only something to
+leak.
+
 `import` accepts at most 4 MiB, from either the JSON array that `export` writes or plain
 newline-separated codes; malformed tokens and duplicates are skipped and reported.
 This lets you pre-generate a batch offline and restore or migrate the invite pool.
@@ -367,6 +371,7 @@ machine right now:
 | deployed bundle | a running service older than the source tree beside it |
 | delivered bundle | a CDN or proxy rewriting the page browsers actually receive |
 | backups | a daily timer that has been failing every day |
+| relay privacy | coturn logging client addresses again, a deny rule that blocks every relay, journald without retention |
 
 The delivered-bundle check is the one that is not about this machine. It fetches
 the page and the entry module from the loopback origin and from the public URL

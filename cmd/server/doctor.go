@@ -27,6 +27,11 @@ import (
 
 const backupDir = "/srv/backups/deaddrop"
 
+const (
+	turnConfigPath    = "/etc/turnserver.conf"
+	journaldDropInDir = "/etc/systemd/journald.conf.d"
+)
+
 type finding struct {
 	name   string
 	detail string
@@ -44,6 +49,7 @@ func runDoctor() {
 		checkDeployedBundle,
 		checkDeliveredBundle,
 		checkBackupFreshness,
+		checkRelayPrivacy,
 	}
 
 	var failed, warned int
@@ -323,4 +329,79 @@ func joinHostPort(host string, port int) string {
 		host = "127.0.0.1"
 	}
 	return fmt.Sprintf("%s:%d", host, port)
+}
+
+// checkRelayPrivacy guards the relay settings that keep the box from becoming a
+// list of who used it, and the one that would silently break every relay-only
+// session. None of this is visible from the app: coturn logging every client
+// address looks exactly like coturn working.
+func checkRelayPrivacy() finding {
+	const name = "relay privacy"
+	raw, err := os.ReadFile(turnConfigPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return finding{name: name, detail: "no coturn on this host"}
+	}
+	if err != nil {
+		return finding{name: name, err: fmt.Errorf("cannot read %s (run as root): %w", turnConfigPath, err), warn: true}
+	}
+	if problem := turnConfigProblem(string(raw)); problem != "" {
+		return finding{name: name, err: errors.New(problem)}
+	}
+	retention, err := journaldRetention(journaldDropInDir)
+	if err != nil || retention == "" {
+		return finding{name: name, err: errors.New("journald keeps logs indefinitely; set MaxRetentionSec in " + journaldDropInDir)}
+	}
+	return finding{name: name, detail: "coturn silent, journald keeps " + retention}
+}
+
+// turnConfigProblem names the first privacy or availability defect in a
+// coturn configuration, or returns "".
+func turnConfigProblem(conf string) string {
+	set := map[string]bool{}
+	for _, line := range strings.Split(conf, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		set[line] = true
+	}
+	switch {
+	case set["syslog"]:
+		return "coturn logs to syslog — every client address ends up on disk"
+	case !set["no-stdout-log"] || !set["log-file=/dev/null"] || !set["simple-log"]:
+		return "coturn logging is not disabled (need no-stdout-log, log-file=/dev/null, simple-log)"
+	case set["denied-peer-ip=::"]:
+		return "denied-peer-ip=:: blocks every IPv4 peer on coturn 4.6 — relays fail with 403"
+	case !set["denied-peer-ip=10.0.0.0-10.255.255.255"] || !set["denied-peer-ip=127.0.0.0-127.255.255.255"]:
+		return "coturn may relay into private or loopback ranges"
+	}
+	for line := range set {
+		if strings.HasPrefix(line, "denied-peer-ip=::ffff:") {
+			return "an IPv4-mapped denied-peer-ip range blocks every IPv4 peer — relays fail with 403"
+		}
+	}
+	return ""
+}
+
+// journaldRetention returns the MaxRetentionSec value from a drop-in, or "".
+func journaldRetention(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".conf") {
+			continue
+		}
+		raw, err := os.ReadFile(dir + "/" + entry.Name())
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if value, ok := strings.CutPrefix(strings.TrimSpace(line), "MaxRetentionSec="); ok && value != "" && value != "0" {
+				return value, nil
+			}
+		}
+	}
+	return "", nil
 }
