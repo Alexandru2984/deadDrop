@@ -83,6 +83,7 @@ class DeadDrop {
     this.username = null;
     this.peerId = null;
     this.roomCode = null;
+    this._verifyExpanded = false;
     this.ws = null;
     // Mesh: one pairwise session per remote peer — its own WebRTC connection AND
     // its own CryptoLayer (hybrid handshake, SAS, epochs). There is no group key;
@@ -1072,8 +1073,14 @@ class DeadDrop {
         s.sas = sas;
         s.verified = false;
         this._watchRoute(peerId);
+        for (const card of this.el.messages.querySelectorAll('.share-link')) card.classList.add('compact');
         this._renderSystem(`⚠️ ${s.label} ${t('sys.awaitVerify')}`);
         this._refreshRoomState();
+        break;
+      case 'peer-confirmed':
+        if (!s) return;
+        s.peerConfirmed = true;
+        this._renderVerifyBar();
         break;
       case 'identity-proved':
         this._onIdentityProved(peerId, sas); // `sas` carries the fingerprint here
@@ -1118,6 +1125,7 @@ class DeadDrop {
     }
     this.el.verifyBar.classList.remove('hidden');
     this.el.verifyBar.classList.toggle('verified', enc.every((s) => s.verified));
+    this.el.verifyBar.classList.toggle('expanded', this._verifyExpanded);
     for (const [peerId, s] of this.peers) {
       if (!s.encrypted) continue;
       const row = document.createElement('div');
@@ -1144,20 +1152,42 @@ class DeadDrop {
       // The two actions travel together: when the row is too narrow they
       // wrap below the code as a pair, not one above and one below.
       row.append(label, sas, h('div', { class: 'verify-actions' }, qrBtn, okBtn));
+      // Route and method each lead with an icon. Once everyone is verified
+      // the bar folds to one line and only the icons show; the sentence stays
+      // for screen readers and as a tooltip, and one tap unfolds it.
+      const notice = (cls, text) => {
+        const [, icon = '', rest = text] = text.match(/^(\S+)\s+(.*)$/su) || [];
+        return h('span', { class: cls, title: text },
+          h('span', { class: 'notice-icon', 'aria-hidden': 'true', text: icon }),
+          h('span', { class: 'notice-text', text: ' ' + rest }));
+      };
       if (s.route) {
-        const route = document.createElement('span');
-        route.className = `verify-route verify-route-${s.route}`;
-        route.textContent = t(s.route === 'relay' ? 'route.relay' : 'route.direct');
-        row.append(route);
+        row.append(notice(`verify-route verify-route-${s.route}`,
+          t(s.route === 'relay' ? 'route.relay' : 'route.direct')));
       }
       if (s.verifiedBy) {
         // How this side checked, kept in view. Six emoji are 36 bits: enough
         // against a guess, thin against someone who can try many sessions. The
         // QR compares all 128, and saying so is how people learn to use it.
-        const method = document.createElement('span');
-        method.className = `verify-method verify-method-${s.verifiedBy}`;
-        method.textContent = t({ qr: 'verify.byQr', emoji: 'verify.byEmoji', contact: 'verify.byContact' }[s.verifiedBy]);
-        row.append(method);
+        row.append(notice(`verify-method verify-method-${s.verifiedBy}`,
+          t({ qr: 'verify.byQr', emoji: 'verify.byEmoji', contact: 'verify.byContact' }[s.verifiedBy])));
+      } else if (s.peerConfirmed && !s.localVerified) {
+        row.append(h('span', { class: 'verify-peer-confirmed',
+          text: t('verify.peerConfirmed').replace('{peer}', s.label) }));
+      }
+      if (s.verified) {
+        const more = h('button', {
+          class: 'btn-icon verify-more',
+          'aria-expanded': String(this._verifyExpanded),
+          'aria-label': t('verify.details'),
+          title: t('verify.details'),
+          text: this._verifyExpanded ? '▴' : '▾',
+        });
+        more.addEventListener('click', () => {
+          this._verifyExpanded = !this._verifyExpanded;
+          this._renderVerifyBar();
+        });
+        row.insertBefore(more, row.querySelector('.verify-actions'));
       }
       this.el.verifyRows.appendChild(row);
     }

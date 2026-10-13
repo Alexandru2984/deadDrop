@@ -442,6 +442,9 @@ export class PeerConnection {
     }
     if (inner.type === 'verify-ready' && inner.v === PROTOCOL_VERSION) {
       this.remoteVerified = true;
+      // Informational only: it tells this side the other person is waiting.
+      // Nothing unlocks until this side confirms too.
+      if (!this.localVerified) this.onStateChange('peer-confirmed');
       this._updateVerificationState();
       return;
     }

@@ -570,6 +570,42 @@ select { cursor: pointer; width: auto; }
 .verify-bar.verified .verify-route,
 .verify-bar.verified .verify-method { font-size: 11px; }
 
+.verify-peer-confirmed {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* Folded: one line — who, their code, and an icon each for route and method.
+   The sentences stay in the DOM for screen readers; ▾ unfolds them along
+   with the QR button for upgrading an emoji check. */
+.verify-more {
+  background: none;
+  border: none;
+  color: var(--dim);
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.verify-bar.verified:not(.expanded) .verify-row { flex-wrap: nowrap; gap: 8px; }
+.verify-bar.verified:not(.expanded) .verify-sas { flex: 0 1 auto; }
+.verify-bar.verified:not(.expanded) .verify-actions { display: none; }
+.verify-bar.verified:not(.expanded) .verify-route,
+.verify-bar.verified:not(.expanded) .verify-method {
+  flex-basis: auto;
+  order: 1;
+  font-size: 14px;
+}
+.verify-bar.verified:not(.expanded) .verify-more { order: 2; margin-left: auto; }
+.verify-bar.verified:not(.expanded) .notice-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 
 .verify-hint strong { color: var(--danger); }
 
@@ -649,6 +685,11 @@ select { cursor: pointer; width: auto; }
 
 .msg.share-link br { display: none; }
 .share-intro { text-wrap: balance; }
+/* Someone has joined: the link stays for inviting more people to a group,
+   but the big QR no longer needs half the screen. */
+.msg.share-link.compact { padding: 6px 12px; gap: 4px; }
+.msg.share-link.compact .share-intro,
+.msg.share-link.compact .share-qr { display: none; }
 
 .share-url {
   color: var(--accent);
@@ -1359,7 +1400,6 @@ select { cursor: pointer; width: auto; }
   .verify-bar { padding-top: 4px; padding-bottom: 4px; }
   .verify-bar > .verify-label,
   .verify-hint { display: none; }
-  .verify-bar.verified .verify-method { display: none; }
   .verify-sas { font-size: 18px; }
   .chat-header { padding-top: 6px; padding-bottom: 6px; }
   .file-preview-img,

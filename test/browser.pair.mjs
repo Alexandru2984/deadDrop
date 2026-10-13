@@ -69,10 +69,33 @@ ok(await alice.verified() === false && await bob.verified() === false,
   'traffic stays locked before anyone confirms');
 
 ok(await alice.clickVerify(), 'peer A confirms the safety code');
+// B is told A is waiting — and told to compare anyway, not just to click.
+const told = await waitFor(() => bob.eval(
+  `document.querySelector('.verify-peer-confirmed')?.textContent || ''`), { timeout: 10000 });
+ok(/compare/i.test(told || ''), `the other side learns its peer has confirmed (${told || 'nothing shown'})`);
 ok(await bob.clickVerify(), 'peer B confirms the safety code');
 ok(await waitFor(() => alice.verified()) && await waitFor(() => bob.verified()),
   'mutual confirmation unlocks both sides');
 // Six emoji are 36 bits; the row has to say so, and point at the QR.
+// Verified, the bar folds to a single line so the conversation keeps the
+// screen; the sentences are still there for screen readers and one tap away.
+const folded = await waitFor(() => alice.eval(`(() => {
+  const bar = document.querySelector('#verify-bar');
+  const row = bar.querySelector('.verify-row');
+  return bar.classList.contains('verified') && !bar.classList.contains('expanded')
+    && row.getBoundingClientRect().height < 60
+    && getComputedStyle(row.querySelector('.verify-actions')).display === 'none';
+})()`), { timeout: 10000 });
+ok(folded, 'once verified the safety-code bar folds to one line');
+const unfolded = await alice.eval(`(() => {
+  document.querySelector('.verify-more').click();
+  const bar = document.querySelector('#verify-bar');
+  return bar.classList.contains('expanded')
+    && getComputedStyle(bar.querySelector('.verify-actions')).display !== 'none'
+    && document.querySelector('.verify-more').getAttribute('aria-expanded') === 'true';
+})()`);
+ok(unfolded, 'one tap unfolds it, QR upgrade included');
+await alice.eval(`document.querySelector('.verify-more').click(); true`);
 const method = await alice.eval(`document.querySelector('.verify-method')?.className || ''`);
 ok(/verify-method-emoji/.test(method),
   'an emoji-only confirmation is labelled as the weaker check');
