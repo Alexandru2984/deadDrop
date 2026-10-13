@@ -504,6 +504,13 @@ select { cursor: pointer; width: auto; }
 }
 
 .verify-method-emoji { color: var(--warn); }
+
+.verify-route {
+  flex-basis: 100%;
+  font-size: 12px;
+}
+.verify-route-relay { color: var(--accent); }
+.verify-route-direct { color: var(--warn); }
 .verify-method-qr { color: var(--accent); }
 
 .verify-bar.verified .verify-btn {

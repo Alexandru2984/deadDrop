@@ -72,6 +72,9 @@ compare rather than take a hash on trust.
 - **The safety-code row says how each person was checked**: QR (all 128
   bits), emoji (36 bits, with a nudge towards the QR), or a saved contact. The
   confirmation prompt recommends the QR too.
+- **Each person's row says whether they can see your IP address**, from the
+  ICE pair the browser actually selected: through the relay (hidden) or direct
+  (visible). It is re-read every fifteen seconds, since ICE can switch.
 - **Generate a passphrase**: six words from the EFF short list, about 62 bits,
   drawn without modulo bias, shown so it can be written down, on registration
   and in the password-change panel.

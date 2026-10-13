@@ -77,6 +77,13 @@ const method = await alice.eval(`document.querySelector('.verify-method')?.class
 ok(/verify-method-emoji/.test(method),
   'an emoji-only confirmation is labelled as the weaker check');
 
+// No relay is configured for this run, so the connection is direct, and the
+// row has to admit that the other side can see this one's address.
+const route = await waitFor(async () => (await alice.eval(
+  `document.querySelector('.verify-route')?.className || ''`)) || false, { timeout: 20000 });
+ok(/verify-route-direct/.test(route || ''),
+  `the route line reports what ICE actually chose (${route || 'nothing shown'})`);
+
 const secret = 'ciphertext round trip ' + suffix;
 await alice.eval(`
   document.querySelector('#msg-input').value = ${JSON.stringify(secret)};

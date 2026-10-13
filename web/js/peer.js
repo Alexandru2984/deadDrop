@@ -227,6 +227,40 @@ export class PeerConnection {
     }
   }
 
+  /**
+   * Which way this connection's packets actually go, from the selected ICE
+   * candidate pair: 'relay' when our side sends through TURN — the other
+   * person then sees the relay's address, not ours — 'direct' when they see an
+   * address of ours, or null before a pair is chosen. Read from the browser's
+   * own statistics rather than inferred from settings, because a setting is a
+   * request and this is what happened.
+   */
+  async routeKind() {
+    if (!this.pc || this._closed) return null;
+    const stats = await this.pc.getStats();
+    let pair = null;
+    stats.forEach((report) => {
+      if (report.type === 'transport' && report.selectedCandidatePairId) {
+        pair = stats.get(report.selectedCandidatePairId) || pair;
+      }
+    });
+    if (!pair) {
+      // Gecko marks the pair itself instead of naming it from the transport.
+      stats.forEach((report) => {
+        if (!pair && report.type === 'candidate-pair' && report.selected) pair = report;
+      });
+    }
+    if (!pair) {
+      stats.forEach((report) => {
+        if (!pair && report.type === 'candidate-pair' && report.nominated
+            && report.state === 'succeeded') pair = report;
+      });
+    }
+    const local = pair && stats.get(pair.localCandidateId);
+    if (!local || !local.candidateType) return null;
+    return local.candidateType === 'relay' ? 'relay' : 'direct';
+  }
+
   close(notify = true) {
     if (this._closed) return;
     this._closed = true;

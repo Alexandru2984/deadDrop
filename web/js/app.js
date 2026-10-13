@@ -942,6 +942,7 @@ class DeadDrop {
   _dropSession(peerId, sysMsg) {
     const s = this.peers.get(peerId);
     if (!s) return;
+    clearTimeout(this.peers.get(peerId)?.routeTimer);
     this.peers.delete(peerId); // delete first — close() re-enters _onConnState
     this.fileMgr.abortScope(peerId);
     if (this._callPeerId === peerId) this._endCallCleanup();
@@ -1042,6 +1043,7 @@ class DeadDrop {
         s.encrypted = true;
         s.sas = sas;
         s.verified = false;
+        this._watchRoute(peerId);
         this._renderSystem(`⚠️ ${s.label} ${t('sys.awaitVerify')}`);
         this._refreshRoomState();
         break;
@@ -1112,6 +1114,12 @@ class DeadDrop {
       okBtn.disabled = s.localVerified;
       okBtn.addEventListener('click', () => this._markVerified(peerId, false, 'emoji'));
       row.append(label, sas, qrBtn, okBtn);
+      if (s.route) {
+        const route = document.createElement('span');
+        route.className = `verify-route verify-route-${s.route}`;
+        route.textContent = t(s.route === 'relay' ? 'route.relay' : 'route.direct');
+        row.append(route);
+      }
       if (s.verifiedBy) {
         // How this side checked, kept in view. Six emoji are 36 bits: enough
         // against a guess, thin against someone who can try many sessions. The
@@ -1150,6 +1158,26 @@ class DeadDrop {
     // Unlock without a fresh comparison. The peer does the same on its side, so
     // two saved contacts connect straight through.
     this._markVerified(peerId, true, 'contact');
+  }
+
+  /**
+   * Keep the row's route line true. ICE can move a session between a direct
+   * pair and a relayed one after it starts, so this re-reads the selected pair
+   * every fifteen seconds for as long as the peer is in the room.
+   */
+  _watchRoute(peerId) {
+    const tick = async () => {
+      const s = this.peers.get(peerId);
+      if (!s) return;
+      const route = await s.conn.routeKind().catch(() => null);
+      if (route !== s.route) {
+        s.route = route;
+        this._renderVerifyBar();
+      }
+      s.routeTimer = setTimeout(tick, 15_000);
+    };
+    clearTimeout(this.peers.get(peerId)?.routeTimer);
+    tick();
   }
 
   _markVerified(peerId, verifiedByQR = false, method = verifiedByQR ? 'qr' : 'emoji') {
