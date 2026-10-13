@@ -607,6 +607,17 @@ for (const vp of VIEWPORTS) {
   })()`);
   ok(!status.cut, `${vp.name}: the status reads in full ("${status.text}")`);
 
+  // The same phone with its keyboard up: as short as a phone on its side but
+  // still narrow. The landscape single-row composer once applied here and
+  // left the message field zero pixels wide.
+  await sessionSend('Emulation.setDeviceMetricsOverride', {
+    width: vp.width, height: 360, deviceScaleFactor: 2, mobile: true,
+  });
+  await sleep(300);
+  const field = await sessionEval(`Math.round(document.querySelector('#msg-input').getBoundingClientRect().width)`);
+  ok(field >= 120, `${vp.name} with the keyboard up: the message field is usable (${field}px wide)`);
+  await emulatePhone(vp);
+
   // With the account panel open the landing column is taller than any phone.
   // Centred without `safe`, its top overflowed upward where no scroll reaches,
   // and the logout and account buttons were simply gone.

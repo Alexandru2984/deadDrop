@@ -1361,8 +1361,16 @@ select { cursor: pointer; width: auto; }
   .verify-hint { display: none; }
   .verify-bar.verified .verify-method { display: none; }
   .verify-sas { font-size: 18px; }
+  .chat-header { padding-top: 6px; padding-bottom: 6px; }
+  .file-preview-img,
+  .file-preview-video { max-height: 45vh; }
+}
 
-  /* Burn and timer beside the input rather than above it. */
+/* Burn and timer beside the input rather than above it — only when there is
+   width to spare. A portrait phone with the keyboard open is short too, and
+   by aspect ratio even "landscape": one row there left the message field
+   zero pixels wide. 560px is the narrowest phone held sideways. */
+@media (max-height: 500px) and (min-width: 560px) {
   .chat-footer {
     flex-direction: row;
     align-items: center;
@@ -1371,5 +1379,4 @@ select { cursor: pointer; width: auto; }
   }
   .chat-footer .controls { flex-shrink: 0; gap: 8px; }
   .chat-footer .input-row { flex: 1; min-width: 0; }
-  .chat-header { padding-top: 6px; padding-bottom: 6px; }
 }
