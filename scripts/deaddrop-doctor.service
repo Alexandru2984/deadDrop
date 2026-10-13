@@ -1,0 +1,44 @@
+[Unit]
+Description=Dead Drop preflight: is what runs what we meant to ship, and private?
+After=network-online.target deaddrop.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# The deployed-bundle check compares the running service with the checkout's
+# manifest, so doctor runs from the checkout. It only reads.
+WorkingDirectory=/home/micu/deaddrop
+EnvironmentFile=/etc/deaddrop.env
+Environment=PORT=8100
+Environment=HOST=127.0.0.1
+ExecStart=/opt/deaddrop/deaddrop doctor
+TimeoutStartSec=120
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectClock=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+PrivateMounts=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+TasksMax=64
+LimitCORE=0
+MemoryMax=128M

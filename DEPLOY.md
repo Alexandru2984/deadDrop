@@ -381,13 +381,16 @@ product. The page matters most, because its script tags carry the subresource
 integrity hashes that make every other module tamper-evident in the browser.
 
 Section 3 asked for this comparison by hand after every deploy. Do it on a timer
-instead:
+instead — hourly, as root, from the checkout:
 
+```bash
+sudo install -m 0644 scripts/deaddrop-doctor.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now deaddrop-doctor.timer
 ```
-# /etc/cron.d/deaddrop-doctor
-17 * * * * root cd /home/micu/deaddrop && . /etc/deaddrop.env && /opt/deaddrop/deaddrop doctor \
-  || logger -t deaddrop-doctor "preflight failed"
-```
+
+A failed run leaves `deaddrop-doctor.service` failed, which `systemctl --failed`
+and any unit-state monitor will show; `journalctl -u deaddrop-doctor` says why.
 
 It exits non-zero on failure, so it works as a cron entry or as a gate before
 handing out invites. Run it as root, or the backup check reports that it could
