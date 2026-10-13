@@ -101,7 +101,7 @@ SHA-256 hashes after every deploy to detect CDN HTML rewriting.
 
 ## 4. coturn (STUN/TURN)
 
-`/etc/turnserver.conf` highlights:
+`/etc/turnserver.conf` highlights (coturn 4.6.1):
 
 ```
 listening-port=3478
@@ -113,26 +113,88 @@ use-auth-secret
 static-auth-secret=<same as TURN_SECRET>
 realm=dead.micutu.com
 min-port=49160
-max-port=49200
-# anti-abuse: never relay to internal/private/loopback/multicast ranges
-no-loopback-peers
+max-port=49999
+user-quota=12
+total-quota=1200
+no-cli
+no-software-attribute
 no-multicast-peers
 no-tcp-relay
-denied-peer-ip=10.0.0.0-10.255.255.255   # (+ all other private/reserved ranges)
+# anti-abuse: never relay to internal/private/loopback/reserved ranges
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.0.2.0-192.0.2.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=198.18.0.0-198.19.255.255
+denied-peer-ip=198.51.100.0-198.51.100.255
+denied-peer-ip=203.0.113.0-203.0.113.255
+denied-peer-ip=224.0.0.0-255.255.255.255
+denied-peer-ip=::1
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff
+denied-peer-ip=100::-100::ffff:ffff:ffff:ffff
+denied-peer-ip=2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=ff00::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+# privacy: coturn logs every client address otherwise
+no-stdout-log
+log-file=/dev/null
+simple-log
+stale-nonce=600
+no-tls
+no-dtls
+no-tlsv1
+no-tlsv1_1
+no-rfc5780
+no-stun-backward-compatibility
+response-origin-only-with-rfc5780
 ```
+
+Three lines that look right and are not, each found by testing:
+
+- **`denied-peer-ip=::`** denies *every* IPv4 peer on 4.6.1, and so does an
+  IPv4-mapped range (`::ffff:0.0.0.0-…`). Every relay fails with 403.
+- **`denied-peer-ip=<PUBLIC_IP>`** looks like sound SSRF hygiene, but with
+  "hide IP" on both peers relay through this server, so each relay sends to the
+  other relay on that address. Denying it breaks every relay-only session.
+- **`no-loopback-peers`** is not an option in 4.6.1 ("Bad configuration
+  format"); loopback is covered by the `denied-peer-ip` ranges.
+
+`log-file=/dev/null` needs `simple-log`, or coturn appends a date and tries to
+create `/dev/null_YYYY-MM-DD.log`.
+
+The relay range is 840 ports. One two-person session can hold well over a
+dozen relay sockets (one per candidate, per peer, while ICE settles); the
+former 41-port range ran out with three or four conversations at once.
 
 Enable in `/etc/default/coturn` (`TURNSERVER_ENABLED=1`), then
 `sudo systemctl enable --now coturn`.
 
-Firewall: open `3478/udp`, `3478/tcp`, and the relay range `49160:49200/udp`.
+Firewall: open `3478/udp`, `3478/tcp`, and the relay range `49160:49999/udp`.
 
-Verify a credential actually relays:
+Verify a credential actually relays. Use a fresh username each run: allocations
+live ten minutes and `user-quota` caps them per username, so a reused name
+reports quota and socket errors that look like policy failures.
 
 ```bash
-SECRET=$(grep '^static-auth-secret=' /etc/turnserver.conf | cut -d= -f2)
-U=$(( $(date +%s) + 3600 )); P=$(printf '%s' "$U" | openssl dgst -sha1 -hmac "$SECRET" -binary | base64)
-turnutils_uclient -y -u "$U" -w "$P" -p 3478 -n 2 <PUBLIC_IP>   # expect 0 lost packets
+SECRET=$(sudo grep '^static-auth-secret=' /etc/turnserver.conf | cut -d= -f2)
+U="$(( $(date +%s) + 600 )):check$RANDOM"
+P=$(printf '%s' "$U" | openssl dgst -sha1 -hmac "$SECRET" -binary | base64)
+turnutils_uclient -y -u "$U" -w "$P" -p 3478 -n 5 <PUBLIC_IP>            # expect 0 lost packets
+turnutils_uclient -u "$U" -w "$P" -p 3478 -n 1 -e 10.0.0.1 <PUBLIC_IP>   # expect 403 Forbidden IP
 ```
+
+Logs: journald keeps seven days (`/etc/systemd/journald.conf.d/retention.conf`,
+`MaxRetentionSec=7day`). coturn itself writes nothing.
+
+TURN over TLS (`turns:` on 5349) is not enabled: it needs a hostname that
+resolves straight to this machine rather than through Cloudflare, plus a
+certificate coturn's user can read.
 
 > **Privacy note:** TURN requires clients to reach the VPS directly on UDP, so the
 > origin IP is disclosed to call participants (Cloudflare cannot proxy TURN). The
