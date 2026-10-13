@@ -246,6 +246,9 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 }
 
 .relay-toggle input { accent-color: var(--accent); flex-shrink: 0; }
+
+.gen-pass-btn { align-self: flex-start; }
+.gen-pass-note { color: var(--warn); margin: 0; }
 .relay-toggle small { color: var(--dim); opacity: 0.8; }
 .relay-toggle:has(input:checked) { color: var(--accent); }
 .idle-toggle { justify-content: space-between; }

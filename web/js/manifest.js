@@ -41,6 +41,7 @@ export const REQUIRED_INTEGRITY_PATHS = Object.freeze([
   'js/vendor/noble/sha3.js',
   'js/vendor/qrcode.js',
   'js/verify.js',
+  'js/wordlist.js',
 ]);
 
 export function parseIntegrityManifest(text, {

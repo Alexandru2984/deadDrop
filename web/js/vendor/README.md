@@ -38,3 +38,10 @@ round trips are not enough.
 
 Checked for known advisories via the GitHub advisory database and `npm audit`
 against these exact versions: none, as of 2026-09-03.
+
+## EFF Short Wordlist #1 (`../wordlist.js`)
+
+From https://www.eff.org/files/2016/09/08/eff_short_wordlist_1.txt (SHA-256
+`8f5ca830b8bffb6fe39c9736c024a00a6a6411adb3f83a9be8bfeeb6e067ae69`), CC BY 3.0
+US, by the Electronic Frontier Foundation. Converted to a module with "yo-yo"
+removed so every word is plain letters.

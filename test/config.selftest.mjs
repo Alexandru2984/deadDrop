@@ -1,4 +1,5 @@
-import { sanitizeIceConfig, passwordProblem } from '../web/js/util.js';
+import { sanitizeIceConfig, passwordProblem, passphrase, randomBelow } from '../web/js/util.js';
+import { WORDS } from '../web/js/wordlist.js';
 
 const store = new Map();
 globalThis.localStorage = {
@@ -73,6 +74,23 @@ ok(getPref('scrubMetadata') === true, 'a corrupt store reads as defaults');
 let threw = false;
 try { getPref('nonsense'); } catch { threw = true; }
 ok(threw, 'an unknown preference name is a programming error, not a silent default');
+
+console.log('passphrase generator');
+ok(WORDS.length === 1295 && new Set(WORDS).size === WORDS.length && WORDS.every((w) => /^[a-z]{3,5}$/.test(w)),
+   'the word list is 1295 distinct plain words');
+const phrases = Array.from({ length: 200 }, () => passphrase(WORDS));
+ok(phrases.every((p) => p.split('-').length === 6 && p.split('-').every((w) => WORDS.includes(w))),
+   'a passphrase is six words from the list');
+ok(phrases.every((p) => passwordProblem(p, 'alice') === null), 'every generated passphrase passes the password policy');
+ok(new Set(phrases).size === phrases.length, 'two hundred draws never repeat');
+// Uniformity: with n = 3, a modulo-biased draw from 65536 values would be
+// visible as a skew; rejection sampling keeps each bucket near a third.
+const counts = [0, 0, 0];
+for (let i = 0; i < 30000; i++) counts[randomBelow(3)]++;
+ok(counts.every((c) => Math.abs(c - 10000) < 600), `draws are uniform across the range (${counts.join('/')})`);
+let refused = 0;
+for (const bad of [0, -1, 1.5, 0x10001]) { try { randomBelow(bad); } catch { refused++; } }
+ok(refused === 4, 'an impossible range is refused rather than looping or skewing');
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);

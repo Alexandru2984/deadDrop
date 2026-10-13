@@ -19,7 +19,7 @@ import {
   pinContact, findContact, forgetContact, listContacts,
 } from './identity.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
-import { sanitizeIceConfig, passwordProblem } from './util.js';
+import { sanitizeIceConfig, passwordProblem, passphrase } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
 import { isScrubbable, scrubImage } from './scrub.js';
@@ -163,6 +163,9 @@ class DeadDrop {
       duressPass:   $('#duress-pass'),
       setDuressBtn: $('#set-duress-btn'),
       newPass: $('#new-pass'),
+      genPassBtn: $('#gen-pass-btn'),
+      genPassNote: $('#gen-pass-note'),
+      genNewPassBtn: $('#gen-new-pass-btn'),
       changePassBtn: $('#change-pass-btn'),
       delAccountBtn:$('#del-account-btn'),
       createBtn:   $('#create-room'),
@@ -238,6 +241,10 @@ class DeadDrop {
     this.el.contactsToggle.addEventListener('change', (e) => this._setContactsEnabled(e.target.checked));
     this.el.setDuressBtn.addEventListener('click', () => this._setDuress());
     this.el.changePassBtn.addEventListener('click', () => this._changePassword());
+    this.el.genPassBtn.addEventListener('click', () => {
+      this._fillPassphrase(this.el.authPass).then(() => this.el.genPassNote.classList.remove('hidden'));
+    });
+    this.el.genNewPassBtn.addEventListener('click', () => this._fillPassphrase(this.el.newPass));
     this.el.delAccountBtn.addEventListener('click', () => this._deleteAccount());
     // Room
     this.el.createBtn.addEventListener('click', () => this.createRoom());
@@ -457,7 +464,28 @@ class DeadDrop {
     }
   }
 
+  /**
+   * Put a fresh six-word passphrase in `input` and show it. Visible on
+   * purpose: a generated secret nobody wrote down is an account nobody can
+   * open again. It goes back to dots once the auth or the change completes.
+   * The word list is fetched only when asked for — the import map pins its
+   * hash like every other module.
+   */
+  async _fillPassphrase(input) {
+    const { WORDS } = await import('./wordlist.js');
+    input.value = passphrase(WORDS);
+    input.type = 'text';
+    input.focus();
+    input.select();
+  }
+
+  _concealPasswords() {
+    for (const input of [this.el.authPass, this.el.newPass]) input.type = 'password';
+    this.el.genPassNote.classList.add('hidden');
+  }
+
   _afterAuth() {
+    this._concealPasswords();
     this.el.authPass.value = '';
     this.el.authInvite.value = '';
     this.el.currentPass.value = '';
@@ -509,6 +537,7 @@ class DeadDrop {
       if (res.ok) {
         this.el.newPass.value = '';
         this.el.currentPass.value = '';
+        this._concealPasswords();
       }
     } catch {
       flash(t('err.connection'));

@@ -72,6 +72,9 @@ compare rather than take a hash on trust.
 - **The safety-code row says how each person was checked**: QR (all 128
   bits), emoji (36 bits, with a nudge towards the QR), or a saved contact. The
   confirmation prompt recommends the QR too.
+- **Generate a passphrase**: six words from the EFF short list, about 62 bits,
+  drawn without modulo bias, shown so it can be written down, on registration
+  and in the password-change panel.
 - **Wipe the tab when idle.** After 5, 15, 30 or 60 minutes without a key or
   tap, the tab does what the panic button does; it warns in the conversation
   thirty seconds before. Off by default.

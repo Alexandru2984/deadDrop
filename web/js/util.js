@@ -121,3 +121,26 @@ export function passwordProblem(password, username = '') {
   }
   return null;
 }
+
+/**
+ * A uniformly random integer in [0, n) from the platform CSPRNG. Rejection
+ * sampling: taking a random value modulo n would favour the low end whenever n
+ * does not divide the range, and a passphrase is only as strong as its least
+ * likely word is unlikely.
+ */
+export function randomBelow(n) {
+  if (!Number.isSafeInteger(n) || n < 1 || n > 0x10000) throw new Error('range out of bounds');
+  const limit = Math.floor(0x10000 / n) * n;
+  const buf = new Uint16Array(1);
+  for (;;) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < limit) return buf[0] % n;
+  }
+}
+
+/** `count` words drawn independently and uniformly from `words`, hyphenated. */
+export function passphrase(words, count = 6) {
+  const out = [];
+  for (let i = 0; i < count; i++) out.push(words[randomBelow(words.length)]);
+  return out.join('-');
+}
