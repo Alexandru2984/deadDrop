@@ -248,6 +248,9 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 .relay-toggle input { accent-color: var(--accent); flex-shrink: 0; }
 .relay-toggle small { color: var(--dim); opacity: 0.8; }
 .relay-toggle:has(input:checked) { color: var(--accent); }
+.idle-toggle { justify-content: space-between; }
+.idle-toggle select { flex-shrink: 0; }
+.idle-toggle:has(select:not([data-off])) { color: var(--accent); }
 
 /* ── Buttons & inputs ── */
 

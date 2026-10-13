@@ -23,6 +23,7 @@ import { sanitizeIceConfig, passwordProblem } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
 import { isScrubbable, scrubImage } from './scrub.js';
+import { getPref, setPref } from './prefs.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -84,8 +85,8 @@ class DeadDrop {
     this._iceExpiresAt = 0;
     // On by default: a direct connection hands the other person your IP
     // address. Falls back to direct only when no relay is configured, and says so.
-    this._relayOnly = true;
-    this._coverEnabled = false; // decoy traffic to mask when real chatting happens
+    this._relayOnly = getPref('relayOnly');
+    this._coverEnabled = getPref('coverTraffic'); // decoy traffic to mask when real chatting happens
     this._coverTimer = null;
     this._signalWindowAt = Date.now();
     this._signalMessages = 0;
@@ -170,6 +171,8 @@ class DeadDrop {
       relayToggle: $('#relay-toggle'),
       coverToggle: $('#cover-toggle'),
       scrubToggle: $('#scrub-toggle'),
+      typingToggle: $('#typing-toggle'),
+      idleSelect: $('#idle-select'),
       // Chat
       chatWrap:    $('#chat-wrap'),
       roomInfo:    $('#room-info'),
@@ -241,9 +244,29 @@ class DeadDrop {
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
     this.el.qrVerifyClose.addEventListener('click', () => this._closeQrVerify());
-    this.el.relayToggle.addEventListener('change', (e) => { this._relayOnly = e.target.checked; });
+    // Remembered switches. The markup's defaults are the safe ones; a stored
+    // preference only ever changes them because the user did.
+    this.el.relayToggle.checked = this._relayOnly;
+    this.el.coverToggle.checked = this._coverEnabled;
+    this.el.scrubToggle.checked = getPref('scrubMetadata');
+    this.el.typingToggle.checked = getPref('typingIndicator');
+    this.el.idleSelect.value = String(getPref('idleLockMinutes'));
+    this.el.idleSelect.toggleAttribute('data-off', this.el.idleSelect.value === '0');
+    this.el.scrubToggle.addEventListener('change', (e) => setPref('scrubMetadata', e.target.checked));
+    this.el.typingToggle.addEventListener('change', (e) => setPref('typingIndicator', e.target.checked));
+    this.el.idleSelect.addEventListener('change', (e) => {
+      const minutes = Number.parseInt(e.target.value, 10);
+      setPref('idleLockMinutes', minutes);
+      e.target.toggleAttribute('data-off', minutes === 0);
+      this._armIdleLock();
+    });
+    this.el.relayToggle.addEventListener('change', (e) => {
+      this._relayOnly = e.target.checked;
+      setPref('relayOnly', this._relayOnly);
+    });
     this.el.coverToggle.addEventListener('change', (e) => {
       this._coverEnabled = e.target.checked;
+      setPref('coverTraffic', this._coverEnabled);
       if (this._coverEnabled) this._startCoverTraffic(); else this._stopCoverTraffic();
     });
     // Chat
@@ -257,6 +280,10 @@ class DeadDrop {
     window.addEventListener('keydown', (e) => this._onGlobalKey(e));
     // Privacy screen: blur messages whenever the tab is backgrounded.
     document.addEventListener('visibilitychange', () => this._onVisibilityChange());
+    window.addEventListener('blur', () => this._showPrivacyScreen());
+    for (const type of ['keydown', 'pointerdown', 'touchstart', 'wheel']) {
+      document.addEventListener(type, () => this._noteActivity(), { passive: true, capture: true });
+    }
     this.el.privacyScreen.addEventListener('click', () => this._hidePrivacyScreen());
     // File attach
     this.el.attachBtn.addEventListener('click', () => {
@@ -437,6 +464,7 @@ class DeadDrop {
     this.el.accountPanel.classList.add('hidden');
     this._restoreIdentity().catch(() => {});
     this._showPage('landing');
+    this._armIdleLock();
   }
 
   /**
@@ -2199,7 +2227,7 @@ class DeadDrop {
   /* ── Typing indicator ── */
 
   _sendTyping() {
-    if (!this.encrypted) return;
+    if (!this.encrypted || !this.el.typingToggle.checked) return;
     const now = Date.now();
     if (this._lastTypingSent && now - this._lastTypingSent < 1500) return;
     this._lastTypingSent = now;
@@ -2226,9 +2254,43 @@ class DeadDrop {
   /* ── Privacy screen ── */
 
   _onVisibilityChange() {
-    if (document.hidden && !this.el.chatWrap.classList.contains('hidden')) {
+    if (document.hidden) this._showPrivacyScreen();
+  }
+
+  /** Cover the conversation. Also on window blur: a phone's app switcher
+   *  takes its snapshot as the app loses focus, which can be before the page
+   *  is reported hidden, and on a desktop alt-tab leaves the window on show. */
+  _showPrivacyScreen() {
+    if (!this.el.chatWrap.classList.contains('hidden')) {
       this.el.privacyScreen.classList.remove('hidden');
     }
+  }
+
+  /**
+   * Wipe the tab after a stretch with no key, pointer or touch — the panic
+   * button pressed on behalf of someone who walked away. Thirty seconds before,
+   * the conversation says so; any input resets the clock.
+   */
+  _armIdleLock() {
+    clearTimeout(this._idleTimer);
+    clearTimeout(this._idleWarnTimer);
+    this._idleWarned = false;
+    const minutes = Number.parseInt(this.el.idleSelect.value, 10);
+    if (!minutes || !this.username) return;
+    const ms = minutes * 60_000;
+    this._idleWarnTimer = setTimeout(() => {
+      this._idleWarned = true;
+      if (!this.el.chatWrap.classList.contains('hidden')) this._renderSystem(t('idle.warning'));
+    }, ms - 30_000);
+    this._idleTimer = setTimeout(() => this._panicWipe(), ms);
+  }
+
+  _noteActivity() {
+    const now = Date.now();
+    // Re-arming on every mousemove would be thousands of timers a minute.
+    if (!this._idleWarned && now - (this._lastActivity || 0) < 5000) return;
+    this._lastActivity = now;
+    this._armIdleLock();
   }
 
   _hidePrivacyScreen() {

@@ -1,5 +1,12 @@
 import { sanitizeIceConfig, passwordProblem } from '../web/js/util.js';
 
+const store = new Map();
+globalThis.localStorage = {
+  getItem: (k) => (store.has(k) ? store.get(k) : null),
+  setItem: (k, v) => store.set(k, String(v)),
+};
+const { getPref, setPref } = await import('../web/js/prefs.js');
+
 let failures = 0;
 const ok = (condition, message) => {
   if (condition) console.log('  ✓', message);
@@ -49,6 +56,23 @@ ok(passwordProblem('Password123!', 'bob') === 'err.passwordSimple', 'a decorated
 ok(passwordProblem('password is not my password at all', 'bob') === null, 'long passphrases may contain common words');
 ok(passwordProblem('🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥', 'bob') === 'err.passwordSimple', 'length counts characters, and variety still applies');
 ok(passwordProblem(undefined) === 'err.shortPassword', 'a missing password is refused, not thrown on');
+
+console.log('remembered settings');
+ok(getPref('relayOnly') === true && getPref('scrubMetadata') === true && getPref('idleLockMinutes') === 0,
+   'with nothing stored, the protective defaults apply');
+setPref('relayOnly', false);
+ok(getPref('relayOnly') === false, 'a deliberate choice is remembered');
+setPref('idleLockMinutes', 7);
+ok(getPref('idleLockMinutes') === 0, 'an idle period outside the offered ones is refused');
+store.set('dd_prefs', JSON.stringify({ scrubMetadata: 'no', relayOnly: 0, idleLockMinutes: 15 }));
+ok(getPref('scrubMetadata') === true && getPref('relayOnly') === true,
+   'a malformed stored value reads as the protective default, never as off');
+ok(getPref('idleLockMinutes') === 15, 'a valid stored value survives beside malformed ones');
+store.set('dd_prefs', '{not json');
+ok(getPref('scrubMetadata') === true, 'a corrupt store reads as defaults');
+let threw = false;
+try { getPref('nonsense'); } catch { threw = true; }
+ok(threw, 'an unknown preference name is a programming error, not a silent default');
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);

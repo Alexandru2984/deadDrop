@@ -292,6 +292,41 @@ ok(changed, 'the password is changed after re-proving the current one');
 const stillSignedIn = await sessionEval(`fetch('/api/me').then((r) => r.status)`);
 ok(stillSignedIn === 200, 'the browser that changed it keeps its session');
 
+// Settings survive a reload, and only the ones the user changed differ from
+// the protective defaults.
+await sessionEval(`
+  (() => {
+    const idle = document.querySelector('#idle-select');
+    idle.value = '15'; idle.dispatchEvent(new Event('change'));
+    const typing = document.querySelector('#typing-toggle');
+    typing.checked = false; typing.dispatchEvent(new Event('change'));
+    return true;
+  })()
+`);
+await sessionEval(`location.reload(); true`);
+await sleep(1500);
+const relanded = await waitFor(async () => sessionEval(
+  `!document.querySelector('#landing').classList.contains('hidden')`,
+).catch(() => false), { timeout: 20000 });
+const remembered = relanded && await sessionEval(`({
+  idle: document.querySelector('#idle-select').value,
+  typing: document.querySelector('#typing-toggle').checked,
+  relay: document.querySelector('#relay-toggle').checked,
+  scrub: document.querySelector('#scrub-toggle').checked,
+})`);
+ok(remembered && remembered.idle === '15' && remembered.typing === false,
+  'changed settings are remembered across a reload');
+ok(remembered && remembered.relay === true && remembered.scrub === true,
+  'untouched protections stay at their defaults');
+await sessionEval(`
+  (() => {
+    const idle = document.querySelector('#idle-select');
+    idle.value = '0'; idle.dispatchEvent(new Event('change'));
+    document.querySelector('#settings-btn').click();
+    return true;
+  })()
+`);
+
 // Enter a room so the chat view, header and verify bar all render.
 await sessionEval(`document.querySelector('#create-room').click(); true`);
 const inRoom = await waitFor(async () => sessionEval(

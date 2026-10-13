@@ -26,6 +26,7 @@ export const REQUIRED_INTEGRITY_PATHS = Object.freeze([
   'js/manifest.js',
   'js/messages.js',
   'js/peer.js',
+  'js/prefs.js',
   'js/scrub.js',
   'js/srp.js',
   'js/support.js',

@@ -72,6 +72,16 @@ compare rather than take a hash on trust.
 - **The safety-code row says how each person was checked**: QR (all 128
   bits), emoji (36 bits, with a nudge towards the QR), or a saved contact. The
   confirmation prompt recommends the QR too.
+- **Wipe the tab when idle.** After 5, 15, 30 or 60 minutes without a key or
+  tap, the tab does what the panic button does; it warns in the conversation
+  thirty seconds before. Off by default.
+- **Typing notices can be switched off**, so the other person never learns
+  when you are composing.
+- **Settings are remembered** between visits — only switches, never people or
+  rooms, and a damaged entry reads as the protective default rather than off.
+  The panic wipe clears them.
+- The privacy screen now also covers the conversation when the window loses
+  focus, which is when a phone's app switcher takes its snapshot.
 - **Tor Browser is offered the onion service.** The clearnet site sends
   `Onion-Location`, derived from the onion origin already in `ALLOWED_ORIGINS`,
   so a Tor user can load the app without Cloudflare in the path.
