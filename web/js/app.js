@@ -1053,8 +1053,17 @@ class DeadDrop {
         ? t('verify.verified')
         : (s.localVerified ? t('verify.waitingPeer') : t('verify.btn'));
       okBtn.disabled = s.localVerified;
-      okBtn.addEventListener('click', () => this._markVerified(peerId, false));
+      okBtn.addEventListener('click', () => this._markVerified(peerId, false, 'emoji'));
       row.append(label, sas, qrBtn, okBtn);
+      if (s.verifiedBy) {
+        // How this side checked, kept in view. Six emoji are 36 bits: enough
+        // against a guess, thin against someone who can try many sessions. The
+        // QR compares all 128, and saying so is how people learn to use it.
+        const method = document.createElement('span');
+        method.className = `verify-method verify-method-${s.verifiedBy}`;
+        method.textContent = t({ qr: 'verify.byQr', emoji: 'verify.byEmoji', contact: 'verify.byContact' }[s.verifiedBy]);
+        row.append(method);
+      }
       this.el.verifyRows.appendChild(row);
     }
   }
@@ -1083,14 +1092,18 @@ class DeadDrop {
     this._renderSystem(`🔖 ${s.label} ${t('contact.recognised')}`);
     // Unlock without a fresh comparison. The peer does the same on its side, so
     // two saved contacts connect straight through.
-    this._markVerified(peerId, true);
+    this._markVerified(peerId, true, 'contact');
   }
 
-  _markVerified(peerId, verifiedByQR = false) {
+  _markVerified(peerId, verifiedByQR = false, method = verifiedByQR ? 'qr' : 'emoji') {
     const s = this.peers.get(peerId);
     if (!s || !s.encrypted) return;
     if (!verifiedByQR && !window.confirm(t('verify.confirm'))) return;
     s.localVerified = true;
+    // The strongest check wins: scanning the QR after confirming the emoji
+    // upgrades what the row reports, never the reverse.
+    const strength = { emoji: 1, contact: 2, qr: 3 };
+    if (!s.verifiedBy || strength[method] > strength[s.verifiedBy]) s.verifiedBy = method;
     try {
       s.conn.markVerified().catch(() => s.conn.rejectVerification('verification sync failed'));
     } catch {
@@ -1105,6 +1118,7 @@ class DeadDrop {
       s.manuallyVerified = true;
       this._maybeSaveContact(peerId);
     }
+    this._renderVerifyBar();
   }
 
   /**
@@ -1195,7 +1209,7 @@ class DeadDrop {
     if (match) {
       this.el.qrVerifyStatus.textContent = t('qr.match');
       this.el.qrVerifyStatus.classList.add('match');
-      this._markVerified(this._qrPeerId, true);
+      this._markVerified(this._qrPeerId, true, 'qr');
     } else {
       this.el.qrVerifyStatus.textContent = t('qr.mismatch');
       this.el.qrVerifyStatus.classList.add('mismatch');

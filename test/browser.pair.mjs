@@ -72,6 +72,10 @@ ok(await alice.clickVerify(), 'peer A confirms the safety code');
 ok(await bob.clickVerify(), 'peer B confirms the safety code');
 ok(await waitFor(() => alice.verified()) && await waitFor(() => bob.verified()),
   'mutual confirmation unlocks both sides');
+// Six emoji are 36 bits; the row has to say so, and point at the QR.
+const method = await alice.eval(`document.querySelector('.verify-method')?.className || ''`);
+ok(/verify-method-emoji/.test(method),
+  'an emoji-only confirmation is labelled as the weaker check');
 
 const secret = 'ciphertext round trip ' + suffix;
 await alice.eval(`

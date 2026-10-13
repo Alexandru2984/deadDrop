@@ -69,6 +69,9 @@ compare rather than take a hash on trust.
   may not be one of the shapes every guessing list tries first. Existing
   passwords still log in.
 
+- **The safety-code row says how each person was checked**: QR (all 128
+  bits), emoji (36 bits, with a nudge towards the QR), or a saved contact. The
+  confirmation prompt recommends the QR too.
 - **Tor Browser is offered the onion service.** The clearnet site sends
   `Onion-Location`, derived from the onion origin already in `ALLOWED_ORIGINS`,
   so a Tor user can load the app without Cloudflare in the path.
