@@ -91,3 +91,33 @@ export function concatBytes(...parts) {
   }
   return out;
 }
+
+// The handful of bases every guessing list tries first. Not a dictionary — a
+// verifier stolen from the server is attacked offline with real ones — just the
+// shapes that would fall in the first second of that attack.
+const OBVIOUS_BASES = [
+  'password', 'parola', 'qwerty', 'azerty', 'letmein', 'iloveyou', 'admin',
+  'welcome', 'deaddrop', 'abcdef', '123456', '654321', '111111', '000000',
+];
+
+/**
+ * Why a new password is not good enough, as an i18n key, or null.
+ *
+ * Applied when a credential is created or changed, never at login: an existing
+ * account must still be able to sign in to change it. The bar is length, because
+ * the server-side verifier allows offline guessing if it is ever taken, and
+ * PBKDF2 only multiplies the cost of each guess.
+ */
+export function passwordProblem(password, username = '') {
+  const pw = String(password || '');
+  if ([...pw].length < 12) return 'err.shortPassword';
+  const lower = pw.toLowerCase();
+  const name = String(username || '').toLowerCase();
+  if (name.length >= 3 && lower.includes(name)) return 'err.passwordHasName';
+  if (new Set(pw).size < 5) return 'err.passwordSimple';
+  const stripped = lower.replace(/[^a-z0-9]/g, '');
+  if (OBVIOUS_BASES.some((base) => stripped.includes(base)) && [...pw].length < 20) {
+    return 'err.passwordSimple';
+  }
+  return null;
+}

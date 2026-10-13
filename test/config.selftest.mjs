@@ -1,4 +1,4 @@
-import { sanitizeIceConfig } from '../web/js/util.js';
+import { sanitizeIceConfig, passwordProblem } from '../web/js/util.js';
 
 let failures = 0;
 const ok = (condition, message) => {
@@ -38,6 +38,17 @@ for (const [index, value] of invalid.entries()) {
   try { sanitizeIceConfig(value, now); } catch { rejected = true; }
   ok(rejected, `invalid ICE configuration ${index + 1} rejected`);
 }
+
+console.log('new-password policy');
+ok(passwordProblem('Tr0ub4dor&3', 'alice') === 'err.shortPassword', 'eleven characters are refused');
+ok(passwordProblem('correct horse battery', 'alice') === null, 'a few random words pass');
+ok(passwordProblem('alice-is-my-secret', 'alice') === 'err.passwordHasName', 'a password containing the handle is refused');
+ok(passwordProblem('ALICE-is-my-secret', 'alice') === 'err.passwordHasName', 'the handle check ignores case');
+ok(passwordProblem('aaaaaaaaaaaaaaaa', 'bob') === 'err.passwordSimple', 'a repeated character is refused');
+ok(passwordProblem('Password123!', 'bob') === 'err.passwordSimple', 'a decorated "password" is refused');
+ok(passwordProblem('password is not my password at all', 'bob') === null, 'long passphrases may contain common words');
+ok(passwordProblem('🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥', 'bob') === 'err.passwordSimple', 'length counts characters, and variety still applies');
+ok(passwordProblem(undefined) === 'err.shortPassword', 'a missing password is refused, not thrown on');
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);

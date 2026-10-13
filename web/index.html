@@ -118,6 +118,9 @@
     <div id="account-panel" class="account-panel hidden" role="dialog" aria-label="…" data-i18n-aria="aria.account" tabindex="-1">
       <input id="current-pass" type="password" placeholder="Current password"
              data-i18n-ph="account.currentPh" autocomplete="current-password" />
+      <input id="new-pass" type="password" placeholder="New password"
+             data-i18n-ph="account.newPassPh" autocomplete="new-password" />
+      <button id="change-pass-btn" class="btn btn-sm" data-i18n="account.changePass">Change password</button>
       <input id="duress-pass" type="password" placeholder="Duress password (decoy)"
              data-i18n-ph="duress.ph" autocomplete="new-password" />
       <div class="account-actions">
@@ -125,7 +128,7 @@
         <button id="del-account-btn" class="btn btn-sm btn-danger" data-i18n="account.delete">Delete account</button>
       </div>
       <p class="account-hint" data-i18n="duress.hint">Optional: a second password that also logs in (to a decoy).</p>
-      <p class="account-hint" data-i18n="account.reauthHint">Both actions re-check your current password, so an open session alone cannot change or destroy the account.</p>
+      <p class="account-hint" data-i18n="account.reauthHint">Every action here re-checks your current password, so an open session alone cannot change or destroy the account.</p>
 
       <label class="relay-toggle contacts-toggle">
         <input id="contacts-toggle" type="checkbox" />
@@ -278,6 +281,6 @@
     </div>
   </div>
 
-  <script type="module" src="js/app.js" integrity="sha256-JWx2mCTLdpAvxnwzMRXEtUyxbxqvtZeuetr1HdU+LNM="></script>
+  <script type="module" src="js/app.js" integrity="sha256-NVgjTweETeKXAAtXRxxieVBlOS8ViOzHYM2fiUdRtIY="></script>
 </body>
 </html>

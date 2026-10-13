@@ -19,7 +19,7 @@ import {
   pinContact, findContact, forgetContact, listContacts,
 } from './identity.js';
 import { t, applyI18n, setLang, getLang } from './i18n.js';
-import { sanitizeIceConfig } from './util.js';
+import { sanitizeIceConfig, passwordProblem } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
 import { isScrubbable, scrubImage } from './scrub.js';
@@ -161,6 +161,8 @@ class DeadDrop {
       contactsList: $('#contacts-list'),
       duressPass:   $('#duress-pass'),
       setDuressBtn: $('#set-duress-btn'),
+      newPass: $('#new-pass'),
+      changePassBtn: $('#change-pass-btn'),
       delAccountBtn:$('#del-account-btn'),
       createBtn:   $('#create-room'),
       joinBtn:     $('#join-room'),
@@ -232,6 +234,7 @@ class DeadDrop {
     });
     this.el.contactsToggle.addEventListener('change', (e) => this._setContactsEnabled(e.target.checked));
     this.el.setDuressBtn.addEventListener('click', () => this._setDuress());
+    this.el.changePassBtn.addEventListener('click', () => this._changePassword());
     this.el.delAccountBtn.addEventListener('click', () => this._deleteAccount());
     // Room
     this.el.createBtn.addEventListener('click', () => this.createRoom());
@@ -404,7 +407,8 @@ class DeadDrop {
     const password = this.el.authPass.value;
     const invite = this.el.authInvite.value.trim();
     if (!username || !password) return;
-    if (password.length < 8) { this._showAuthError(t('err.shortPassword')); return; }
+    const weak = passwordProblem(password, username);
+    if (weak) { this._showAuthError(t(weak)); return; }
     // Invite requirement is enforced by the server; the field is hidden when
     // registration is open, so don't block on it here.
 
@@ -433,6 +437,56 @@ class DeadDrop {
     this.el.accountPanel.classList.add('hidden');
     this._restoreIdentity().catch(() => {});
     this._showPage('landing');
+  }
+
+  /**
+   * Replace the password this session was opened with. The server re-checks the
+   * current one, stores the new verifier, and signs out every other session —
+   * the point of changing a password is usually that someone else has it. In a
+   * decoy session the same request updates the decoy credential, so the flow
+   * looks identical either way.
+   */
+  async _changePassword() {
+    const next = this.el.newPass.value;
+    const current = this.el.currentPass.value;
+    const btn = this.el.changePassBtn;
+    const flash = (text) => {
+      btn.textContent = text;
+      setTimeout(() => (btn.textContent = t('account.changePass')), 2600);
+    };
+    const weak = passwordProblem(next, this.username);
+    if (weak) {
+      this.el.newPass.focus();
+      flash(t(weak));
+      return;
+    }
+    if (!current) {
+      this.el.currentPass.focus();
+      flash(t('account.needCurrent'));
+      return;
+    }
+    btn.disabled = true;
+    try {
+      let proof;
+      try {
+        proof = await this._reauthProof(this.username, current);
+      } catch {
+        flash(t('account.wrongCurrent'));
+        return;
+      }
+      const credential = await srpRegister(this.username, next);
+      const res = await this._postJSON('/api/account/verifier', { ...credential, ...proof });
+      if (res.status === 401) { flash(t('account.wrongCurrent')); return; }
+      flash(res.ok ? t('account.passChanged') : (res.data.error || t('err.connection')));
+      if (res.ok) {
+        this.el.newPass.value = '';
+        this.el.currentPass.value = '';
+      }
+    } catch {
+      flash(t('err.connection'));
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   // Set (or update) the duress password. Computed locally — never sent in the clear.
@@ -609,10 +663,10 @@ class DeadDrop {
       btn,
     );
     btn.addEventListener('click', () => {
-      navigator.clipboard.writeText(link).then(() => {
-        btn.textContent = t('share.copied');
-        setTimeout(() => (btn.textContent = t('share.copy')), 1500);
-      });
+      this._copySecret(link).then(() => {
+        btn.textContent = t('share.copiedClears');
+        setTimeout(() => (btn.textContent = t('share.copy')), 2500);
+      }).catch(() => {});
     });
     this.el.messages.appendChild(el);
     // The link is the useful half and appears at once; the QR joins it when the
@@ -1878,10 +1932,40 @@ class DeadDrop {
   }
 
   _copyCode() {
-    navigator.clipboard.writeText(this.roomCode).then(() => {
+    this._copySecret(this.roomCode).then(() => {
       this.el.copyBtn.textContent = '✓';
       setTimeout(() => (this.el.copyBtn.textContent = '📋'), 1500);
-    });
+    }).catch(() => {});
+  }
+
+  /**
+   * Copy a room code or link, then take it back out of the clipboard.
+   *
+   * The clipboard outlives the tab. Clipboard managers keep a history, and
+   * Windows and Apple devices sync it to the user's other machines; a room
+   * code left there is a capability sitting in places this app cannot wipe.
+   * Browsers only allow writing while the page has focus, so a clear that
+   * comes due in the background waits for the page to be focused again.
+   */
+  async _copySecret(text) {
+    await navigator.clipboard.writeText(text);
+    const generation = (this._clipGeneration = (this._clipGeneration || 0) + 1);
+    clearTimeout(this._clipTimer);
+    this._clipTimer = setTimeout(() => this._clearClipboard(generation), 60_000);
+  }
+
+  /** `generation` ties a deferred clear to the copy that scheduled it, so a
+   *  stale one cannot wipe something copied since. Omit it to clear now. */
+  _clearClipboard(generation = this._clipGeneration) {
+    if (!this._clipGeneration || generation !== this._clipGeneration) return;
+    clearTimeout(this._clipTimer);
+    if (!navigator.clipboard) return;
+    if (!document.hasFocus()) {
+      window.addEventListener('focus', () => this._clearClipboard(generation), { once: true });
+      return;
+    }
+    this._clipGeneration = 0;
+    navigator.clipboard.writeText('').catch(() => {});
   }
 
   _fmtSize(bytes) {
@@ -2082,6 +2166,7 @@ class DeadDrop {
   }
 
   async _panicWipe() {
+    this._clearClipboard();
     // Tear down every trace locally, end the session, and reload to a clean screen.
     this._cleanup();
     // The identity and its pinned contacts are the only things this app keeps

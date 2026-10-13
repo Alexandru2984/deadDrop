@@ -50,6 +50,15 @@ compare rather than take a hash on trust.
   is configured. Without one the app falls back to a direct connection and says
   so in the conversation.
 
+- **Change your password from the account panel.** It re-proves the current
+  password and signs out every other session.
+- **Copied room codes and links leave the clipboard after a minute**, and at
+  once on a panic wipe. Clipboard managers keep history and some systems sync it
+  between devices.
+- **New passwords need at least 12 characters**, may not contain the handle, and
+  may not be one of the shapes every guessing list tries first. Existing
+  passwords still log in.
+
 ### Fixed
 
 - Voice notes arrived as a generic file instead of a player: the recorder's

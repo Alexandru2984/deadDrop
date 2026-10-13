@@ -271,6 +271,27 @@ const panel = await sessionEval(`
 `);
 ok(panel, 'the account panel exposes a current-password field');
 
+// Changing the password: a weak one is refused before anything is sent, a good
+// one is accepted only with the current password proved again.
+const flashOf = () => sessionEval(`document.querySelector('#change-pass-btn').textContent`);
+await sessionEval(`
+  document.querySelector('#new-pass').value = 'short';
+  document.querySelector('#current-pass').value = ${JSON.stringify(PASS)};
+  document.querySelector('#change-pass-btn').click(); true
+`);
+ok(/12/.test(await flashOf()), 'a short new password is refused in the browser');
+await sleep(2800);
+const NEW_PASS = PASS + '-rotated';
+await sessionEval(`
+  document.querySelector('#new-pass').value = ${JSON.stringify(NEW_PASS)};
+  document.querySelector('#current-pass').value = ${JSON.stringify(PASS)};
+  document.querySelector('#change-pass-btn').click(); true
+`);
+const changed = await waitFor(async () => /✓/.test(await flashOf()), { timeout: 20000 });
+ok(changed, 'the password is changed after re-proving the current one');
+const stillSignedIn = await sessionEval(`fetch('/api/me').then((r) => r.status)`);
+ok(stillSignedIn === 200, 'the browser that changed it keeps its session');
+
 // Enter a room so the chat view, header and verify bar all render.
 await sessionEval(`document.querySelector('#create-room').click(); true`);
 const inRoom = await waitFor(async () => sessionEval(
