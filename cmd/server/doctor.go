@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"strings"
@@ -214,15 +215,36 @@ func checkDeliveredBundle() finding {
 	}
 	origin := "http://" + addr
 
+	paths, err := deliveryPaths()
+	if err != nil {
+		return finding{name: "delivered bundle", err: err}
+	}
 	client := &http.Client{Timeout: 20 * time.Second}
-	return compareDelivery(client, origin, public, deliveryPaths)
+	return compareDelivery(client, origin, public, paths)
 }
 
-// deliveryPaths is the minimal set worth comparing. The page carries the
-// subresource-integrity hashes for everything else, so a module rewritten
-// downstream fails in the browser as long as the page is the origin's. The entry
-// module is checked too, for an edge that leaves HTML alone and rewrites assets.
-var deliveryPaths = []string{"/", "/js/app.js"}
+// deliveryPaths is every file the manifest names, as browsers request it.
+//
+// It used to be the page and the entry module, on the reasoning that the page's
+// hashes protect the rest. They protect scripts — not robots.txt, not the
+// manifest the public verifier reads. nginx had been replacing robots.txt with
+// a host-wide copy for weeks, so /verify.html told every visitor two files did
+// not match and not to trust the page, while this check stayed green.
+func deliveryPaths() ([]string, error) {
+	manifest, err := fs.ReadFile(deaddrop.WebFS(), "SHA256SUMS")
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{"/", "/SHA256SUMS"}
+	for _, line := range strings.Split(strings.TrimSpace(string(manifest)), "\n") {
+		_, name, found := strings.Cut(line, "  ")
+		if !found || name == "index.html" {
+			continue // served at "/"; /index.html redirects there
+		}
+		paths = append(paths, "/"+name)
+	}
+	return paths, nil
+}
 
 // compareDelivery is separated from the check so a test can watch it fail: a
 // security check that has only ever been seen passing is not a check.
@@ -246,7 +268,7 @@ func compareDelivery(client *http.Client, origin, public string, paths []string)
 				path, public, local[:16], remote[:16])}
 		}
 	}
-	return finding{name: "delivered bundle", detail: public + " serves exactly what this origin does"}
+	return finding{name: "delivered bundle", detail: fmt.Sprintf("%s serves exactly what this origin does (%d files)", public, len(paths))}
 }
 
 // publicOrigin picks the first non-loopback, non-onion origin to compare against.

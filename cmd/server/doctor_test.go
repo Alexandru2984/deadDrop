@@ -113,3 +113,24 @@ func TestJournaldRetention(t *testing.T) {
 		t.Fatalf("retention = %q", v)
 	}
 }
+
+func TestDeliveryPathsCoverTheWholeManifest(t *testing.T) {
+	paths, err := deliveryPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"/": false, "/robots.txt": false, "/js/crypto.js": false, "/SHA256SUMS": false}
+	for _, p := range paths {
+		if p == "/index.html" {
+			t.Fatal("/index.html redirects; the page must be compared at /")
+		}
+		if _, ok := want[p]; ok {
+			want[p] = true
+		}
+	}
+	for p, seen := range want {
+		if !seen {
+			t.Errorf("%s is not compared", p)
+		}
+	}
+}
