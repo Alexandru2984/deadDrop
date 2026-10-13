@@ -1,5 +1,5 @@
 /**
- * Dead Drop — opt-in long-term identity (protocol v5)
+ * Dead Drop — opt-in long-term identity (protocol v6)
  *
  * By default Dead Drop presents nothing that survives a session: the handshake
  * uses fresh ECDH and ML-KEM keys every time, so two conversations with the same
@@ -115,7 +115,7 @@ export async function clearIdentity() {
 
 // Domain separation keeps an identity signature from ever being replayable as
 // anything else the app might one day sign.
-const SIG_CONTEXT = 'deaddrop/v5/identity\0';
+const SIG_CONTEXT = 'deaddrop/v6/identity\0';
 
 /** Sign a handshake transcript hash, proving possession of the identity key. */
 export async function signTranscript(privateKey, transcriptHash) {

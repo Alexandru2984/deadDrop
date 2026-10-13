@@ -60,13 +60,20 @@ changing the client served by an already-built binary.
 
 ### Pairwise content encryption
 
-- Protocol v5 combines ephemeral P-256 ECDH and ML-KEM-768, then uses
+- Protocol v6 combines ephemeral P-256 ECDH and ML-KEM-768, then uses
   HKDF-SHA256 to derive independent AES-256-GCM keys for each direction and
   content class.
 - A commit/reveal transcript, key confirmation, protocol/epoch AAD, strict field
   lengths, and per-epoch replay tracking bind and authenticate the handshake.
 - Application traffic remains locked until both users confirm the safety code.
   The six emoji encode 36 bits; QR verification compares the full 128-bit token.
+- The safety code is a hash of the committed reveals only. The KEM ciphertext is
+  chosen after both reveals, so it is kept out of the code: otherwise whoever
+  encapsulates — including a man in the middle — could re-encapsulate until the
+  emoji matched, and 2^36 attempts is hardware, not luck.
+- Every sealed envelope carries its position in that direction's stream, inside
+  the AEAD. The data channel is reliable and ordered, so a gap or a reordering
+  is someone between the peers removing traffic, and it ends the session.
 - Rooms contain at most six people and form a mesh of independent pairwise
   sessions. There is no group key; each peer must be verified separately.
 - Saved contacts are optional and off by default. While off, nothing that

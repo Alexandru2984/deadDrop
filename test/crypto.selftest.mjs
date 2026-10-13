@@ -11,7 +11,7 @@
  */
 
 import { CryptoLayer, PROTOCOL_VERSION } from '../web/js/crypto.js';
-import { Handshake } from '../web/js/handshake.js';
+import { Handshake, sasTranscript } from '../web/js/handshake.js';
 import { PeerConnection } from '../web/js/peer.js';
 import { signTranscript, verifyTranscript } from '../web/js/identity.js';
 
@@ -258,7 +258,7 @@ async function malformedNonceRejection() {
   const identity = new Uint8Array(65);
   const nonce = new Uint8Array(15);
   const commitInput = concatForTest(
-    new TextEncoder().encode('deaddrop/v5/commit\0'), ecdh, kem, identity, nonce,
+    new TextEncoder().encode('deaddrop/v6/commit\0'), ecdh, kem, identity, nonce,
   );
   const commit = new Uint8Array(await crypto.subtle.digest('SHA-256', commitInput));
   await hs.handle({ type: 'kex-commit', v: PROTOCOL_VERSION, commit: toB64(commit) });
@@ -422,6 +422,97 @@ async function identityBinding() {
     'a proof from another session is rejected');
 }
 
+/**
+ * The safety code may only depend on what both sides committed to before either
+ * revealed. The KEM ciphertext is picked afterwards by the encapsulator; if it
+ * fed the code, a man in the middle could re-encapsulate until the six emoji on
+ * both of its sessions matched — 2^36 tries, which is hardware, not luck.
+ */
+async function sasIsGrindProof() {
+  console.log('safety code is fixed by the commitments');
+  const a = new CryptoLayer(), b = new CryptoLayer();
+  const outA = [], outB = [];
+  const reveals = new Map();
+  let ct = null;
+  const hsA = new Handshake(a, (m) => outA.push(m), { onEstablished: () => {}, onError: () => {} });
+  const hsB = new Handshake(b, (m) => outB.push(m), { onEstablished: () => {}, onError: () => {} });
+  await hsA.start();
+  await hsB.start();
+  const record = (m) => ({
+    ecdh: new Uint8Array(Buffer.from(m.publicKey, 'base64')),
+    kem: new Uint8Array(Buffer.from(m.kemPublicKey, 'base64')),
+    identity: new Uint8Array(Buffer.from(m.identityKey, 'base64')),
+    nonce: new Uint8Array(Buffer.from(m.nonce, 'base64')),
+  });
+  for (let guard = 0; guard < 50 && (outA.length || outB.length); guard++) {
+    while (outA.length) {
+      const m = outA.shift();
+      if (m.type === 'kex-reveal') reveals.set('a', record(m));
+      if (m.type === 'kex-encaps') ct = m.ct;
+      await hsB.handle(m);
+    }
+    while (outB.length) {
+      const m = outB.shift();
+      if (m.type === 'kex-reveal') reveals.set('b', record(m));
+      if (m.type === 'kex-encaps') ct = m.ct;
+      await hsA.handle(m);
+    }
+  }
+  const ra = reveals.get('a'), rb = reveals.get('b');
+  const aEncaps = hsA._isEncapsulator;
+  const expected = new Uint8Array(await crypto.subtle.digest(
+    'SHA-256', sasTranscript(aEncaps ? ra : rb, aEncaps ? rb : ra),
+  )).slice(0, 16);
+  ok(ct !== null && a.computeSASToken() === Buffer.from(expected).toString('hex'),
+    'the safety code is a hash of the committed reveals alone — the KEM ciphertext cannot steer it');
+}
+
+/**
+ * Every envelope is authentic on its own, so AEAD cannot notice one going
+ * missing. Whoever terminates DTLS could silently delete a message, or swap two;
+ * the sealed stream position has to make that loud.
+ */
+async function sealedStreamOrder() {
+  console.log('sealed stream ordering');
+  const setup = async () => {
+    const a = new CryptoLayer(), b = new CryptoLayer();
+    const outA = [], outB = [];
+    const hsA = new Handshake(a, (m) => outA.push(m), { onEstablished: () => {}, onError: () => {} });
+    const hsB = new Handshake(b, (m) => outB.push(m), { onEstablished: () => {}, onError: () => {} });
+    await hsA.start();
+    await hsB.start();
+    await pump(outA, outB, hsA, hsB);
+    const wire = [];
+    const states = [];
+    const received = [];
+    const noop = () => {};
+    const pa = new PeerConnection({ send: noop }, a, noop, noop);
+    const pb = new PeerConnection({ send: noop }, b, (m) => received.push(m), (s, r) => states.push([s, r]));
+    pa.dc = { readyState: 'open', send: (raw) => wire.push(JSON.parse(raw)) };
+    pa.userVerified = true;
+    pb.userVerified = true;
+    for (const text of ['one', 'two', 'three']) await pa.send({ type: 'chat', text });
+    return { pa, pb, wire, states, received };
+  };
+
+  const honest = await setup();
+  for (const m of honest.wire) await honest.pb._openInOrder(m);
+  ok(honest.received.map((m) => m.text).join() === 'one,two,three' && honest.states.length === 0,
+    'an intact stream is delivered in order');
+
+  const dropped = await setup();
+  await dropped.pb._openInOrder(dropped.wire[0]);
+  await dropped.pb._openInOrder(dropped.wire[2]);
+  ok(dropped.states.some(([s]) => s === 'insecure') && dropped.received.length === 1,
+    'a silently removed message ends the session instead of going unnoticed');
+
+  const swapped = await setup();
+  await swapped.pb._openInOrder(swapped.wire[1]);
+  ok(swapped.states.some(([s]) => s === 'insecure') && swapped.received.length === 0,
+    'reordered messages end the session');
+  for (const p of [honest, dropped, swapped]) { p.pa._clearRekey(); p.pb._clearRekey(); }
+}
+
 (async () => {
   try {
     const { a, b } = await honestHandshake();
@@ -434,6 +525,8 @@ async function identityBinding() {
     await kemCtTampering();
     await malformedNonceRejection();
     await identityBinding();
+    await sasIsGrindProof();
+    await sealedStreamOrder();
   } catch (e) {
     console.error('FATAL', e);
     failures++;

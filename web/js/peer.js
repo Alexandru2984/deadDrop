@@ -54,6 +54,12 @@ export class PeerConnection {
     this._rekeyTimeout = null;
     this._sendQ = Promise.resolve(); // keeps sealed sends in order
     this._recvQ = Promise.resolve(); // keeps opened messages in order
+    // Position of each sealed envelope in its direction's stream. The channel is
+    // reliable and ordered, so a gap or a repeat is never the network: it is
+    // whoever terminates DTLS removing or shuffling messages. AEAD alone cannot
+    // see that — every surviving envelope is still authentic.
+    this._sendSeq = 0;
+    this._recvSeq = 0;
     // Media path authenticity: call audio/video is protected by DTLS-SRTP, whose
     // certificate is authenticated only by the fingerprint in the SDP — which is
     // relayed by the (untrusted) signaling server. We bind that fingerprint to
@@ -353,7 +359,7 @@ export class PeerConnection {
         return;
       }
 
-      // Rekeys and app traffic arrive only in protocol-v5 sealed envelopes.
+      // Rekeys and app traffic arrive only in sealed envelopes of this protocol.
       if (msg.type !== 'enc' || msg.v !== PROTOCOL_VERSION) {
         console.warn('[peer] dropping unsealed app message');
         return;
@@ -363,10 +369,7 @@ export class PeerConnection {
         return;
       }
       this._recvQ = this._recvQ
-        .then(async () => {
-          const inner = await this.crypto.open(msg.c, msg.iv, msg.e);
-          await this._handleInner(inner);
-        })
+        .then(() => this._openInOrder(msg))
         .catch((err) => console.warn('[peer] failed to open sealed message', err));
       await this._recvQ;
     };
@@ -374,6 +377,20 @@ export class PeerConnection {
     ch.onclose = () => {
       if (!this._closed) this.close();
     };
+  }
+
+  async _openInOrder(msg) {
+    if (this._closed) return;
+    const envelope = await this.crypto.openEnvelope(msg.c, msg.iv, msg.e);
+    if (envelope.seq !== this._recvSeq) {
+      // Authentic, but not the next one. Something between us dropped, held
+      // back or reordered traffic; nothing after this point can be trusted to
+      // be the whole conversation.
+      this._terminateInsecure('message stream tampered — a message was removed or reordered');
+      return;
+    }
+    this._recvSeq++;
+    await this._handleInner(envelope.msg);
   }
 
   _dcSend(obj) {
@@ -413,7 +430,8 @@ export class PeerConnection {
 
   async _sendSealedNow(obj, epoch = this.crypto.sendEpoch) {
     if (!this.dc || this.dc.readyState !== 'open') throw new Error('Data channel not open');
-    const { ciphertext, iv, epoch: usedEpoch } = await this.crypto.seal(obj, epoch);
+    const seq = this._sendSeq++;
+    const { ciphertext, iv, epoch: usedEpoch } = await this.crypto.seal(obj, epoch, seq);
     if (!this.dc || this.dc.readyState !== 'open') throw new Error('Data channel closed');
     this.dc.send(JSON.stringify({
       type: 'enc',

@@ -1,5 +1,5 @@
 /**
- * Dead Drop — Authenticated hybrid key exchange (protocol v5)
+ * Dead Drop — Authenticated hybrid key exchange (protocol v6)
  *
  * Both parties commit to their ephemeral P-256 key, ML-KEM-768 key, optional
  * long-term identity key and random nonce before revealing them. Binding the
@@ -8,6 +8,10 @@
  * both users compare. The lexicographically smaller ECDH key becomes
  * the ML-KEM encapsulator. A role-ordered transcript binds both complete reveals
  * and the KEM ciphertext into every derived secret and confirmation tag.
+ *
+ * The safety code is a hash of the committed values only. The KEM ciphertext is
+ * chosen after both reveals, so letting it feed the code would hand the
+ * encapsulator — or a man in the middle posing as one — a value to grind.
  *
  * The SAS authenticates the otherwise unauthenticated exchange only after users
  * compare it out of band. Until then, encryption protects against passive
@@ -157,7 +161,8 @@ export class Handshake {
           this._peerRecord,
           cipherText,
         );
-        await this._deriveAndConfirm(peerEcdh, sharedSecret, transcript, 'e');
+        const sas = sasTranscript(this._myRecord(), this._peerRecord);
+        await this._deriveAndConfirm(peerEcdh, sharedSecret, transcript, 'e', sas);
       } else {
         this._awaitingCt = true;
       }
@@ -194,14 +199,15 @@ export class Handshake {
         sharedSecret,
         transcript,
         'd',
+        sasTranscript(this._peerRecord, this._myRecord()),
       );
     } catch {
       return this._fail('key derivation failed');
     }
   }
 
-  async _deriveAndConfirm(peerPub, kemShared, transcript, role) {
-    await this.crypto.deriveSession(peerPub, kemShared, transcript, role);
+  async _deriveAndConfirm(peerPub, kemShared, transcript, role, sas) {
+    await this.crypto.deriveSession(peerPub, kemShared, transcript, role, sas);
     this._derived = true;
     this._awaitingCt = false;
     const tag = await this.crypto.confirmTag(role);
@@ -258,13 +264,13 @@ export class Handshake {
 async function commitment(ecdhPub, kemPub, identityPub, nonce) {
   return crypto.subtle.digest(
     'SHA-256',
-    concatBytes(enc.encode('deaddrop/v5/commit\0'), ecdhPub, kemPub, identityPub, nonce),
+    concatBytes(enc.encode('deaddrop/v6/commit\0'), ecdhPub, kemPub, identityPub, nonce),
   );
 }
 
 function handshakeTranscript(encapsulator, decapsulator, ciphertext) {
   return concatBytes(
-    enc.encode('deaddrop/v5/handshake\0'),
+    enc.encode('deaddrop/v6/handshake\0'),
     encapsulator.ecdh,
     encapsulator.kem,
     encapsulator.identity,
@@ -277,6 +283,20 @@ function handshakeTranscript(encapsulator, decapsulator, ciphertext) {
   );
 }
 
+/** Everything both sides committed to, role-ordered, and nothing chosen later. */
+export function sasTranscript(encapsulator, decapsulator) {
+  return concatBytes(
+    enc.encode('deaddrop/v6/sas\0'),
+    encapsulator.ecdh,
+    encapsulator.kem,
+    encapsulator.identity,
+    encapsulator.nonce,
+    decapsulator.ecdh,
+    decapsulator.kem,
+    decapsulator.identity,
+    decapsulator.nonce,
+  );
+}
 
 function isZero(bytes) {
   let acc = 0;

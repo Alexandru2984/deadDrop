@@ -9,6 +9,24 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+### Security
+
+- **The emoji safety code can no longer be steered by a man in the middle.**
+  It was derived from the full key exchange, including the KEM ciphertext — a
+  value the encapsulating side picks after seeing everything else. Someone
+  relaying the handshake could make itself the encapsulator and keep
+  re-encapsulating until both of its sessions showed the same six emoji: 2^36
+  attempts, within reach of rented GPUs while two people wait for a code. The
+  code is now a hash of the committed values alone. Protocol v6; a tab still
+  running v5 is refused and must reload.
+- **A removed or reordered message ends the session.** Each envelope was
+  authentic on its own, so whoever terminates the DTLS transport could delete a
+  message — a burn notice, the last thing someone said — without either side
+  seeing a thing. Envelopes now carry their stream position inside the
+  encryption.
+
 ## 0.3.0
 
 ### Security

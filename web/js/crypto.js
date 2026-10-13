@@ -1,10 +1,10 @@
 /**
- * Dead Drop — Encryption Layer (protocol v5)
+ * Dead Drop — Encryption Layer (protocol v6)
  *
  * Hybrid post-quantum key agreement: ephemeral ECDH (P-256) + ML-KEM-768
  * (FIPS 203) → HKDF-SHA256 → AES-256-GCM.
  *
- * Protocol v5 derives independent traffic keys for each direction and content
+ * Protocol v6 derives independent traffic keys for each direction and content
  * type, authenticates the protocol context and epoch as AEAD additional data,
  * and tracks authenticated 96-bit IVs for the complete retained key lifetime.
  * Rekeys mix a fresh ephemeral ECDH share with the evolving post-quantum root.
@@ -18,7 +18,7 @@
 import { bufToB64, b64ToBuf, concatBytes } from './util.js';
 import { ml_kem768 } from './vendor/noble/ml-kem.js';
 
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 const RETAINED_EPOCHS = 3; // current + 2 previous epochs for ordered in-flight data
 const MAX_IVS_PER_EPOCH = 100000; // fail closed instead of forgetting replay history
@@ -92,9 +92,20 @@ export class CryptoLayer {
   /**
    * Establish epoch 0. `role` is `e` (KEM encapsulator) or `d`
    * (decapsulator); `transcript` is the canonical, role-ordered full handshake.
+   *
+   * `sasTranscript` is the same handshake without the KEM ciphertext: only the
+   * values both sides committed to before either revealed. The safety code is
+   * derived from it alone. Anything chosen after the reveals — the ciphertext,
+   * and with it the KEM secret — is picked by the encapsulator, who can simply
+   * keep encapsulating until the code comes out the way they want; with six
+   * emoji that is 2^36 tries, an afternoon on rented hardware for whoever sits in
+   * the middle. Committed values leave nothing to grind.
    */
-  async deriveSession(peerPubRaw, kemShared, transcript, role) {
+  async deriveSession(peerPubRaw, kemShared, transcript, role, sasTranscript) {
     if (!['e', 'd'].includes(role)) throw new Error('Invalid handshake role');
+    if (!(sasTranscript instanceof Uint8Array) || sasTranscript.length === 0) {
+      throw new Error('Invalid safety-code transcript');
+    }
     if (!(kemShared instanceof Uint8Array) || kemShared.length !== 32) {
       throw new Error('Invalid ML-KEM shared secret');
     }
@@ -118,9 +129,11 @@ export class CryptoLayer {
       this.recvEpochs.set(0, role === 'e' ? dToE : eToD);
       this.sendEpoch = 0;
 
-      this._sasSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v5/sas', 16);
-      this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v5/confirm', 32);
-      this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v5/root/epoch/0', 32);
+      this._sasSecret = new Uint8Array(
+        await crypto.subtle.digest('SHA-256', sasTranscript),
+      ).slice(0, 16);
+      this._confirmSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v6/confirm', 32);
+      this._rootSecret = await this._hkdfBytes(ikm, salt, 'deaddrop/v6/root/epoch/0', 32);
     } finally {
       if (ecdhSecret) ecdhSecret.fill(0);
       if (ikm) ikm.fill(0);
@@ -136,7 +149,7 @@ export class CryptoLayer {
     return this._hkdfBytes(
       this._confirmSecret,
       new Uint8Array(32),
-      `deaddrop/v5/confirm/${role}`,
+      `deaddrop/v6/confirm/${role}`,
       16,
     );
   }
@@ -232,7 +245,7 @@ export class CryptoLayer {
       ecdhSecret = new Uint8Array(await this._ecdh(privateKey, peerPubRaw));
       ikm = concatBytes(this._rootSecret, ecdhSecret);
       const ratchetTranscript = concatBytes(
-        enc.encode(`deaddrop/v5/ratchet/epoch/${epoch}\0`),
+        enc.encode(`deaddrop/v6/ratchet/epoch/${epoch}\0`),
         offerPub,
         answerPub,
       );
@@ -244,7 +257,7 @@ export class CryptoLayer {
         ikm, salt, 'answerer-to-offerer', epoch,
       );
       const nextRoot = await this._hkdfBytes(
-        ikm, salt, `deaddrop/v5/root/epoch/${epoch}`, 32,
+        ikm, salt, `deaddrop/v6/root/epoch/${epoch}`, 32,
       );
 
       this.sendEpochs.set(epoch, role === 'offerer' ? offerToAnswer : answerToOffer);
@@ -276,13 +289,18 @@ export class CryptoLayer {
 
   /* ── Sealed envelopes (all post-handshake channel traffic) ── */
 
-  async seal(obj, epoch = this.sendEpoch) {
+  /**
+   * `seq`, when given, is the sender's position in its outbound stream. It sits
+   * inside the AEAD, so whoever carries the bytes can drop or reorder envelopes
+   * but cannot hide having done so — see PeerConnection's receive path.
+   */
+  async seal(obj, epoch = this.sendEpoch, seq = undefined) {
     this._requireEpoch(epoch);
     const ts = Date.now();
-    const bareBytes = enc.encode(JSON.stringify({ msg: obj, ts, pad: '' })).byteLength;
+    const base = Number.isSafeInteger(seq) ? { msg: obj, ts, seq } : { msg: obj, ts };
+    const bareBytes = enc.encode(JSON.stringify({ ...base, pad: '' })).byteLength;
     const envelope = JSON.stringify({
-      msg: obj,
-      ts,
+      ...base,
       pad: 'x'.repeat(padBucket(bareBytes) - bareBytes),
     });
     const { ciphertext, iv } = await this._encryptBytes(
@@ -292,9 +310,14 @@ export class CryptoLayer {
   }
 
   async open(ciphertextB64, ivB64, epoch) {
+    return (await this.openEnvelope(ciphertextB64, ivB64, epoch)).msg;
+  }
+
+  /** The whole authenticated envelope, including its stream position. */
+  async openEnvelope(ciphertextB64, ivB64, epoch) {
     const plain = await this._decryptBytes(ciphertextB64, ivB64, epoch, 'sealed');
     const envelope = JSON.parse(dec.decode(plain));
-    return envelope.msg;
+    return { msg: envelope.msg, seq: envelope.seq, ts: envelope.ts };
   }
 
   /* ── Binary (files) ── */
@@ -386,7 +409,7 @@ export class CryptoLayer {
   }
 
   _aad(context, epoch) {
-    return enc.encode(`deaddrop/v5/aead/${context}/epoch/${epoch}`);
+    return enc.encode(`deaddrop/v6/aead/${context}/epoch/${epoch}`);
   }
 
   _checkReplay(context, epoch, ivKey) {
@@ -449,7 +472,7 @@ export class CryptoLayer {
       await this._hkdfAesKey(
         secret,
         salt,
-        `deaddrop/v5/aead/${direction}/${context}/epoch/${epoch}`,
+        `deaddrop/v6/aead/${direction}/${context}/epoch/${epoch}`,
       ),
     ]));
     return Object.fromEntries(entries);
