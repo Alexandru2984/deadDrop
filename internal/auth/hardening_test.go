@@ -722,7 +722,7 @@ func TestSessionsExpireOnIdleAndAbsoluteBounds(t *testing.T) {
 	}
 
 	// Idle past the bound.
-	sm.m[token].lastSeen.Store(time.Now().Add(-sessionIdleTimeout - time.Second).UnixNano())
+	sm.m[tokenKey(token)].lastSeen.Store(time.Now().Add(-sessionIdleTimeout - time.Second).UnixNano())
 	if _, ok := sm.get(token); ok {
 		t.Fatal("an idle session stayed valid")
 	}
@@ -732,7 +732,7 @@ func TestSessionsExpireOnIdleAndAbsoluteBounds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sm.m[fresh].lastSeen.Store(time.Now().Add(-sessionIdleTimeout + time.Minute).UnixNano())
+	sm.m[tokenKey(fresh)].lastSeen.Store(time.Now().Add(-sessionIdleTimeout + time.Minute).UnixNano())
 	if _, ok := sm.get(fresh); !ok {
 		t.Fatal("a session inside the idle window was rejected")
 	}
@@ -741,8 +741,8 @@ func TestSessionsExpireOnIdleAndAbsoluteBounds(t *testing.T) {
 	}
 
 	// The absolute cap ignores activity.
-	sm.m[fresh].expiresAt = time.Now().Add(-time.Second)
-	sm.m[fresh].lastSeen.Store(time.Now().UnixNano())
+	sm.m[tokenKey(fresh)].expiresAt = time.Now().Add(-time.Second)
+	sm.m[tokenKey(fresh)].lastSeen.Store(time.Now().UnixNano())
 	if _, ok := sm.get(fresh); ok {
 		t.Fatal("activity extended a session past its absolute cap")
 	}
@@ -754,5 +754,33 @@ func TestSessionsExpireOnIdleAndAbsoluteBounds(t *testing.T) {
 	sm.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("%d dead sessions survived the reaper", remaining)
+	}
+}
+
+func TestSessionTokensAreNotKeptInMemory(t *testing.T) {
+	sm := &sessions{m: make(map[string]*session)}
+	token, err := sm.create("alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range sm.m {
+		if key == token || strings.Contains(key, token) {
+			t.Fatal("the session map holds the cookie value itself")
+		}
+	}
+	if name, ok := sm.get(token); !ok || name != "alice" {
+		t.Fatal("a hashed session no longer resolves from its token")
+	}
+	other, _ := sm.create("alice", false)
+	sm.deleteUserExcept("alice", token)
+	if _, ok := sm.get(token); !ok {
+		t.Fatal("the kept session was deleted")
+	}
+	if _, ok := sm.get(other); ok {
+		t.Fatal("the other session survived")
+	}
+	sm.delete(token)
+	if _, ok := sm.get(token); ok {
+		t.Fatal("logout did not remove a hashed session")
 	}
 }

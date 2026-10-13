@@ -37,6 +37,12 @@ compare rather than take a hash on trust.
   now kept per /64, the block a provider actually hands out.
 - The unauthenticated endpoints (`/api/health`, `/api/me`, `/api/config`) are
   rate limited; each health probe parks a goroutine on the hub.
+- **One onion visitor can no longer lock everyone else out.** All onion
+  traffic shared one rate-limit bucket and one login lockout per account. With
+  tor's circuit IDs (`ONION_PROXY_PROTOCOL=1`), limits apply per circuit under a
+  shared ceiling, and tor's proof-of-work defence is on.
+- **Session cookies are not held in memory**, only their SHA-256. A memory dump
+  holds nothing a browser could present.
 - **Built with Go 1.26.9.** 1.26.7 carries eleven standard-library advisories
   (net/http, net/textproto, crypto/tls, os) that govulncheck now reports.
 

@@ -165,9 +165,22 @@ func (s *session) live(now time.Time) bool {
 	return now.Sub(time.Unix(0, s.lastSeen.Load())) <= sessionIdleTimeout
 }
 
+// sessions is keyed by SHA-256 of the cookie, never the cookie itself. A core
+// dump, a debugger or a stray struct print then holds nothing a browser could
+// present: the hash cannot be turned back into a token that logs anyone in.
 type sessions struct {
 	mu sync.RWMutex
 	m  map[string]*session
+}
+
+// tokenKey maps a session token to its map key. The empty token (no session
+// to keep) maps to the empty key, which no real session has.
+func tokenKey(token string) string {
+	if token == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 const (
@@ -199,14 +212,14 @@ func (sm *sessions) create(username string, duress bool) (string, error) {
 			sm.mu.Unlock()
 			return "", errors.New("session limit reached")
 		}
-		if _, collision := sm.m[tok]; collision {
+		if _, collision := sm.m[tokenKey(tok)]; collision {
 			sm.mu.Unlock()
 			continue
 		}
 		now := time.Now()
 		entry := &session{username: username, duress: duress, expiresAt: now.Add(sessionAbsoluteTTL)}
 		entry.lastSeen.Store(now.UnixNano())
-		sm.m[tok] = entry
+		sm.m[tokenKey(tok)] = entry
 		sm.mu.Unlock()
 		return tok, nil
 	}
@@ -220,7 +233,7 @@ func (sm *sessions) get(token string) (string, bool) {
 func (sm *sessions) getMeta(token string) (string, bool, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	s, ok := sm.m[token]
+	s, ok := sm.m[tokenKey(token)]
 	now := time.Now()
 	if !ok || !s.live(now) {
 		return "", false, false
@@ -231,7 +244,7 @@ func (sm *sessions) getMeta(token string) (string, bool, bool) {
 
 func (sm *sessions) delete(token string) {
 	sm.mu.Lock()
-	delete(sm.m, token)
+	delete(sm.m, tokenKey(token))
 	sm.mu.Unlock()
 }
 
@@ -240,9 +253,10 @@ func (sm *sessions) deleteUser(username string) {
 }
 
 func (sm *sessions) deleteUserExcept(username, keepToken string) {
+	keep := tokenKey(keepToken)
 	sm.mu.Lock()
 	for token, s := range sm.m {
-		if token != keepToken && s.username == username {
+		if token != keep && s.username == username {
 			delete(sm.m, token)
 		}
 	}
@@ -254,9 +268,10 @@ func (sm *sessions) deleteUserKind(username string, duress bool) {
 }
 
 func (sm *sessions) deleteUserKindExcept(username string, duress bool, keepToken string) {
+	keep := tokenKey(keepToken)
 	sm.mu.Lock()
 	for token, s := range sm.m {
-		if token != keepToken && s.username == username && s.duress == duress {
+		if token != keep && s.username == username && s.duress == duress {
 			delete(sm.m, token)
 		}
 	}
