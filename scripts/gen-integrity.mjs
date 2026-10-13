@@ -41,6 +41,15 @@ const SRI_TARGETS = {
   'verify.html': ['css/style.css', 'css/about.css', 'js/verify.js'],
 };
 
+// Pages whose module graph the browser should verify, not just the entry. An
+// import map's "integrity" section gives every module URL a hash; the browser
+// then refuses any module — static import or dynamic import() — whose bytes do
+// not match, instead of trusting whatever the network handed back for it.
+// Each page carries a `<script type="importmap">…</script>` placeholder in its
+// head, before any module script. The server derives the CSP hash for it from
+// the embedded page (see appassets.ImportMapHashes).
+const IMPORTMAP_PAGES = ['index.html', 'verify.html'];
+
 const sha256hex = (buf) => createHash('sha256').update(buf).digest('hex');
 const sha256b64 = (buf) => createHash('sha256').update(buf).digest('base64');
 
@@ -85,6 +94,35 @@ function injectSRI(check) {
   return changed;
 }
 
+function importMap() {
+  const modules = walk(join(WEB, 'js'))
+    .filter((f) => f.endsWith('.js'))
+    .map((f) => relative(WEB, f).split(sep).join('/'))
+    .sort();
+  const integrity = {};
+  for (const rel of modules) integrity[`/${rel}`] = `sha256-${sha256b64(readFileSync(join(WEB, rel)))}`;
+  return JSON.stringify({ integrity });
+}
+
+function injectImportMaps(check) {
+  const map = importMap();
+  let changed = false;
+  for (const page of IMPORTMAP_PAGES) {
+    const htmlPath = join(WEB, page);
+    const content = readFileSync(htmlPath, 'utf8');
+    const re = /<script type="importmap">[^<]*<\/script>/;
+    if (!re.test(content)) {
+      throw new Error(`${page}: no <script type="importmap"> placeholder — add one before the first module script`);
+    }
+    const updated = content.replace(re, `<script type="importmap">${map}</script>`);
+    if (updated !== content) {
+      changed = true;
+      if (!check) atomicWrite(htmlPath, updated);
+    }
+  }
+  return changed;
+}
+
 function buildSums() {
   const files = walk(WEB)
     .filter((f) => f !== SUMS && !f.endsWith('.tmp'))
@@ -96,7 +134,7 @@ function buildSums() {
 const check = process.argv.includes('--check');
 
 // SRI must be stamped BEFORE hashing, since it changes the HTML bytes.
-const sriChanged = injectSRI(check);
+const sriChanged = injectImportMaps(check) | injectSRI(check);
 const sums = buildSums();
 const prev = (() => {
   try { return readFileSync(SUMS, 'utf8'); } catch { return ''; }

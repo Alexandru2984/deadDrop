@@ -195,3 +195,9 @@ export LD_LIBRARY_PATH=/tmp/chromelibs/root/usr/lib/x86_64-linux-gnu
 
 Then point `CHROME_PATH` at the binary and run the suite. Nothing is installed,
 and `rm -rf /tmp/chromelibs` undoes it.
+
+## Module integrity
+
+`browser.integrity.mjs` plays a hostile edge: it rewrites `crypto.js` in flight
+and checks the app refuses to start and the injected line never runs, with an
+untouched page booting normally beside it.

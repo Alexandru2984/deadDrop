@@ -41,6 +41,10 @@ compare rather than take a hash on trust.
   traffic shared one rate-limit bucket and one login lockout per account. With
   tor's circuit IDs (`ONION_PROXY_PROTOCOL=1`), limits apply per circuit under a
   shared ceiling, and tor's proof-of-work defence is on.
+- **Every JavaScript module is hash-checked by the browser**, not just the
+  entry script. Before, `crypto.js`, the handshake and the ML-KEM code were
+  trusted because they arrived; anything in the path could have replaced them
+  while the page's own hashes still held.
 - **Session cookies are not held in memory**, only their SHA-256. A memory dump
   holds nothing a browser could present.
 - **Built with Go 1.26.9.** 1.26.7 carries eleven standard-library advisories
@@ -71,6 +75,11 @@ compare rather than take a hash on trust.
 
 ### Fixed
 
+- **`/verify.html` told every visitor not to trust the page.** It refuses
+  redirects, and the server answers `/index.html` with one, so the file that
+  carries every other hash always showed "fetch failed". A host-wide
+  `robots.txt` that nginx swapped in made a second mismatch. Both are fixed, and
+  `doctor` now compares every file in the manifest, not two.
 - Voice notes arrived as a generic file instead of a player: the recorder's
   type carries a codec parameter, which the old type check rejected.
 

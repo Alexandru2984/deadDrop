@@ -211,8 +211,11 @@ deaddrop/
 
 ## Verifying a build
 
-`web/SHA256SUMS` records every served browser asset and entry scripts/styles use
-SRI. After changing `web/`, regenerate and review the result:
+`web/SHA256SUMS` records every served browser asset. Entry scripts and styles use
+SRI, and an import map on each page pins a hash for every JavaScript module, so
+the browser refuses any module — imported statically or loaded later — whose
+bytes differ, rather than only checking the entry point. The server adds that
+import map's own hash to the CSP, the only inline script the policy admits. After changing `web/`, regenerate and review the result:
 
 ```bash
 node scripts/gen-integrity.mjs

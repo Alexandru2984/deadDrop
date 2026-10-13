@@ -3,6 +3,7 @@ package deaddrop
 import (
 	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -82,4 +83,43 @@ func BundleDigest() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(manifest)), nil
+}
+
+// importMapPages carry an inline import map listing a hash for every module.
+// Keep in step with IMPORTMAP_PAGES in scripts/gen-integrity.mjs.
+var importMapPages = []string{"index.html", "verify.html"}
+
+const (
+	importMapOpen  = `<script type="importmap">`
+	importMapClose = `</script>`
+)
+
+// ImportMapHashes returns the CSP source expression ('sha256-…') for each
+// page's inline import map. CSP treats an import map as an inline script, so
+// without its hash in script-src the browser refuses it — and with it, only
+// that exact map: an injected one, or this one edited, is still refused.
+func ImportMapHashes() ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	for _, page := range importMapPages {
+		html, err := fs.ReadFile(WebFS(), page)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", page, err)
+		}
+		_, rest, found := strings.Cut(string(html), importMapOpen)
+		if !found {
+			return nil, fmt.Errorf("%s: no import map", page)
+		}
+		body, _, found := strings.Cut(rest, importMapClose)
+		if !found {
+			return nil, fmt.Errorf("%s: unterminated import map", page)
+		}
+		sum := sha256.Sum256([]byte(body))
+		source := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+		if !seen[source] {
+			seen[source] = true
+			out = append(out, source)
+		}
+	}
+	return out, nil
 }

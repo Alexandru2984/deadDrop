@@ -90,7 +90,11 @@ async function run() {
     results.append(pending);
     let got;
     try {
-      const res = await fetch('/' + path, { cache: 'no-store', redirect: 'error' });
+      // The file server answers /index.html with a redirect to /, and a
+      // redirect is refused here on purpose — so the page that carries every
+      // other file's hash was the one file this check could never confirm.
+      const url = path === 'index.html' ? '/' : '/' + path;
+      const res = await fetch(url, { cache: 'no-store', redirect: 'error' });
       if (!res.ok) throw new Error(String(res.status));
       got = await sha256Hex(await res.arrayBuffer());
     } catch (e) {

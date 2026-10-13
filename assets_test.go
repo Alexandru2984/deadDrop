@@ -74,3 +74,22 @@ func TestVerifyEmbeddedBundleRejectsAMissingFile(t *testing.T) {
 		}
 	}
 }
+
+func TestImportMapHashesMatchTheEmbeddedPages(t *testing.T) {
+	hashes, err := ImportMapHashes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hashes) == 0 {
+		t.Fatal("no import map hash")
+	}
+	for _, h := range hashes {
+		if !strings.HasPrefix(h, "'sha256-") || !strings.HasSuffix(h, "='") {
+			t.Fatalf("not a CSP hash source: %s", h)
+		}
+	}
+	html, _ := fs.ReadFile(WebFS(), "index.html")
+	if !strings.Contains(string(html), `"/js/crypto.js":"sha256-`) {
+		t.Fatal("the import map does not pin crypto.js")
+	}
+}

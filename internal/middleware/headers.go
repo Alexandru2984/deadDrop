@@ -8,7 +8,15 @@ import (
 // these headers exclusively — the nginx vhost must NOT also emit them, or the
 // browser sees duplicate/conflicting policies (it then enforces the most
 // restrictive intersection, which is fragile and surprising).
-func SecurityHeaders(next http.Handler) http.Handler {
+//
+// scriptHashes are CSP hash sources for the inline import maps that pin every
+// module's hash (see appassets.ImportMapHashes); they are the only inline
+// script the policy admits.
+func SecurityHeaders(next http.Handler, scriptHashes ...string) http.Handler {
+	scriptSrc := "script-src 'self'"
+	for _, hash := range scriptHashes {
+		scriptSrc += " " + hash
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -49,7 +57,7 @@ func SecurityHeaders(next http.Handler) http.Handler {
 			"default-src 'self'; "+
 				"base-uri 'none'; "+
 				"object-src 'none'; "+
-				"script-src 'self'; "+
+				scriptSrc+"; "+
 				"style-src 'self'; "+
 				"img-src 'self' blob: data:; "+
 				"media-src 'self' blob:; "+

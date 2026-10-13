@@ -192,6 +192,11 @@ jobs:
           # this one runs a patched client against a stock one.
           - name: hostile peer
             suite: browser.hostile.mjs
+          # SRI on the entry script never covered what it imports. The import
+          # map pins every module; this rewrites crypto.js in flight, the way a
+          # hostile edge would, and checks the app refuses to start.
+          - name: module integrity
+            suite: browser.integrity.mjs
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

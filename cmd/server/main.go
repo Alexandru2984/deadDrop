@@ -409,7 +409,11 @@ func main() {
 	fmt.Println("└─────────────────────────────────────────┘")
 
 	// Wrap entire mux with security headers
-	handler := middleware.SecurityHeaders(mux)
+	importMaps, err := appassets.ImportMapHashes()
+	if err != nil {
+		log.Fatalf("embedded bundle: %v", err)
+	}
+	handler := middleware.SecurityHeaders(mux, importMaps...)
 	// The onion listener serves `handler` directly; only the clearnet one
 	// advertises the onion, since an onion visitor is already there.
 	clearnet := handler
