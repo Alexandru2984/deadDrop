@@ -32,6 +32,11 @@ compare rather than take a hash on trust.
   Only raster images and plain audio/video keep their type now; everything else
   is an opaque download. File names lose bidirectional overrides and invisible
   characters, so `invoice‮fdp.exe` cannot pass for a PDF.
+- **Rotating IPv6 addresses no longer resets the login lockout.** Limits were
+  kept per address, and anyone with IPv6 holds at least 2^64 of them. They are
+  now kept per /64, the block a provider actually hands out.
+- The unauthenticated endpoints (`/api/health`, `/api/me`, `/api/config`) are
+  rate limited; each health probe parks a goroutine on the hub.
 
 ### Fixed
 

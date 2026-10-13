@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"net"
 	"net/http"
 )
 
@@ -35,6 +36,22 @@ func newClientTagSecret() []byte {
 // are never materialised in the first place.
 func ClientTag(r *http.Request) string {
 	mac := hmac.New(sha256.New, clientTagSecret)
-	mac.Write([]byte(ExtractIP(r)))
+	mac.Write([]byte(sourceKey(ExtractIP(r))))
 	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
+// sourceKey collapses an IPv6 address to its /64.
+//
+// An IPv4 address is roughly one subscriber. An IPv6 address is not: every
+// customer is handed at least a /64 — 2^64 addresses — and picking a fresh one
+// per request is a configuration flag, not an effort. Keyed per address, the
+// login lockout and the rate limits would each see an endless stream of
+// first-time visitors. The /64 is the unit a provider actually assigns, so it is
+// the unit a limit can hold to.
+func sourceKey(addr string) string {
+	ip := net.ParseIP(addr)
+	if ip == nil || ip.To4() != nil {
+		return addr
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }

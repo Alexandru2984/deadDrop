@@ -384,6 +384,20 @@ func TestClientTagIsStableOpaqueAndPerSource(t *testing.T) {
 		t.Fatal("a trusted proxy's forwarded address produced a different tag")
 	}
 
+	// One IPv6 subscriber holds a whole /64; rotating through it must not
+	// mint fresh rate-limit and lockout identities.
+	v6a := ClientTag(req("[2001:db8:1:2::1]:1", ""))
+	v6b := ClientTag(req("[2001:db8:1:2:ffff:abcd:1234:9]:1", ""))
+	if v6a != v6b {
+		t.Fatal("two addresses in one IPv6 /64 received different tags")
+	}
+	if v6c := ClientTag(req("[2001:db8:1:3::1]:1", "")); v6c == v6a {
+		t.Fatal("neighbouring IPv6 /64s share a tag")
+	}
+	if mapped := ClientTag(req("127.0.0.1:9", "::ffff:198.51.100.4")); mapped != direct {
+		t.Fatal("an IPv4-mapped address was not treated as its IPv4 address")
+	}
+
 	// Requests behind the onion boundary share one tag by design.
 	onionReq := req("127.0.0.1:9", "203.0.113.99")
 	var onionA, onionB string

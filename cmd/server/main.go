@@ -293,11 +293,15 @@ func main() {
 	// Rate limiters: auth = 10 req/min burst 15, WS = 5 conn/min burst 8
 	authRL := middleware.NewRateLimiter(10, 15, time.Minute)
 	wsRL := middleware.NewRateLimiter(5, 8, time.Minute)
+	// Unauthenticated reads. Generous — a page load costs two — but bounded:
+	// each health probe parks a goroutine on the hub until it answers, and
+	// nothing else stood between an anonymous flood and that queue.
+	publicRL := middleware.NewRateLimiter(60, 60, time.Minute)
 
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/api/logout", authRL.Wrap(middleware.RequireSameOrigin(authH.Logout)))
-	mux.HandleFunc("/api/me", authH.Me)
+	mux.HandleFunc("/api/me", publicRL.Wrap(authH.Me))
 
 	// Liveness (no auth). A monitor that only fetches a page proves nginx is up
 	// and the process has not exited; it proves nothing about the goroutine that
@@ -307,7 +311,7 @@ func main() {
 	// It reports liveness and nothing else on purpose. Room and peer counts are
 	// metadata about how many people are using the service and who might be
 	// talking right now, and this endpoint is reachable by anyone.
-	mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/health", publicRL.Wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -328,17 +332,17 @@ func main() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"status":"hub unresponsive"}`))
 		}
-	})
+	}))
 
 	// Public client config (no auth) — lets the UI know whether to require an invite.
-	mux.HandleFunc("/api/config", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/config", publicRL.Wrap(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"openRegistration":%t}`, auth.OpenRegistration())
-	})
+	}))
 
 	// SRP-6a authentication — these routes receive a verifier or proofs. There is
 	// no endpoint anywhere that accepts a password, so no server response can talk
