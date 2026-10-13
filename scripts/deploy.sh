@@ -99,7 +99,7 @@ else
   healthy=0
   for _ in $(seq 1 20); do
     if systemctl is-active --quiet deaddrop \
-        && [ "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8100/api/config || true)" = "200" ]; then
+        && [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8100/api/config || true)" = "200" ]; then
       healthy=1
       break
     fi
