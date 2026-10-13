@@ -347,6 +347,17 @@ const shareRendered = await sessionEval(`
 `);
 ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder');
 
+// Alone in a fresh room the invitation sits in the middle of the empty space,
+// not pinned to the top over a blank screen.
+const shareGap = await sessionEval(`
+  (() => {
+    const box = document.querySelector('#messages').getBoundingClientRect();
+    const card = document.querySelector('.share-link').getBoundingClientRect();
+    return Math.round(Math.abs((card.top - box.top) - (box.bottom - card.bottom)));
+  })()
+`);
+ok(shareGap <= 40, `the invitation is centred in the empty room (off by ${shareGap}px)`);
+
 // The QR generator is fetched on demand rather than on every page load, so the
 // image arrives after the row. Nothing tested it before the change, which means
 // a green suite said nothing about whether it still worked — and a QR that
@@ -587,6 +598,14 @@ for (const vp of VIEWPORTS) {
   }
 
   assertLayout(await measureLayout(vp.name), `${vp.name} (${vp.width}px)`);
+
+  // The status pill is how anyone knows whether the room is safe to type in.
+  // The room code may ellipsize; "Waiting for peer…" must not.
+  const status = await sessionEval(`(() => {
+    const el = document.querySelector('#status');
+    return { text: el.textContent, cut: el.scrollWidth > el.clientWidth + 1 };
+  })()`);
+  ok(!status.cut, `${vp.name}: the status reads in full ("${status.text}")`);
 
   // With the account panel open the landing column is taller than any phone.
   // Centred without `safe`, its top overflowed upward where no scroll reaches,

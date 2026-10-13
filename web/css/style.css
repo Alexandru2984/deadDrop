@@ -648,6 +648,7 @@ select { cursor: pointer; width: auto; }
 }
 
 .msg.share-link br { display: none; }
+.share-intro { text-wrap: balance; }
 
 .share-url {
   color: var(--accent);
@@ -657,7 +658,17 @@ select { cursor: pointer; width: auto; }
   max-width: 100%;
 }
 
-.msg.share-link .copy-link-btn { align-self: center; }
+.share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* While nobody has joined, the invitation is all there is: sit it in the
+   middle of the empty room instead of pinned to the top over a blank screen.
+   Anything rendered after it takes the room back to normal flow. */
+.messages > .share-link:last-child { margin-block: auto; }
 .share-qr {
   display: block;
   width: 160px;
@@ -755,12 +766,13 @@ select { cursor: pointer; width: auto; }
   .brand { font-size: 13px; letter-spacing: 1px; }
   .header-right {
     min-width: 0;
-    flex: 0 1 auto;
+    flex: 0 0 auto;
     justify-content: flex-end;
   }
-  /* Only text gives way: the status pill and the room code ellipsize, the
-     icon buttons keep their 44px touch size. Letting the icons shrink made
-     them spill left over the room code. */
+  /* Only text gives way, and the room code first: the status is capped by its
+     max-width rather than squeezed by the code beside it, and the icon
+     buttons keep their 44px touch size. Letting the icons shrink made them
+     spill left over the room code. */
   .header-right > .btn-icon { flex-shrink: 0; }
   .status { max-width: 42vw; flex-shrink: 1; min-width: 0; }
 }
@@ -1103,9 +1115,13 @@ select { cursor: pointer; width: auto; }
   .brand { display: none; }          /* the skull already brands the header */
   .room-info { min-width: 0; }
   #room-code { font-size: 11px; }
+  /* The status says whether the room is safe to use; the room code is in the
+     invitation and one tap of 📋 away. At 40vw "Waiting for peer…" was cut
+     off on every phone, so the code is what gives way now. */
   .status {
-    max-width: 40vw;
+    max-width: 60vw;
     font-size: 11px;
+    padding: 4px 6px;
   }
   .controls { flex-wrap: wrap; }
   /* Let the icon buttons size themselves: on a touch device they are 44px

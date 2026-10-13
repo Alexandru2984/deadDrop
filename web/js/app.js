@@ -729,12 +729,13 @@ class DeadDrop {
     const el = document.createElement('div');
     el.className = 'msg system share-link';
     const btn = h('button', { class: 'btn btn-sm copy-link-btn', text: t('share.copy') });
+    const actions = h('div', { class: 'share-actions' }, btn);
     el.append(
       h('span', { class: 'share-intro', text: t('share.intro') }),
       h('br'),
       h('span', { class: 'share-url', text: link }),
       ' ',
-      btn,
+      actions,
     );
     btn.addEventListener('click', () => {
       this._copySecret(link).then(() => {
@@ -742,6 +743,16 @@ class DeadDrop {
         setTimeout(() => (btn.textContent = t('share.copy')), 2500);
       }).catch(() => {});
     });
+    // On a phone the link is going to another app anyway; the system share
+    // sheet gets it there without a stop in the clipboard, which every app
+    // with clipboard access can read.
+    if (typeof navigator.share === 'function') {
+      const shareBtn = h('button', { class: 'btn btn-sm native-share-btn', text: t('share.native') });
+      shareBtn.addEventListener('click', () => {
+        navigator.share({ url: link }).catch(() => { /* dismissed */ });
+      });
+      actions.append(shareBtn);
+    }
     this.el.messages.appendChild(el);
     // The link is the useful half and appears at once; the QR joins it when the
     // generator has loaded.
