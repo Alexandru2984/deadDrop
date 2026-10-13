@@ -26,6 +26,17 @@ compare rather than take a hash on trust.
   message — a burn notice, the last thing someone said — without either side
   seeing a thing. Envelopes now carry their stream position inside the
   encryption.
+- **A received file can no longer run as a page on this origin.** The peer's
+  declared type was kept, so a file labelled `text/html` or `image/svg+xml`,
+  opened from its link in a new tab, was a document at Dead Drop's own address.
+  Only raster images and plain audio/video keep their type now; everything else
+  is an opaque download. File names lose bidirectional overrides and invisible
+  characters, so `invoice‮fdp.exe` cannot pass for a PDF.
+
+### Fixed
+
+- Voice notes arrived as a generic file instead of a player: the recorder's
+  type carries a codec parameter, which the old type check rejected.
 
 ## 0.3.0
 

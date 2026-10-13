@@ -19,6 +19,46 @@ const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[
 
 export { MAX_FILE_SIZE };
 
+// The types a received file may keep. Everything else becomes an opaque
+// download. The declared type is the peer's word, and the browser believes it:
+// a Blob labelled text/html or image/svg+xml, opened from its blob: URL ("open
+// link in new tab"), is a document running at this origin. Raster images and
+// plain media are inert, so those are the only ones previewed.
+const INLINE_TYPES = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif', 'image/bmp',
+  'video/mp4', 'video/webm', 'video/ogg', 'video/quicktime',
+  'audio/mpeg', 'audio/ogg', 'audio/webm', 'audio/wav', 'audio/x-wav', 'audio/mp4',
+  'audio/aac', 'audio/flac', 'audio/opus',
+]);
+
+// C0/C1 controls, bidirectional overrides and isolates, zero-width characters,
+// and path separators. A right-to-left override turns "invoice\u202Efdp.exe"
+// into "invoiceexe.pdf" on screen; the browser saves the real thing.
+const UNSAFE_NAME_CHARS = /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff/\\]/g;
+
+/**
+ * Normalise peer-supplied file metadata into something safe to render and to
+ * hand to the browser. Never trusts the declared type for anything but a
+ * preview, and never lets the name lie about what it is.
+ */
+export function safeFileMeta(meta) {
+  if (!meta || typeof meta !== 'object') return null;
+  let fileName = typeof meta.fileName === 'string'
+    ? meta.fileName.normalize('NFC').replace(UNSAFE_NAME_CHARS, '_').trim()
+    : '';
+  fileName = fileName.replace(/^\.+/, '').slice(0, 180);
+  if (!fileName) fileName = 'file';
+  const declared = typeof meta.fileType === 'string'
+    ? meta.fileType.split(';')[0].trim().toLowerCase()
+    : '';
+  const fileType = INLINE_TYPES.has(declared) ? declared : 'application/octet-stream';
+  const fileSize = Number.isSafeInteger(meta.fileSize) && meta.fileSize >= 0
+    && meta.fileSize <= MAX_FILE_SIZE
+    ? meta.fileSize
+    : 0;
+  return { fileName, fileType, fileSize };
+}
+
 /**
  * Bind authenticated file metadata to the bytes that were actually received.
  * A verified but malicious peer must not be able to under-report a Blob's size

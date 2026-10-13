@@ -11,6 +11,7 @@ import {
   FileTransferManager,
   MAX_FILE_SIZE,
   assertFileSizeBinding,
+  safeFileMeta,
 } from './filetransfer.js';
 import { register as srpRegister, ClientLogin, DEFAULT_KDF } from './srp.js';
 import {
@@ -2160,17 +2161,7 @@ class DeadDrop {
   }
 
   _sanitizeFileMeta(meta) {
-    if (!meta || typeof meta !== 'object') return null;
-    const fileName = typeof meta.fileName === 'string' && meta.fileName.trim()
-      ? meta.fileName.slice(0, 180)
-      : 'file';
-    const fileType = typeof meta.fileType === 'string' && /^[\w.+-]+\/[\w.+-]+$/.test(meta.fileType)
-      ? meta.fileType.slice(0, 100)
-      : 'application/octet-stream';
-    const fileSize = Number.isSafeInteger(meta.fileSize) && meta.fileSize >= 0 && meta.fileSize <= MAX_FILE_SIZE
-      ? meta.fileSize
-      : 0;
-    return { fileName, fileType, fileSize };
+    return safeFileMeta(meta);
   }
 }
 

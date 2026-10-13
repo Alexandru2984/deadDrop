@@ -1,6 +1,6 @@
 /** Bounded file-transfer and peer-scoped message lifecycle self-test. */
 
-import { FileTransferManager, assertFileSizeBinding } from '../web/js/filetransfer.js';
+import { FileTransferManager, assertFileSizeBinding, safeFileMeta } from '../web/js/filetransfer.js';
 import { MessageManager } from '../web/js/messages.js';
 
 let failures = 0;
@@ -108,6 +108,25 @@ ok(notifications[0]?.wireId === 'wire' && notifications[0]?.peerId === 'peer-a',
 messages.add('self:wire', null, 0, false, true, null, { wireId: 'wire' });
 messages.remoteDestroy('self:wire');
 ok(notifications.length === 1, 'remote destruction does not echo back');
+
+console.log('received file metadata');
+for (const declared of ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'application/pdf', 'TEXT/HTML']) {
+  ok(safeFileMeta({ fileName: 'x', fileType: declared, fileSize: 1 }).fileType === 'application/octet-stream',
+     `a peer-declared ${declared} is downloaded, never rendered at this origin`);
+}
+ok(safeFileMeta({ fileName: 'v.webm', fileType: 'audio/webm;codecs=opus', fileSize: 1 }).fileType === 'audio/webm',
+   'a voice note with codec parameters still plays inline');
+ok(safeFileMeta({ fileName: 'p.png', fileType: 'image/png', fileSize: 1 }).fileType === 'image/png',
+   'raster images keep their preview');
+const spoofed = safeFileMeta({ fileName: 'invoice\u202Efdp.exe', fileType: 'image/png', fileSize: 1 }).fileName;
+ok(!/[\u202a-\u202e\u2066-\u2069]/.test(spoofed) && spoofed.endsWith('.exe'),
+   'a right-to-left override cannot disguise the real extension');
+ok(safeFileMeta({ fileName: '../../.bashrc', fileType: '', fileSize: 1 }).fileName === '_.._.bashrc',
+   'path separators and leading dots are neutralised');
+ok(safeFileMeta({ fileName: '\u200b\u0000', fileType: '', fileSize: 1 }).fileName === '__',
+   'invisible and control characters are made visible');
+ok(safeFileMeta({ fileName: 42, fileType: null, fileSize: -1 })?.fileName === 'file',
+   'malformed metadata falls back to safe defaults');
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);
