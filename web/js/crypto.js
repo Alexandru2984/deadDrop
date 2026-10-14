@@ -276,7 +276,10 @@ export class CryptoLayer {
 
   async encrypt(plaintext) {
     const epoch = this.sendEpoch;
-    const body = enc.encode(JSON.stringify({ text: plaintext, ts: Date.now() }));
+    // No timestamp: the receiver never used one, and a sender clock to the
+    // millisecond in every message lets the other side measure this
+    // device's clock skew — enough to recognise it again in another room.
+    const body = enc.encode(JSON.stringify({ text: plaintext }));
     const { ciphertext, iv } = await this._encryptBytes(body, 'text', epoch);
     return { ciphertext: bufToB64(ciphertext), iv: bufToB64(iv), epoch };
   }
@@ -296,8 +299,9 @@ export class CryptoLayer {
    */
   async seal(obj, epoch = this.sendEpoch, seq = undefined) {
     this._requireEpoch(epoch);
-    const ts = Date.now();
-    const base = Number.isSafeInteger(seq) ? { msg: obj, ts, seq } : { msg: obj, ts };
+    // No sender clock in here either — see encrypt(). Order is carried by
+    // `seq`, which is all the receiver needs.
+    const base = Number.isSafeInteger(seq) ? { msg: obj, seq } : { msg: obj };
     const bareBytes = enc.encode(JSON.stringify({ ...base, pad: '' })).byteLength;
     const envelope = JSON.stringify({
       ...base,
@@ -317,7 +321,7 @@ export class CryptoLayer {
   async openEnvelope(ciphertextB64, ivB64, epoch) {
     const plain = await this._decryptBytes(ciphertextB64, ivB64, epoch, 'sealed');
     const envelope = JSON.parse(dec.decode(plain));
-    return { msg: envelope.msg, seq: envelope.seq, ts: envelope.ts };
+    return { msg: envelope.msg, seq: envelope.seq };
   }
 
   /* ── Binary (files) ── */

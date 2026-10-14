@@ -472,6 +472,26 @@ async function sasIsGrindProof() {
  * missing. Whoever terminates DTLS could silently delete a message, or swap two;
  * the sealed stream position has to make that loud.
  */
+/**
+ * What the other side learns from an envelope beyond the message: nothing
+ * about this device's clock. A millisecond timestamp in every envelope let a
+ * peer measure clock skew and recognise the same device across rooms, which
+ * unlinkable sessions are supposed to prevent.
+ */
+async function noSenderClock(a, b) {
+  console.log('no sender clock on the wire');
+  const sealed = await a.seal({ type: 'chat', text: 'hi' }, a.sendEpoch, 7);
+  const sealedBody = JSON.parse(new TextDecoder().decode(
+    await b._decryptBytes(sealed.ciphertext, sealed.iv, sealed.epoch, 'sealed')));
+  ok(JSON.stringify(Object.keys(sealedBody).sort()) === '["msg","pad","seq"]',
+    `a sealed envelope carries only the message, its position and padding (${Object.keys(sealedBody).join(', ')})`);
+  const text = await a.encrypt('hello');
+  const textBody = JSON.parse(new TextDecoder().decode(
+    await b._decryptBytes(text.ciphertext, text.iv, text.epoch, 'text')));
+  ok(JSON.stringify(Object.keys(textBody)) === '["text"]',
+    `a text body carries only the text (${Object.keys(textBody).join(', ')})`);
+}
+
 async function sealedStreamOrder() {
   console.log('sealed stream ordering');
   const setup = async () => {
@@ -518,6 +538,7 @@ async function sealedStreamOrder() {
     const { a, b } = await honestHandshake();
     await messaging(a, b);
     await sealing(a, b);
+    await noSenderClock(a, b);
     await binary(a, b);
     await rekeying(a, b);
     await authenticatedRekeyTransport(a, b);
