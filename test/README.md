@@ -22,6 +22,13 @@ Exits non-zero on any failure. Requires Node 18+ (uses the WebCrypto API).
 chunk validation, receiver allocation limits, cleanup on disconnect, ordered
 outbound delivery, and non-broadcast destruction of another peer's message.
 
+## ICE interruption self-test
+
+`node test/ice-grace.selftest.mjs` drives the peer connection's state handler
+with a stub `RTCPeerConnection`. A network change takes an established path
+through ICE "disconnected" and it usually comes back; the session must survive
+that within a grace period, end after it, and end at once on "failed".
+
 ## Call-signaling state machine self-test
 
 `node test/callsignal.selftest.mjs` enumerates every call frame against every

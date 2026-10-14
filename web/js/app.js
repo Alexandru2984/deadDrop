@@ -1176,7 +1176,16 @@ class DeadDrop {
     const s = this.peers.get(peerId);
     switch (state) {
       case 'connected':
-        if (!this.encrypted) this._setStatus('connected', t('st.exchanging'));
+        if (s?.encrypted) {
+          // Back from an interruption: the same session, nothing to redo.
+          if (s.interrupted) { s.interrupted = false; this._renderSystem(t('sys.recovered').replace('{peer}', s.label)); }
+          this._refreshRoomState();
+        } else if (!this.encrypted) this._setStatus('connected', t('st.exchanging'));
+        break;
+      case 'interrupted':
+        if (!s) return;
+        s.interrupted = true;
+        this._setStatus('connecting', t('st.interrupted'));
         break;
       case 'encrypted':
         if (!s) return;

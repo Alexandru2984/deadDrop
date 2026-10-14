@@ -28,7 +28,7 @@ export class PeerConnection {
    * @param {Object}      signaling    – { send(msg) }
    * @param {CryptoLayer} cryptoLayer  – shared crypto instance
    * @param {Function}    onMessage    – called with each decrypted peer message
-   * @param {Function}    onStateChange – called with 'connected' | 'encrypted' | 'disconnected'
+   * @param {Function}    onStateChange – called with 'connected' | 'interrupted' | 'encrypted' | 'disconnected'
    */
   constructor(signaling, cryptoLayer, onMessage, onStateChange, iceConfig = {}, identity = null) {
     this.signaling = signaling;
@@ -41,6 +41,11 @@ export class PeerConnection {
     this.relayOnly = !!iceConfig.relayOnly;
     this.pc = null;
     this.dc = null;            // data channel
+    // How long an established path may sit in ICE "disconnected" before the
+    // session is given up. A network change passes through that state and
+    // usually recovers within seconds; "failed" and "closed" are final.
+    this.iceGraceMs = 10000;
+    this._iceGraceTimer = null;
     this.remotePeerId = null;
     this.connected = false;
     this.localVerified = false;
@@ -267,6 +272,7 @@ export class PeerConnection {
     this._clearRekey();
     clearTimeout(this._fpTimer);
     clearTimeout(this._handshakeTimer);
+    clearTimeout(this._iceGraceTimer);
     this.handshake = null;
     this.stopMedia();
     if (this.dc) this.dc.close();
@@ -310,9 +316,22 @@ export class PeerConnection {
       if (this._closed) return;
       const s = pc.connectionState;
       if (s === 'connected') {
+        clearTimeout(this._iceGraceTimer);
+        this._iceGraceTimer = null;
         this.connected = true;
         this.onStateChange('connected');
+      } else if (s === 'disconnected' && this.connected) {
+        // Interrupted, not over: give ICE its chance to recover before ending
+        // a verified session that would need a new safety code to replace.
+        this.onStateChange('interrupted');
+        clearTimeout(this._iceGraceTimer);
+        this._iceGraceTimer = setTimeout(() => {
+          if (this._closed || pc.connectionState === 'connected') return;
+          this.connected = false;
+          this.onStateChange('disconnected');
+        }, this.iceGraceMs);
       } else if (s === 'disconnected' || s === 'failed' || s === 'closed') {
+        clearTimeout(this._iceGraceTimer);
         this.connected = false;
         this.onStateChange('disconnected');
       }

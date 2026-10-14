@@ -97,6 +97,8 @@ jobs:
         run: node test/fingerprint.selftest.mjs
       - name: Call-signaling state machine
         run: node test/callsignal.selftest.mjs
+      - name: ICE interruption grace period
+        run: node test/ice-grace.selftest.mjs
       # Randomised, with the seed derived from the run so successive pushes
       # explore different input rather than re-checking the same shapes.
       # Findable and private are not in tension here, but the usual way sites
