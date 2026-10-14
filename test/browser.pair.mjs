@@ -37,6 +37,14 @@ const { cdp, cleanup } = await launchBrowser('pair');
 const alice = await Peer.open(cdp, 'alice');
 const bob = await Peer.open(cdp, 'bob');
 
+// A handle on A's sockets, so a dropped connection can be simulated.
+await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+  window.__sockets = [];
+  const Native = WebSocket;
+  window.WebSocket = class extends Native {
+    constructor(...args) { super(...args); window.__sockets.push(this); }
+  };
+` }, alice.sessionId);
 await alice.goto(BASE + '/');
 await bob.goto(BASE + '/');
 ok(await alice.register(USERS[0], INVITES[0], PASS), 'peer A registers');
@@ -216,6 +224,20 @@ const nasty = await waitFor(async () => {
 ok(nasty, 'the hostile filename arrives as text, not markup');
 ok(await bob.eval(`!document.querySelector('#messages img[src="x"]')`),
   'no element was created from the filename');
+
+// A's signaling socket drops — on a phone, a network change. The server
+// tells B that A left, but the session between them is direct and still
+// open; it must survive, and must not be renegotiated.
+await alice.eval(`window.__sockets.at(-1).close(); true`);
+await sleep(1000);
+const afterLoss = 'after the server went ' + suffix;
+await bob.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(afterLoss)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await alice.transcript()).includes(afterLoss)),
+  'the conversation carries on directly when one side loses the server');
+ok(await alice.verified() && await bob.verified(), 'and both sides stay verified — nothing was renegotiated');
 
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the

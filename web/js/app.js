@@ -932,11 +932,20 @@ class DeadDrop {
         }
         break;
 
-      case 'peer-left':
+      case 'peer-left': {
         if (!this._validPeerID(msg.peerId)) return;
         this._announced.delete(msg.peerId);
+        // The server only knows their signaling socket closed — a phone that
+        // switched networks looks exactly like that. A session already
+        // running is direct and its own channel reports a real departure, so
+        // keep it; tearing it down here ended both sides of a conversation
+        // over one side's blip, and let the server end any conversation it
+        // liked by saying so.
+        const s = this.peers.get(msg.peerId);
+        if (s?.encrypted && s.conn.dc?.readyState === 'open') return;
         this._dropSession(msg.peerId, t('st.peerLeft'));
         break;
+      }
 
       case 'joined':
         // The server has us in the room. If nobody else is, this is a wait,
