@@ -73,6 +73,29 @@ function h(tag, attrs = {}, ...children) {
   return node;
 }
 
+// The server answers in plain English. The ones a person can actually meet
+// are translated here; anything else is shown as sent rather than hidden.
+const SERVER_ERRORS = {
+  'invalid credentials': 'srv.badLogin',
+  'invalid or used invite code': 'srv.badInvite',
+  'too many attempts — try again later': 'srv.tooMany',
+  'too many requests': 'srv.tooMany',
+  'username: 3–20 chars, letters/numbers/underscores': 'srv.username',
+  'registration temporarily unavailable': 'srv.unavailable',
+  'authentication temporarily unavailable': 'srv.unavailable',
+  're-authentication required': 'srv.reauth',
+  'session expired': 'srv.expired',
+  'not authenticated': 'srv.expired',
+  'room unavailable': 'srv.roomFull',
+  'invalid room code': 'err.roomCode',
+};
+
+function serverMessage(text, fallbackKey) {
+  if (!text) return t(fallbackKey);
+  const key = SERVER_ERRORS[text];
+  return key ? t(key) : text;
+}
+
 function needsKdfUpgrade(kdf) {
   const match = /^pbkdf2:(\d+)$/.exec(kdf || '');
   return !match || Number(match[1]) < CURRENT_KDF_ITERATIONS;
@@ -395,7 +418,7 @@ class DeadDrop {
     try {
       const client = new ClientLogin(username, password);
       const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A });
-      if (!ch.ok) { this._showAuthError(ch.data.error || 'Login failed'); return; }
+      if (!ch.ok) { this._showAuthError(serverMessage(ch.data.error, 'srv.badLogin')); return; }
 
       // The challenge advertises each credential's password-stretch KDF.
       const { M1 } = await client.finish(ch.data.salt, ch.data.B, ch.data.kdf);
@@ -408,7 +431,7 @@ class DeadDrop {
         M1d = (await clientD.finish(ch.data.salt2, ch.data.B2, ch.data.kdf2)).M1;
       }
       const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d });
-      if (!auth.ok) { this._showAuthError(auth.data.error || 'Invalid credentials'); return; }
+      if (!auth.ok) { this._showAuthError(serverMessage(auth.data.error, 'srv.badLogin')); return; }
       // Authenticate the server too. Which locally-computed M2 matches tells this
       // browser which credential won; the server response remains identical for
       // primary and duress sessions, so it carries no observable decoy marker.
@@ -475,7 +498,7 @@ class DeadDrop {
         this.username = res.data.username;
         this._afterAuth();
       } else {
-        this._showAuthError(res.data.error || 'Registration failed');
+        this._showAuthError(serverMessage(res.data.error, 'srv.registerFailed'));
       }
     } catch {
       this._showAuthError(t('err.connection'));
@@ -553,7 +576,7 @@ class DeadDrop {
       const credential = await srpRegister(this.username, next);
       const res = await this._postJSON('/api/account/verifier', { ...credential, ...proof });
       if (res.status === 401) { flash(t('account.wrongCurrent')); return; }
-      flash(res.ok ? t('account.passChanged') : (res.data.error || t('err.connection')));
+      flash(res.ok ? t('account.passChanged') : serverMessage(res.data.error, 'err.connection'));
       if (res.ok) {
         this.el.newPass.value = '';
         this.el.currentPass.value = '';
@@ -596,7 +619,7 @@ class DeadDrop {
     this.el.duressPass.value = '';
     this.el.currentPass.value = '';
     if (res.status === 401) { flash('account.wrongCurrent'); return; }
-    this.el.setDuressBtn.textContent = res.ok ? t('duress.saved') : (res.data.error || t('duress.set'));
+    this.el.setDuressBtn.textContent = res.ok ? t('duress.saved') : serverMessage(res.data.error, 'duress.set');
     setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);
   }
 
@@ -706,7 +729,7 @@ class DeadDrop {
       const res = await fetch('/api/room', { method: 'POST' });
       const data = await res.json();
       if (!res.ok || typeof data.code !== 'string' || !ROOM_CODE_RE.test(data.code)) {
-        this._renderSystem(data.error || t('err.roomCreate'));
+        this._renderSystem(serverMessage(data.error, 'err.roomCreate'));
         return;
       }
       this.roomCode = data.code;
@@ -927,7 +950,7 @@ class DeadDrop {
         break;
 
       case 'error':
-        this._setStatus('disconnected', t('st.error').replace('{e}', msg.error || msg.peerId || t('st.unknownError')));
+        this._setStatus('disconnected', t('st.error').replace('{e}', serverMessage(msg.error, 'st.unknownError')));
         break;
 
       case 'offer': {

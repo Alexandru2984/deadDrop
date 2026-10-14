@@ -249,6 +249,19 @@ const booted = await waitFor(async () => sessionEval(
 ).catch(() => false));
 ok(booted, 'the app boots and shows the auth page');
 
+// A failed login says so in the interface's words, not the server's
+// lower-case English.
+await sessionEval(`
+  document.querySelector('#auth-user').value = 'zz_nobody_${Math.floor(Math.random() * 1e6)}';
+  document.querySelector('#auth-pass').value = 'not-the-password-123';
+  document.querySelector('#login-btn').click();
+  true
+`);
+const loginError = await waitFor(async () => sessionEval(
+  `document.querySelector('.auth-error:not(.hidden)')?.textContent || ''`).catch(() => ''), { timeout: 15000 });
+ok(loginError && loginError !== 'invalid credentials',
+  `a failed login is reported in the interface language (${loginError || 'nothing shown'})`);
+
 // Register through the real UI, so the SRP client, the fetch layer and the
 // post-auth render all execute under the live CSP.
 await sessionEval(`
