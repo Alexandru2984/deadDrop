@@ -842,6 +842,10 @@ select { cursor: pointer; width: auto; }
 
 #send-btn { min-width: 72px; }
 
+/* Recording: the field turns red so a live microphone is never ambiguous. */
+.chat-footer.recording #msg-input { border-color: var(--danger); }
+.chat-footer.recording #msg-input::placeholder { color: var(--danger); opacity: 1; }
+
 /* ── Responsive: mobile ── */
 
 @media (max-width: 600px) {

@@ -224,6 +224,7 @@ class DeadDrop {
       sendBtn:     $('#send-btn'),
       attachBtn:   $('#attach-btn'),
       recordBtn:   $('#record-btn'),
+      chatFooter:  $('.chat-footer'),
       fileInput:   $('#file-input'),
       burnToggle:  $('#burn-toggle'),
       ttlSelect:   $('#ttl-select'),
@@ -1018,7 +1019,7 @@ class DeadDrop {
     if (this._callPeerId === peerId) this._endCallCleanup();
     try { s.conn.close(); } catch { /* already closed */ }
     s.crypto.destroy();
-    if (sysMsg) this._renderSystem(`${sysMsg} (${s.label})`);
+    if (sysMsg) this._renderSystem(sysMsg.replace('{peer}', s.label));
     this._refreshRoomState();
   }
 
@@ -1071,7 +1072,19 @@ class DeadDrop {
     for (const control of [this.el.msgInput, this.el.sendBtn, this.el.attachBtn, this.el.recordBtn]) {
       control.disabled = !this.encrypted;
     }
+    // Everyone left: the invitation is the useful thing on screen again.
+    if (this.peers.size === 0) {
+      for (const card of this.el.messages.querySelectorAll('.share-link')) card.classList.remove('compact');
+    }
+    this._updateComposerHint();
     this._renderVerifyBar();
+  }
+
+  /** A disabled message field says what it is waiting for, not "Type a message". */
+  _updateComposerHint() {
+    if (this._recorder?.state === 'recording') return;
+    this.el.msgInput.placeholder = t(this.encrypted ? 'chat.msg'
+      : this.peers.size > 0 ? 'chat.lockedPh' : 'chat.waitingPh');
   }
 
   _hasRelay() {
@@ -1148,7 +1161,7 @@ class DeadDrop {
         this._dropSession(peerId);
         break;
       case 'disconnected':
-        this._dropSession(peerId, `👋 ${t('sys.left')}`);
+        this._dropSession(peerId, t('sys.left'));
         break;
     }
   }
@@ -1489,6 +1502,16 @@ class DeadDrop {
       this.el.recordBtn.classList.add('recording');
       this.el.recordBtn.textContent = '⏹️';
       this._recTimer = setTimeout(() => this._stopRecording(), 120000); // 2 min cap
+      // The microphone is live: say so where the eye already is, with the time.
+      const started = Date.now();
+      const tick = () => {
+        const secs = Math.floor((Date.now() - started) / 1000);
+        this.el.msgInput.placeholder = t('rec.active')
+          .replace('{time}', `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`);
+      };
+      tick();
+      this._recClock = setInterval(tick, 1000);
+      this.el.chatFooter?.classList.add('recording');
     } catch {
       this._renderSystem(t('err.micDenied'));
     }
@@ -1500,6 +1523,9 @@ class DeadDrop {
   }
 
   _finishRecording() {
+    clearInterval(this._recClock);
+    this.el.chatFooter?.classList.remove('recording');
+    this._updateComposerHint();
     this.el.recordBtn.classList.remove('recording');
     this.el.recordBtn.textContent = '🎙️';
     if (this._recordStream) {

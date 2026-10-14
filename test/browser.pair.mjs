@@ -221,7 +221,10 @@ ok(await bob.eval(`!document.querySelector('#messages img[src="x"]')`),
 // timestamped name handed the other side the sender's clock to the
 // millisecond.
 await alice.eval(`document.querySelector('#record-btn').click(); true`);
-await sleep(1500);
+const recHint = await waitFor(() => alice.eval(
+  `document.querySelector('.chat-footer.recording') && document.querySelector('#msg-input').placeholder`), { timeout: 10000 });
+ok(/🔴/.test(recHint || ''), `recording is visible while the microphone is live (${recHint || 'no sign'})`);
+await sleep(1200);
 await alice.eval(`document.querySelector('#record-btn').click(); true`);
 const voice = await waitFor(() => bob.eval(`(() => {
   const link = [...document.querySelectorAll('.file-download')]
@@ -231,11 +234,21 @@ const voice = await waitFor(() => bob.eval(`(() => {
 })()`), { timeout: 30000 });
 ok(voice && /^voice\.(webm|ogg)$/.test(voice.name), `a voice note carries no timestamp (${voice?.name})`);
 ok(voice && voice.label === '🎙️ Voice message', `and is shown as a voice message (${voice?.label})`);
+ok(await alice.eval(`!document.querySelector('.chat-footer.recording')
+  && document.querySelector('#msg-input').placeholder !== ''
+  && !/🔴/.test(document.querySelector('#msg-input').placeholder)`),
+  'the recording sign clears once the note is sent');
 
 // ── Second session: a saved contact must not need a new comparison ──
 // Fresh pages in the same browser contexts, so cookies and the pinned identity
 // survive exactly as they would for a returning user.
 await alice.goto(BASE + '/');
+// Left alone, B reads who went and what the room is waiting for now.
+const leftNote = await waitFor(async () => (await bob.notices()).find((line) => line.includes('👋')) || false,
+  { timeout: 15000 });
+ok(leftNote && /^👋 \S.* (left the room|disconnected)$/.test(leftNote), `the departure names who left, first (${leftNote})`);
+ok(await waitFor(() => bob.eval(`document.querySelector('#msg-input').placeholder === 'Waiting for someone to join…'`)),
+  'the disabled message field says it is waiting for someone, not "Type a message"');
 await bob.goto(BASE + '/');
 await waitFor(() => alice.eval(`!document.querySelector('#landing').classList.contains('hidden')`));
 await waitFor(() => bob.eval(`!document.querySelector('#landing').classList.contains('hidden')`));
