@@ -1512,7 +1512,10 @@ class DeadDrop {
     this._recorder = null;
     if (!blob.size || !this.encrypted) return;
     const ext = type.includes('ogg') ? 'ogg' : 'webm';
-    this.sendFile(new File([blob], `voice-${Date.now()}.${ext}`, { type }));
+    // A fixed name: a timestamp here told the other side the exact
+    // millisecond of the sender's clock. The type says it is audio; the
+    // receiver labels it as a voice message.
+    this.sendFile(new File([blob], `voice.${ext}`, { type }));
   }
 
   /* ── Messaging ── */
@@ -2035,7 +2038,9 @@ class DeadDrop {
       preview && h('div', { class: 'file-content' }, preview),
       h('div', { class: 'file-details' },
         !preview && h('span', { class: 'file-icon', 'aria-hidden': 'true', text: '📄' }),
-        h('span', { class: 'file-name', text: meta.fileName }),
+        h('span', { class: 'file-name',
+          text: /^voice\.(webm|ogg)$/.test(meta.fileName) && meta.fileType.startsWith('audio/')
+            ? t('voice.label') : meta.fileName }),
         h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) }),
         h('a', {
           href: blobUrl, download: meta.fileName, class: 'file-download',

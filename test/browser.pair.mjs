@@ -217,6 +217,21 @@ ok(nasty, 'the hostile filename arrives as text, not markup');
 ok(await bob.eval(`!document.querySelector('#messages img[src="x"]')`),
   'no element was created from the filename');
 
+// A voice note is named for what it is, not for when it was made: a
+// timestamped name handed the other side the sender's clock to the
+// millisecond.
+await alice.eval(`document.querySelector('#record-btn').click(); true`);
+await sleep(1500);
+await alice.eval(`document.querySelector('#record-btn').click(); true`);
+const voice = await waitFor(() => bob.eval(`(() => {
+  const link = [...document.querySelectorAll('.file-download')]
+    .find((a) => /^voice/.test(a.getAttribute('download')));
+  return link && { name: link.getAttribute('download'),
+    label: link.closest('.file-msg').querySelector('.file-name').textContent };
+})()`), { timeout: 30000 });
+ok(voice && /^voice\.(webm|ogg)$/.test(voice.name), `a voice note carries no timestamp (${voice?.name})`);
+ok(voice && voice.label === '🎙️ Voice message', `and is shown as a voice message (${voice?.label})`);
+
 // ── Second session: a saved contact must not need a new comparison ──
 // Fresh pages in the same browser contexts, so cookies and the pinned identity
 // survive exactly as they would for a returning user.
