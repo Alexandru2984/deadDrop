@@ -106,6 +106,9 @@ ok(JSON.stringify(aLocal) !== JSON.stringify(bLocal),
 // ── Ring, accept, connect ──
 await alice.startCall();
 ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings');
+const ringText = await bob.eval(`document.querySelector('#incoming-call-text').textContent`);
+const callerLabel = await bob.eval(`document.querySelector('.verify-row .peer-tag').textContent`);
+ok(ringText.includes(callerLabel), `the ring names who is calling (${ringText})`);
 ok(await bob.mediaState().then((s) => s.remote === null),
   'nothing is playing at B while the call is still only ringing');
 
@@ -122,6 +125,11 @@ const aliceMedia = await waitFor(async () => {
   return s.remote && s.remote.live > 0 ? s : false;
 }, { timeout: 45000 });
 ok(aliceMedia, 'peer A receives live remote tracks');
+const clock = await waitFor(async () => {
+  const text = await alice.eval(`document.querySelector('#call-status-bar').textContent`);
+  return /🔒 .+ · \d\d:\d\d/.test(text) ? text : false;
+}, { timeout: 5000 });
+ok(clock, `a live call shows who it is with and for how long (${clock || 'nothing'})`);
 
 ok(bobMedia && bobMedia.remote.audio === 1 && bobMedia.remote.video === 1,
   `B gets one audio and one video track (${bobMedia?.remote.audio}a/${bobMedia?.remote.video}v)`);

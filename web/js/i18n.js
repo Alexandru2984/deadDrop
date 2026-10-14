@@ -119,6 +119,13 @@ const STRINGS = {
     'privacy.reveal': 'Tap to reveal',
     'typing': 'peer is typing…',
     'call.incoming': 'Incoming call…',
+    'call.incomingFrom': '📞 {peer} is calling…',
+    'call.incomingVideo': '📹 {peer} is calling (video)…',
+    'call.active': '🔒 {peer} · {time}',
+    'call.show': 'Back to the call',
+    'title.panic': 'Panic — clear this tab and log out (or press Esc three times)',
+    'title.burn': 'Burn after reading',
+    'title.ttl': 'Cooperative deletion timer',
     'call.accept': 'Accept',
     'call.reject': 'Reject',
     'st.waiting': '⏳ Waiting for peer…',
@@ -299,7 +306,14 @@ const STRINGS = {
     'privacy.hidden': 'Ascuns cât timp fila e în fundal',
     'privacy.reveal': 'Atinge pentru a dezvălui',
     'typing': 'partenerul scrie…',
-    'call.incoming': 'Apel în curs…',
+    'call.incoming': 'Apel primit…',
+    'call.incomingFrom': '📞 {peer} te sună…',
+    'call.incomingVideo': '📹 {peer} te sună (video)…',
+    'call.active': '🔒 {peer} · {time}',
+    'call.show': 'Înapoi la apel',
+    'title.panic': 'Panică — șterge acest tab și deconectează-te (sau apasă Esc de trei ori)',
+    'title.burn': 'Se șterge după citire',
+    'title.ttl': 'Temporizator de ștergere cooperativă',
     'call.accept': 'Acceptă',
     'call.reject': 'Respinge',
     'st.waiting': '⏳ Se așteaptă partenerul…',
@@ -396,6 +410,9 @@ export function applyI18n() {
   // which is worse than silence because it sounds like information.
   document.querySelectorAll('[data-i18n-aria]').forEach((el) => {
     el.setAttribute('aria-label', t(el.dataset.i18nAria));
+    // The hover tooltip says the same thing, in the same language; a control
+    // with its own data-i18n-title keeps that one.
+    if (el.hasAttribute('title') && !el.dataset.i18nTitle) el.title = t(el.dataset.i18nAria);
   });
 }
 

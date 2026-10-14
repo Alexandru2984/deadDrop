@@ -217,6 +217,7 @@ class DeadDrop {
       // Call
       callBtn:       $('#call-btn'),
       incomingCall:  $('#incoming-call'),
+      incomingText:  $('#incoming-call-text'),
       acceptCall:    $('#accept-call'),
       rejectCall:    $('#reject-call'),
       callOverlay:   $('#call-overlay'),
@@ -1738,6 +1739,9 @@ class DeadDrop {
     this._callRole = 'callee';
     this.callState = 'incoming';
     this._callVideo = msg.video;
+    // Name the caller: in a room you have verified, the label is who it is.
+    this.el.incomingText.textContent = t(msg.video ? 'call.incomingVideo' : 'call.incomingFrom')
+      .replace('{peer}', session.label);
     this.el.incomingCall.classList.remove('hidden');
   }
 
@@ -1782,7 +1786,7 @@ class DeadDrop {
         this._callConn(), { type: 'call-answer', sdp: JSON.stringify(answer) },
       );
       this.callState = 'active';
-      this._showCallStatus('');
+      this._startCallClock();
       this._updateCallBtn(true);
     } catch (err) {
       console.error('Call offer handling failed:', err);
@@ -1795,7 +1799,7 @@ class DeadDrop {
       const answer = JSON.parse(msg.sdp);
       await this._callConn().completeMedia(answer);
       this.callState = 'active';
-      this._showCallStatus('');
+      this._startCallClock();
       this._updateCallBtn(true);
     } catch (err) {
       console.error('Call answer handling failed:', err);
@@ -1822,6 +1826,8 @@ class DeadDrop {
 
   _endCallCleanup() {
     this.callState = 'idle';
+    clearInterval(this._callClock);
+    this._callClock = null;
     this._callConn()?.stopMedia();
     this._callPeerId = null;
     this._callRole = null;
@@ -1857,6 +1863,24 @@ class DeadDrop {
     else if (!show && wasOpen) this._restoreFocus();
   }
 
+  /** Who the call is with and how long it has run — and that it is encrypted. */
+  _startCallClock() {
+    clearInterval(this._callClock);
+    const started = Date.now();
+    const label = this.peers.get(this._callPeerId)?.label ?? '';
+    const tick = () => {
+      const secs = Math.floor((Date.now() - started) / 1000);
+      const h = Math.floor(secs / 3600);
+      const mm = String(Math.floor(secs / 60) % 60).padStart(2, '0');
+      const ss = String(secs % 60).padStart(2, '0');
+      this._showCallStatus(t('call.active')
+        .replace('{peer}', label)
+        .replace('{time}', h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`));
+    };
+    tick();
+    this._callClock = setInterval(tick, 1000);
+  }
+
   _showCallStatus(text) {
     this.el.callStatusBar.textContent = text;
     this.el.callStatusBar.classList.toggle('hidden', !text);
@@ -1864,7 +1888,7 @@ class DeadDrop {
 
   _updateCallBtn(inCall) {
     this.el.callBtn.textContent = inCall ? '🟢' : '📞';
-    this.el.callBtn.title = inCall ? 'Show call' : 'Start call';
+    this.el.callBtn.title = t(inCall ? 'call.show' : 'aria.call');
   }
 
   _toggleMic() {
