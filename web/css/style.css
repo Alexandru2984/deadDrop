@@ -773,6 +773,17 @@ select { cursor: pointer; width: auto; }
   flex-shrink: 0;
 }
 
+/* On a wide screen a conversation spread edge to edge puts one side's
+   messages a whole monitor away from the other's. Keep the room a readable
+   column; the padding does it, so the scrollbar stays at the window edge. */
+@media (min-width: 1000px) {
+  .messages,
+  .chat-footer {
+    padding-left: max(16px, calc((100% - 880px) / 2));
+    padding-right: max(16px, calc((100% - 880px) / 2));
+  }
+}
+
 .controls {
   display: flex;
   gap: 14px;
