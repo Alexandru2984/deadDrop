@@ -8,7 +8,7 @@
 
 const STRINGS = {
   en: {
-    'tagline': 'Pseudonymous · Verified E2EE · Ephemeral',
+    'tagline': 'Pseudonymous · Verified\u00a0E2EE · Ephemeral',
     'boot.checking': 'Checking this browser…',
     'err.serverAuth': 'Server authentication failed — do not trust this connection.',
     'err.connection': 'Connection failed',
@@ -187,7 +187,7 @@ const STRINGS = {
     'qr.cameraFail': 'Camera unavailable — compare the emoji code instead',
   },
   ro: {
-    'tagline': 'Pseudonim · E2EE verificat · Efemer',
+    'tagline': 'Pseudonim · E2EE\u00a0verificat · Efemer',
     'boot.checking': 'Se verifică browserul…',
     'err.serverAuth': 'Autentificarea serverului a eșuat — nu avea încredere în această conexiune.',
     'err.connection': 'Conexiune eșuată',
@@ -256,7 +256,7 @@ const STRINGS = {
     'boot.stillSafe': 'Mesajele sunt protejate oricum.',
     'auth.user': 'Utilizator',
     'auth.pass': 'Parolă',
-    'auth.invite': 'Cod de invitație (doar pentru înregistrare)',
+    'auth.invite': 'Invitație (doar la înregistrare)',
     'auth.login': 'Autentificare',
     'auth.register': 'Înregistrare',
     'auth.hint': 'Parola nu îți părăsește browserul — autentificarea o dovedește prin SRP. Fără email sau recuperare. Înregistrarea cere invitație.',

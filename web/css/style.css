@@ -204,7 +204,12 @@ select {
   /* Three separator-joined words: let the browser even the lines rather than
      dropping a single trailing word onto its own row on a narrow screen. */
   text-wrap: balance;
-  max-width: 34ch;
+}
+
+/* At 2px tracking the line is a few pixels too wide for a phone and broke
+   after a separator, leaving a dangling "·". At 1px all three fit on one. */
+@media (max-width: 480px) {
+  .tagline { letter-spacing: 1px; }
 }
 
 h1, h2, .auth-hint, .account-hint, .verify-hint {
