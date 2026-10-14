@@ -45,8 +45,10 @@ func TestSignalingFlow(t *testing.T) {
 	}
 	t.Logf("Peer A = %s", welcomeA.PeerID)
 
-	// A joins a server-shaped 96-bit room.
+	// A joins a server-shaped 96-bit room. Alone in it, A hears only the
+	// confirmation — the one signal that it is waiting rather than joining.
 	connA.WriteJSON(SignalMessage{Type: "join", Room: "abcdef123456abcdef123456"})
+	expectSignal(t, connA, "joined", "")
 
 	// Connect Peer B
 	connB, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -81,6 +83,9 @@ func TestSignalingFlow(t *testing.T) {
 	if msgB.Type != "peer-joined" || msgB.PeerID != welcomeA.PeerID {
 		t.Fatalf("B expected peer-joined(A), got %+v", msgB)
 	}
+	// Everyone already present is announced before the confirmation, so a
+	// client that sees "joined" with nobody announced really is alone.
+	expectSignal(t, connB, "joined", "")
 
 	// A sends a fake offer to B
 	payload, _ := json.Marshal(`{"type":"offer","sdp":"fake"}`)
@@ -337,7 +342,7 @@ func TestDoubleJoinNoPanic(t *testing.T) {
 	var welcomeA SignalMessage
 	connA.ReadJSON(&welcomeA)
 	connA.WriteJSON(SignalMessage{Type: "join", Room: "aabbcc000001aabbcc000001"})
-	time.Sleep(100 * time.Millisecond)
+	expectSignal(t, connA, "joined", "")
 
 	// Connect peer B and join room1 (to observe events)
 	connB, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
@@ -350,11 +355,10 @@ func TestDoubleJoinNoPanic(t *testing.T) {
 	connB.WriteJSON(SignalMessage{Type: "join", Room: "aabbcc000001aabbcc000001"})
 	time.Sleep(100 * time.Millisecond)
 
-	// Drain peer-joined notifications
-	connA.SetReadDeadline(time.Now().Add(1 * time.Second))
-	connA.ReadJSON(&SignalMessage{})
-	connB.SetReadDeadline(time.Now().Add(1 * time.Second))
-	connB.ReadJSON(&SignalMessage{})
+	// Drain peer-joined notifications and B's confirmation
+	expectSignal(t, connA, "peer-joined", welcomeB.PeerID)
+	expectSignal(t, connB, "peer-joined", welcomeA.PeerID)
+	expectSignal(t, connB, "joined", "")
 
 	// A joins a DIFFERENT room — should be removed from room1 first
 	connA.WriteJSON(SignalMessage{Type: "join", Room: "aabbcc000002aabbcc000002"})
@@ -646,5 +650,19 @@ func TestCapacityErrorsDoNotDistinguishRoomFromServerLimit(t *testing.T) {
 	}
 	if !errors.Is(serverFullErr, errRoomUnavailable) {
 		t.Fatalf("server cap error = %v, want errRoomUnavailable", serverFullErr)
+	}
+}
+
+// expectSignal reads the next message and fails unless it has the given type
+// (and, when peerID is set, that peer).
+func expectSignal(t *testing.T, conn *websocket.Conn, typ, peerID string) {
+	t.Helper()
+	var msg SignalMessage
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("expected %s, read failed: %v", typ, err)
+	}
+	if msg.Type != typ || (peerID != "" && msg.PeerID != peerID) {
+		t.Fatalf("expected %s %s, got %+v", typ, peerID, msg)
 	}
 }

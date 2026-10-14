@@ -327,6 +327,23 @@ await sessionEval(`
   })()
 `);
 
+// Typing a code nobody is using yet puts you in that room, alone. The client
+// once sat on "Joining room…" forever because nothing came back to say so.
+const emptyCode = [...crypto.getRandomValues(new Uint8Array(12))]
+  .map((b) => b.toString(16).padStart(2, '0')).join('');
+await sessionEval(`
+  document.querySelector('#room-code-input').value = '${emptyCode}';
+  document.querySelector('#join-room').click();
+  true
+`);
+const aloneInRoom = await waitFor(async () => sessionEval(
+  `document.querySelector('#status').classList.contains('waiting')
+   && !!document.querySelector('.share-link')`).catch(() => false), { timeout: 15000 });
+ok(aloneInRoom, 'joining an empty room by code ends in "waiting", with the invitation to share');
+await sessionEval(`location.reload(); true`);
+await waitFor(async () => sessionEval(
+  `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });
+
 // Enter a room so the chat view, header and verify bar all render.
 await sessionEval(`document.querySelector('#create-room').click(); true`);
 const inRoom = await waitFor(async () => sessionEval(

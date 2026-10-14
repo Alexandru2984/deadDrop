@@ -83,6 +83,7 @@ class DeadDrop {
     this.username = null;
     this.peerId = null;
     this.roomCode = null;
+    this._announced = new Set();
     this._verifyExpanded = false;
     this.ws = null;
     // Mesh: one pairwise session per remote peer — its own WebRTC connection AND
@@ -893,6 +894,9 @@ class DeadDrop {
     switch (msg.type) {
       case 'peer-joined':
         if (!this._validPeerID(msg.peerId) || msg.peerId === this.peerId) return;
+        // The later of a pair waits for the other's offer before it has a
+        // session, so remember who the server announced as well.
+        this._announced.add(msg.peerId);
         if (!this.peers.has(msg.peerId) && this.peers.size >= MAX_REMOTE_PEERS) return;
         if (!this.peers.has(msg.peerId)) {
           this._setStatus('connecting', t('st.peerFound'));
@@ -906,7 +910,20 @@ class DeadDrop {
 
       case 'peer-left':
         if (!this._validPeerID(msg.peerId)) return;
+        this._announced.delete(msg.peerId);
         this._dropSession(msg.peerId, t('st.peerLeft'));
+        break;
+
+      case 'joined':
+        // The server has us in the room. If nobody else is, this is a wait,
+        // not a join in progress — say so, and offer the invitation, since
+        // whoever entered a code first is the one who has to share it.
+        if (this.peers.size === 0 && this._announced.size === 0) {
+          this._setStatus('waiting', t('st.waiting'));
+          if (!this.el.messages.querySelector('.share-link') && this.roomCode) {
+            this._renderShareLink(this.roomCode);
+          }
+        }
         break;
 
       case 'error':
@@ -2210,6 +2227,7 @@ class DeadDrop {
     }
     this.peerId = null;
     this.roomCode = null;
+    this._announced = new Set();
     this._signalQ = Promise.resolve();
     this.iceConfig = { iceServers: [] };
     this._iceExpiresAt = 0;
@@ -2360,6 +2378,7 @@ class DeadDrop {
     if (this.el.messages) this.el.messages.replaceChildren();
     if (this.el.msgInput) this.el.msgInput.value = '';
     this.roomCode = null;
+    this._announced = new Set();
     this.username = null;
     // wipe=1 also asks the browser to drop cache and origin storage; a plain
     // logout leaves those alone.

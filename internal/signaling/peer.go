@@ -254,6 +254,15 @@ func (p *Peer) handleMessage(msg SignalMessage) {
 			return
 		}
 		p.joinTimer.Stop()
+		// Confirm the join. A room is created by joining it, so the first person
+		// in has nothing else to hear back and could not tell "in an empty room"
+		// from "still joining". The hub queued a peer-joined for everyone already
+		// present on this same channel before JoinRoom returned, so they arrive
+		// first.
+		data, _ := json.Marshal(SignalMessage{Type: "joined"})
+		if !safeSend(p.send, data) {
+			p.terminate()
+		}
 
 	case "offer", "answer", "ice-candidate":
 		if !p.validRelayMessage(msg) {
