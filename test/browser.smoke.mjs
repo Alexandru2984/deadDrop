@@ -243,6 +243,15 @@ await sessionSend('Runtime.enable');
 await sessionSend('Log.enable');
 await sessionSend('Page.enable');
 
+// Keep a handle on the page's sockets so a dropped connection can be
+// simulated. Injected through the protocol, outside the page's CSP.
+await sessionSend('Page.addScriptToEvaluateOnNewDocument', { source: `
+  window.__sockets = [];
+  const Native = WebSocket;
+  window.WebSocket = class extends Native {
+    constructor(...args) { super(...args); window.__sockets.push(this); }
+  };
+` });
 await sessionSend('Page.navigate', { url: BASE + '/' });
 const booted = await waitFor(async () => sessionEval(
   `!!document.querySelector('#auth') && !document.querySelector('#auth').classList.contains('hidden')`,
@@ -353,6 +362,19 @@ const aloneInRoom = await waitFor(async () => sessionEval(
   `document.querySelector('#status').classList.contains('waiting')
    && !!document.querySelector('.share-link')`).catch(() => false), { timeout: 15000 });
 ok(aloneInRoom, 'joining an empty room by code ends in "waiting", with the invitation to share');
+
+// A phone changing networks drops the signaling socket. Someone waiting alone
+// must get back into the same room by themselves, or whoever they invited
+// arrives to nobody.
+await sessionEval(`window.__sockets.at(-1).close(); true`);
+const reconnecting = await waitFor(() => sessionEval(
+  `document.querySelector('#status').classList.contains('disconnected')`), { timeout: 5000 });
+ok(reconnecting, 'a dropped connection is shown as reconnecting, not as waiting');
+const rejoined = await waitFor(() => sessionEval(
+  `document.querySelector('#status').classList.contains('waiting')
+   && window.__sockets.length >= 2 && window.__sockets.at(-1).readyState === 1
+   && document.querySelectorAll('.share-link').length === 1`), { timeout: 15000 });
+ok(rejoined, 'it rejoins the same room on its own, with one invitation on screen');
 await sessionEval(`location.reload(); true`);
 await waitFor(async () => sessionEval(
   `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });

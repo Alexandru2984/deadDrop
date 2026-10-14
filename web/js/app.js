@@ -895,7 +895,8 @@ class DeadDrop {
       socket.onclose = () => {
         clearTimeout(timer);
         if (generation !== this._signalGeneration || this.ws !== socket) return;
-        this._setStatus('disconnected', t('st.serverLost'));
+        if (settled && this.roomCode) this._onSignalingLost();
+        else this._setStatus('disconnected', t('st.serverLost'));
         if (!settled) {
           settled = true;
           reject(new Error('WebSocket closed before welcome'));
@@ -912,6 +913,52 @@ class DeadDrop {
         }
       };
     });
+  }
+
+  /**
+   * The signaling socket dropped while in a room — on a phone, usually just a
+   * network change. Conversations already running are direct and keep going;
+   * only new arrivals need the server. So the client never tears a live
+   * session down to reconnect (a rejoin is a new peer id, and a new safety
+   * code to compare): it waits until the room is empty, then rejoins the same
+   * code so whoever it is waiting for can still reach it.
+   */
+  _onSignalingLost() {
+    this.ws = null;
+    if (this._verifiedSessions().length > 0) {
+      if (!this._warnedSignalLost) {
+        this._warnedSignalLost = true;
+        this._renderSystem(t('sys.signalLost'));
+      }
+    } else {
+      this._setStatus('disconnected', t('st.reconnecting'));
+    }
+    this._scheduleRejoin(2000);
+  }
+
+  _scheduleRejoin(delay) {
+    clearTimeout(this._rejoinTimer);
+    const room = this.roomCode;
+    this._rejoinTimer = setTimeout(async () => {
+      if (!room || this.roomCode !== room || this.ws) return;
+      const next = Math.min(delay * 2, 30000);
+      if (this.peers.size > 0) { this._scheduleRejoin(next); return; }
+      this.peerId = null;
+      this._announced = new Set();
+      try {
+        await this._connectSignaling();
+      } catch {
+        this.ws = null;
+        if (this.roomCode === room) {
+          this._setStatus('disconnected', t('st.reconnecting'));
+          this._scheduleRejoin(next);
+        }
+        return;
+      }
+      if (this.roomCode !== room) return;
+      this._warnedSignalLost = false;
+      this.ws.send(JSON.stringify({ type: 'join', room }));
+    }, delay);
   }
 
   async _onSignal(msg) {
@@ -1066,7 +1113,8 @@ class DeadDrop {
       this._setStatus('connecting', t('st.exchanging'));
     } else {
       this.encrypted = false;
-      this._setStatus('waiting', t('st.waiting'));
+      // Alone with no server connection is not waiting: nobody can arrive.
+      this._setStatus(this.ws ? 'waiting' : 'disconnected', t(this.ws ? 'st.waiting' : 'st.reconnecting'));
       this._hideTyping();
     }
     // Calls stay strictly 1:1 and require both human identity verification and
@@ -2268,6 +2316,9 @@ class DeadDrop {
     // Invalidate already-queued asynchronous signaling work before destroying
     // its sessions, socket, and ICE credentials.
     this._signalGeneration++;
+    clearTimeout(this._rejoinTimer);
+    this._rejoinTimer = null;
+    this._warnedSignalLost = false;
     this._closeQrVerify();
     this._stopCoverTraffic();
     this._endCallCleanup();

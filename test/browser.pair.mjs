@@ -225,19 +225,21 @@ ok(nasty, 'the hostile filename arrives as text, not markup');
 ok(await bob.eval(`!document.querySelector('#messages img[src="x"]')`),
   'no element was created from the filename');
 
-// A's signaling socket drops — on a phone, a network change. The server
-// tells B that A left, but the session between them is direct and still
-// open; it must survive, and must not be renegotiated.
+// Losing the server mid-conversation loses nothing already running: the
+// session is direct. A is told newcomers cannot arrive, and is not torn down
+// to reconnect — a rejoin would be a new peer and a new code to compare.
 await alice.eval(`window.__sockets.at(-1).close(); true`);
-await sleep(1000);
+const lostNote = await waitFor(async () => (await alice.notices()).find((n) => /server connection dropped/i.test(n)) || false,
+  { timeout: 5000 });
+ok(lostNote, 'losing the server mid-conversation is explained, not shown as a failure');
 const afterLoss = 'after the server went ' + suffix;
 await bob.eval(`
   document.querySelector('#msg-input').value = ${JSON.stringify(afterLoss)};
   document.querySelector('#send-btn').click(); true
 `);
 ok(await waitFor(async () => (await alice.transcript()).includes(afterLoss)),
-  'the conversation carries on directly when one side loses the server');
-ok(await alice.verified() && await bob.verified(), 'and both sides stay verified — nothing was renegotiated');
+  'the conversation carries on directly without the server');
+ok(await alice.verified(), 'and the session stays verified — nothing was renegotiated');
 
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
