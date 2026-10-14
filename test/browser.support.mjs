@@ -17,7 +17,7 @@
  * No invite and no account: nothing here gets as far as registering.
  */
 
-import { Peer, launchBrowser, sleep } from './lib/browser.mjs';
+import { Peer, launchBrowser, sleep, waitFor } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 
@@ -93,7 +93,10 @@ await cdp.send('Page.addScriptToEvaluateOnNewDocument', {
   source: `Object.defineProperty(window, 'indexedDB', { value: null, configurable: true });`,
 }, noIdb.sessionId);
 await noIdb.goto(BASE + '/');
-ok(await noIdb.eval(`!document.querySelector('#auth').classList.contains('hidden')`),
+// The sign-in page follows the session check, a round trip after boot; read
+// it once it has had the chance to appear rather than in the same instant.
+ok(await waitFor(() => noIdb.eval(`!document.querySelector('#auth').classList.contains('hidden')`),
+  { timeout: 10000 }),
   'a browser without IndexedDB still gets a working sign-in');
 const note = await noIdb.eval(`document.querySelector('.boot-note')?.textContent || ''`);
 ok(note.includes('saved contacts'),
