@@ -174,9 +174,26 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
-.account-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.account-actions .btn { flex: 1; }
 .account-hint { color: var(--dim); font-size: 11px; line-height: 1.5; }
+
+/* Each thing the panel does is its own group with its explanation beside it;
+   deleting the account sits apart, past a rule, not one button over from
+   setting a password. */
+.account-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.account-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.account-danger { padding-top: 16px; margin-top: 8px; border-top-color: rgba(255, 68, 85, 0.35); }
 
 .logo {
   font-size: 56px;
