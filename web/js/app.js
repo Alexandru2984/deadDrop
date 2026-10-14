@@ -1167,6 +1167,7 @@ class DeadDrop {
     this.el.verifyBar.classList.remove('hidden');
     this.el.verifyBar.classList.toggle('verified', enc.every((s) => s.verified));
     this.el.verifyBar.classList.toggle('expanded', this._verifyExpanded);
+    this.el.verifyBar.classList.toggle('multi', enc.length > 1);
     for (const [peerId, s] of this.peers) {
       if (!s.encrypted) continue;
       const row = document.createElement('div');

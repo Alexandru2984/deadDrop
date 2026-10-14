@@ -619,6 +619,15 @@ select { cursor: pointer; width: auto; }
   font-size: 14px;
 }
 .verify-bar.verified:not(.expanded) .verify-more { order: 2; margin-left: auto; }
+/* A group: one row per person, so a full-width warning under each code
+   stacked the bar past half the screen before anyone could compare. The
+   route sits as an icon beside the code instead — its sentence is the
+   tooltip, the screen-reader text, and a line in the conversation — and
+   however many people join, the bar scrolls rather than taking the room. */
+.verify-bar.multi { max-height: 50dvh; overflow-y: auto; overscroll-behavior: contain; }
+.verify-bar.multi:not(.verified) .verify-route { flex-basis: auto; order: 1; font-size: 18px; }
+.verify-bar.multi:not(.verified) .verify-actions { order: 2; }
+.verify-bar.multi:not(.verified) .verify-route .notice-text,
 .verify-bar.verified:not(.expanded) .notice-text {
   position: absolute;
   width: 1px;
