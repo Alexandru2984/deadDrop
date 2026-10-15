@@ -401,6 +401,15 @@ class DeadDrop {
       const file = e.dataTransfer.files[0];
       if (file && this.encrypted) this.sendFile(file);
     });
+    // A screenshot pasted into the message field is sent like an attachment —
+    // through the same metadata stripping. Pasted text is left to the field.
+    this.el.msgInput.addEventListener('paste', (e) => {
+      const files = [...(e.clipboardData?.files || [])];
+      if (!files.length) return;
+      e.preventDefault();
+      if (!this.encrypted) return;
+      for (const file of files.slice(0, 5)) this.sendFile(file);
+    });
 
     // Call controls
     this.el.callBtn.addEventListener('click', () => this._onCallBtnClick());

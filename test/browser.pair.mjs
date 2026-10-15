@@ -298,6 +298,22 @@ ok(links && links.length === 1 && links[0].href === 'https://example.com/a?b=1' 
 ok(links && /noopener/.test(links[0].rel) && /noreferrer/.test(links[0].rel) && links[0].target === '_blank',
   'and it opens apart from this page, sending no referrer');
 
+// A pasted screenshot goes out as an attachment, not as nothing.
+await alice.eval(`(async () => {
+  const canvas = new OffscreenCanvas(20, 10);
+  canvas.getContext('2d').fillRect(0, 0, 20, 10);
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  const data = new DataTransfer();
+  data.items.add(new File([blob], 'Screenshot 2026-10-15 at 10.11.12.png', { type: 'image/png' }));
+  document.querySelector('#msg-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  return true;
+})()`);
+const pasted = await waitFor(() => bob.eval(`(() => {
+  const link = [...document.querySelectorAll('.file-download')].find((a) => a.getAttribute('download') === 'photo.png');
+  return !!link && !!link.closest('.file-msg').querySelector('.file-preview-img');
+})()`), { timeout: 20000 });
+ok(pasted, 'a pasted screenshot arrives as an image, under a neutral name');
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.
