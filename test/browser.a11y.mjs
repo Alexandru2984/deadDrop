@@ -15,7 +15,7 @@
  * as "skull".
  */
 
-import { Peer, launchBrowser, waitFor } from './lib/browser.mjs';
+import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITE = process.env.DD_INVITE || '';
@@ -181,12 +181,13 @@ console.log('\ncontrast');
 // Computed from what the browser actually paints, not from the palette: text
 // inherits colours through places nobody thinks to check, and a token that
 // passes in isolation can still land on a surface where it does not.
-const lowContrast = await peer.eval(`
+const contrastIssues = () => peer.eval(`
   (() => {
     const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
     const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
     const rgb = (s) => (s.match(/\\d+/g) || []).slice(0, 3).map(Number);
-    const alpha = (s) => { const m = s.match(/rgba?\\([^)]*?([\\d.]+)\\s*\\)/); return m ? Number(m[1]) : 1; };
+    // rgb() has no alpha; only a fourth component is one.
+    const alpha = (s) => { const n = s.match(/[\\d.]+/g) || []; return n.length >= 4 ? Number(n[3]) : 1; };
 
     // The first ancestor that actually paints something behind this text.
     const backdrop = (el) => {
@@ -209,14 +210,25 @@ const lowContrast = await peer.eval(`
       if (!own) continue;
       const r = el.getBoundingClientRect();
       const style = getComputedStyle(el);
-      if (r.width < 1 || r.height < 1 || style.visibility === 'hidden' || Number(style.opacity) < 0.5) continue;
+      if (r.width < 1 || r.height < 1 || style.visibility === 'hidden') continue;
+      // WCAG exempts inactive controls: a disabled button is meant to look off.
+      if (el.closest(':disabled')) continue;
 
       const size = parseFloat(style.fontSize);
       const bold = Number(style.fontWeight) >= 700;
       // WCAG's own definition of large text: 24px, or 18.66px when bold.
       const large = size >= 24 || (bold && size >= 18.66);
       const need = large ? 3 : 4.5;
-      const got = ratio(rgb(style.color), backdrop(el));
+      // What is painted, not what is declared: text drawn at reduced opacity —
+      // its own, an ancestor's, or an rgba colour — is blended into whatever
+      // is behind it, and that blend is what has to be readable.
+      let opacity = alpha(style.color);
+      for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+        opacity *= Number(getComputedStyle(n).opacity);
+      }
+      const behind = backdrop(el);
+      const painted = rgb(style.color).map((c, i) => c * opacity + behind[i] * (1 - opacity));
+      const got = ratio(painted, behind);
       if (got < need) {
         bad.push(\`\${el.id || el.className || el.tagName}: \${got.toFixed(2)} (needs \${need})\`);
       }
@@ -224,8 +236,33 @@ const lowContrast = await peer.eval(`
     return [...new Set(bad)];
   })()
 `);
+
+// Every view with text on it, not only the one the suite happens to be on:
+// the privacy switches and the account panel hold the smallest, faintest text.
+const views = {
+  chat: `true`,
+  'landing, privacy options and account panel open': `
+    document.querySelector('#chat-wrap').classList.add('hidden');
+    document.querySelector('#landing').classList.remove('hidden');
+    document.querySelector('#account-panel').classList.remove('hidden');
+    document.querySelector('.prefs').open = true; true`,
+  'sign-in': `
+    document.querySelector('#landing').classList.add('hidden');
+    document.querySelector('#auth').classList.remove('hidden'); true`,
+};
+const lowContrast = [];
+for (const [view, show] of Object.entries(views)) {
+  await peer.eval(show);
+  await sleep(100);
+  for (const issue of await contrastIssues()) lowContrast.push(`${view} → ${issue}`);
+}
+await peer.eval(`
+  document.querySelector('#auth').classList.add('hidden');
+  document.querySelector('#account-panel').classList.add('hidden');
+  document.querySelector('.prefs').open = false;
+  document.querySelector('#chat-wrap').classList.remove('hidden'); true`);
 ok(lowContrast.length === 0,
-  `every piece of visible text meets WCAG AA${lowContrast.length ? ': ' + lowContrast.slice(0, 6).join('; ') : ''}`);
+  `every piece of visible text meets WCAG AA${lowContrast.length ? ': ' + lowContrast.slice(0, 12).join('; ') : ''}`);
 
 console.log('\ndecoration is not announced');
 ok(await peer.eval(`[...document.querySelectorAll('.logo')].every((el) => el.getAttribute('aria-hidden') === 'true')`),
