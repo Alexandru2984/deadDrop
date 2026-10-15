@@ -9,6 +9,60 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+No protocol change: tabs on 0.4.0 and on this talk to each other.
+
+### Security
+
+- **Messages no longer carry the sender's clock.** Every encrypted envelope,
+  text body and file description held `Date.now()` to the millisecond. The
+  receiver never used it, but it handed the other person this device's clock
+  skew — enough to recognise the same device in a later room, which sessions
+  without saved contacts promise cannot be done.
+- **Voice notes and photos no longer name the moment they were made.** Voice
+  notes went out as `voice-<milliseconds>.webm`; they are `voice.webm` now and
+  shown as a voice message. With photo metadata stripping on, a camera- or
+  screenshot-generated name (`IMG_20261014_153212.jpg`, `Screenshot 2026-…`)
+  is replaced by `photo.jpg`, since it carried the capture time EXIF did. Names
+  a person chose are kept.
+- **The server can no longer end a running conversation.** When anyone's
+  signaling socket closed, the server's "peer left" made the other side tear
+  down a verified, still-open direct session. A server — which the design does
+  not trust — could end any conversation by saying so, and one phone switching
+  networks ended it for both.
+
+### Fixed
+
+- A network change no longer ends a conversation: an interrupted direct
+  connection has ten seconds to recover, and the same session and safety code
+  carry on if it does.
+- Losing the server while alone in a room rejoins it automatically, with
+  backoff; during a conversation the room says it continues directly and that
+  nobody new can join until the server is back.
+- Typing a room code nobody else is in no longer sits on "Joining room…"
+  forever: the server confirms a join, and the room shows that it is waiting,
+  with the invitation.
+- On a phone with the keyboard open the message field was 30px wide.
+- With the account panel open, the account and logout buttons were pushed
+  above the top of the screen, out of reach.
+- Server errors, connection states, tooltips and the call screens are now
+  translated; the Romanian ring said "call in progress" for an unanswered call.
+
+### Changed
+
+- The safety-code bar folds to one line once everyone is verified, uses icons
+  for route and method in groups, and stays within half the screen.
+- The side that has not confirmed yet is told when the other has, worded to
+  send them back to the code rather than to the button.
+- Incoming calls name the caller; a live call shows who it is with and for how
+  long; recording a voice note shows a live microphone and a timer.
+- The privacy switches fold into one section that turns amber when IP hiding
+  is off; the account panel is grouped, with deletion set apart.
+- Received files are a compact row with a Save button; a desktop conversation
+  keeps to a readable column; the invitation is centred in an empty room and
+  can be sent through the phone's share sheet.
+
 ## 0.4.0 — 2026-10-13
 
 **Update now.** The emoji safety code could be steered by whoever relays the
