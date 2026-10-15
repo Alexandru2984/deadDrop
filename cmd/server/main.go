@@ -501,6 +501,7 @@ func embeddedWebHandler(files fs.FS) http.Handler {
 	// Read once at startup: the page is embedded, so there is nothing to reread,
 	// and a miss should not touch the filesystem abstraction twice.
 	notFound, notFoundErr := fs.ReadFile(files, "404.html")
+	compressed := precompress(files)
 	missing := func(w http.ResponseWriter, r *http.Request) {
 		if notFoundErr != nil {
 			http.NotFound(w, r)
@@ -535,6 +536,24 @@ func embeddedWebHandler(files fs.FS) http.Handler {
 		if err != nil || (info.IsDir() && name != ".") {
 			missing(w, r)
 			return
+		}
+		key := name
+		if name == "." {
+			key = "index.html"
+		}
+		// /index.html itself is left to the file server, which redirects it to /.
+		if asset, ok := compressed[key]; ok && requestPath != "/index.html" {
+			w.Header().Add("Vary", "Accept-Encoding")
+			if acceptsGzip(r.Header.Get("Accept-Encoding")) && r.Header.Get("Range") == "" {
+				w.Header().Set("Content-Type", asset.contentType)
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Content-Length", strconv.Itoa(len(asset.body)))
+				w.WriteHeader(http.StatusOK)
+				if r.Method != http.MethodHead {
+					_, _ = w.Write(asset.body)
+				}
+				return
+			}
 		}
 		server.ServeHTTP(w, r)
 	})

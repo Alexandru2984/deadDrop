@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -364,5 +366,78 @@ func TestOnionOriginPicksTheAllowedOnion(t *testing.T) {
 	}
 	if got := onionOrigin([]string{"https://dead.example"}); got != "" {
 		t.Fatalf("onionOrigin without an onion = %q", got)
+	}
+}
+
+func TestEmbeddedWebHandlerCompressesTheBundle(t *testing.T) {
+	h := embeddedWebHandler(appassets.WebFS())
+	original, err := fs.ReadFile(appassets.WebFS(), "js/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(target, acceptEncoding string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		if acceptEncoding != "" {
+			req.Header.Set("Accept-Encoding", acceptEncoding)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w
+	}
+
+	w := get("/js/app.js", "gzip, deflate, br")
+	if w.Header().Get("Content-Encoding") != "gzip" || w.Header().Get("Vary") != "Accept-Encoding" {
+		t.Fatalf("app.js encoding=%q vary=%q", w.Header().Get("Content-Encoding"), w.Header().Get("Vary"))
+	}
+	if !strings.HasPrefix(w.Header().Get("Content-Type"), "text/javascript") {
+		t.Fatalf("app.js content type %q", w.Header().Get("Content-Type"))
+	}
+	zr, err := gzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// SRI and the integrity manifest hash the decoded bytes; they must be the
+	// embedded bytes exactly.
+	if !bytes.Equal(decoded, original) {
+		t.Fatal("decompressed app.js differs from the embedded file")
+	}
+
+	if w := get("/js/app.js", ""); w.Header().Get("Content-Encoding") != "" || !bytes.Equal(w.Body.Bytes(), original) {
+		t.Fatal("a client that does not ask for gzip must get the plain file")
+	}
+	if w := get("/js/app.js", "gzip;q=0, br"); w.Header().Get("Content-Encoding") != "" {
+		t.Fatal("gzip;q=0 is a refusal")
+	}
+	if w := get("/", "gzip"); w.Header().Get("Content-Encoding") != "gzip" || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/html") {
+		t.Fatalf("index: encoding=%q type=%q", w.Header().Get("Content-Encoding"), w.Header().Get("Content-Type"))
+	}
+	if w := get("/index.html", "gzip"); w.Code != http.StatusMovedPermanently {
+		t.Fatalf("/index.html status=%d, want the file server's redirect", w.Code)
+	}
+}
+
+func TestAcceptsGzip(t *testing.T) {
+	cases := map[string]bool{
+		"":                     false,
+		"gzip":                 true,
+		"GZIP":                 true,
+		"br, gzip;q=0.5":       true,
+		"gzip;q=0":             false,
+		"*":                    true,
+		"*;q=0":                false,
+		"gzip;q=0, *":          false,
+		"identity":             false,
+		"deflate, br":          false,
+		"br;q=1.0, gzip;q=0.8": true,
+	}
+	for header, want := range cases {
+		if got := acceptsGzip(header); got != want {
+			t.Errorf("acceptsGzip(%q) = %v, want %v", header, got, want)
+		}
 	}
 }
