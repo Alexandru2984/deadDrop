@@ -19,7 +19,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, renameSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { join, relative, sep, posix } from 'node:path';
 
 const WEB = 'web';
 const SUMS = join(WEB, 'SHA256SUMS');
@@ -123,6 +123,51 @@ function injectImportMaps(check) {
   return changed;
 }
 
+// Modules reach the browser one level at a time: app.js names crypto.js, which
+// names handshake.js, which names the ML-KEM code — each level a round trip
+// before the next can even be asked for. Listing the whole static graph as
+// modulepreload links up front lets the browser fetch it in one go. Each link
+// carries the same hash as the import map, so a preload is held to it too.
+// Dynamic import() is left out on purpose: that code loads only when used.
+const PRELOAD_ENTRIES = { 'index.html': 'js/app.js', 'verify.html': 'js/verify.js' };
+const STATIC_IMPORT = /(?:^|[;\n])\s*(?:import|export)\s+(?:[\w*{}\s,$]+?\s+from\s+)?['"](\.{1,2}\/[^'"]+)['"]/g;
+
+function staticGraph(entry) {
+  const seen = new Set();
+  const visit = (rel) => {
+    if (seen.has(rel)) return;
+    seen.add(rel);
+    const source = readFileSync(join(WEB, rel), 'utf8');
+    for (const [, spec] of source.matchAll(STATIC_IMPORT)) {
+      visit(posix.normalize(posix.join(posix.dirname(rel), spec)));
+    }
+  };
+  visit(entry);
+  seen.delete(entry); // the page's own <script> already fetches the entry
+  return [...seen].sort();
+}
+
+function injectModulePreloads(check) {
+  let changed = false;
+  for (const [page, entry] of Object.entries(PRELOAD_ENTRIES)) {
+    const htmlPath = join(WEB, page);
+    const content = readFileSync(htmlPath, 'utf8');
+    const re = /<!-- modulepreload -->[\s\S]*?<!-- \/modulepreload -->/;
+    if (!re.test(content)) {
+      throw new Error(`${page}: no <!-- modulepreload --><!-- /modulepreload --> placeholder after the import map`);
+    }
+    const links = staticGraph(entry).map((rel) =>
+      `<link rel="modulepreload" href="/${rel}" integrity="sha256-${sha256b64(readFileSync(join(WEB, rel)))}" />`);
+    const block = `<!-- modulepreload -->\n  ${links.join('\n  ')}\n  <!-- /modulepreload -->`;
+    const updated = content.replace(re, block);
+    if (updated !== content) {
+      changed = true;
+      if (!check) atomicWrite(htmlPath, updated);
+    }
+  }
+  return changed;
+}
+
 function buildSums() {
   const files = walk(WEB)
     .filter((f) => f !== SUMS && !f.endsWith('.tmp'))
@@ -134,7 +179,7 @@ function buildSums() {
 const check = process.argv.includes('--check');
 
 // SRI must be stamped BEFORE hashing, since it changes the HTML bytes.
-const sriChanged = injectImportMaps(check) | injectSRI(check);
+const sriChanged = injectImportMaps(check) | injectModulePreloads(check) | injectSRI(check);
 const sums = buildSums();
 const prev = (() => {
   try { return readFileSync(SUMS, 'utf8'); } catch { return ''; }
