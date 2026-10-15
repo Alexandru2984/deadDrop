@@ -96,6 +96,37 @@ function serverMessage(text, fallbackKey) {
   return key ? t(key) : text;
 }
 
+// Web addresses in a message become links — built as elements, never markup,
+// and only for http(s). The visible text is the address itself, so a link
+// cannot say one place and go to another. No preview is ever fetched: that
+// would tell the linked site this device's address before anyone clicked.
+const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+const TRAILING_PUNCTUATION = /[.,;:!?'")\]}]+$/;
+
+function linkify(text) {
+  const parts = [];
+  let last = 0;
+  for (const match of text.matchAll(URL_IN_TEXT)) {
+    let raw = match[0];
+    // "see https://example.com." — the full stop belongs to the sentence.
+    const trailing = raw.match(TRAILING_PUNCTUATION)?.[0] || '';
+    raw = raw.slice(0, raw.length - trailing.length);
+    let href;
+    try {
+      const url = new URL(raw);
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+      href = url.href;
+    } catch { continue; }
+    if (match.index > last) parts.push(text.slice(last, match.index));
+    parts.push(h('a', {
+      href, text: raw, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'msg-link',
+    }));
+    last = match.index + raw.length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
+
 function needsKdfUpgrade(kdf) {
   const match = /^pbkdf2:(\d+)$/.exec(kdf || '');
   return !match || Number(match[1]) < CURRENT_KDF_ITERATIONS;
@@ -2110,7 +2141,7 @@ class DeadDrop {
 
     appendPresent(el,
       this._senderTag(mine, sender),
-      h('div', { class: 'msg-text', text: String(text) }),
+      h('div', { class: 'msg-text' }, ...linkify(String(text))),
       this._metaRow(burn, ttl),
     );
     this._applySenderColor(el, sender);

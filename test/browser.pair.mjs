@@ -282,6 +282,22 @@ ok(twoLines, 'Enter sends it, and it arrives on two lines');
 ok(await alice.eval(`document.querySelector('#msg-input').value === ''
   && document.querySelector('#msg-input').offsetHeight === ${oneLine}`), 'the field empties back to one line');
 
+// Addresses become links, safely: elements rather than markup, http(s) only,
+// the visible text is the address, and the sentence's full stop stays out.
+const linkText = 'see https://example.com/a?b=1. not javascript:alert(1) nor <a href=x>y</a>';
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(linkText)};
+  document.querySelector('#send-btn').click(); true
+`);
+const links = await waitFor(() => bob.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg-text')].find((n) => n.textContent === ${JSON.stringify(linkText)});
+  return bubble && [...bubble.querySelectorAll('a')].map((a) => ({ href: a.getAttribute('href'), text: a.textContent, rel: a.rel, target: a.target }));
+})()`), { timeout: 10000 });
+ok(links && links.length === 1 && links[0].href === 'https://example.com/a?b=1' && links[0].text === 'https://example.com/a?b=1',
+  `exactly the web address becomes a link (${JSON.stringify(links)})`);
+ok(links && /noopener/.test(links[0].rel) && /noreferrer/.test(links[0].rel) && links[0].target === '_blank',
+  'and it opens apart from this page, sending no referrer');
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.

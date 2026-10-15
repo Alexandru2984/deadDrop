@@ -855,6 +855,7 @@ select { cursor: pointer; width: auto; }
 
 /* A message keeps the line breaks it was written with. */
 .msg-text { white-space: pre-wrap; }
+.msg-link { color: var(--accent); text-decoration: underline; word-break: break-all; }
 
 #send-btn { min-width: 72px; }
 
