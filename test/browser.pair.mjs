@@ -254,6 +254,34 @@ ok(await waitFor(async () => (await alice.transcript()).includes(afterLoss)),
   'the conversation carries on directly without the server');
 ok(await alice.verified(), 'and the session stays verified — nothing was renegotiated');
 
+// The composer takes more than one line: Shift+Enter breaks the line and the
+// field grows with it, Enter sends, and the far side shows the break.
+const key = (type, k, extra = {}) => cdp.send('Input.dispatchKeyEvent', {
+  type, key: k, code: k === 'Enter' ? 'Enter' : `Key${k.toUpperCase()}`,
+  windowsVirtualKeyCode: k === 'Enter' ? 13 : k.toUpperCase().charCodeAt(0),
+  ...(type === 'keyDown' && k !== 'Enter' ? { text: k } : {}),
+  ...(type === 'keyDown' && k === 'Enter' ? { text: '\r' } : {}),
+  ...extra,
+}, alice.sessionId);
+const press = async (k, extra) => { await key('keyDown', k, extra); await key('keyUp', k, extra); };
+await alice.eval(`document.querySelector('#msg-input').focus(); true`);
+const oneLine = await alice.eval(`document.querySelector('#msg-input').offsetHeight`);
+await press('a');
+await press('Enter', { modifiers: 8 }); // Shift
+await press('b');
+const composed = await alice.eval(`({ value: document.querySelector('#msg-input').value,
+  height: document.querySelector('#msg-input').offsetHeight })`);
+ok(composed.value === 'a\nb', `Shift+Enter starts a new line instead of sending (${JSON.stringify(composed.value)})`);
+ok(composed.height > oneLine, `the field grows with the second line (${oneLine}px → ${composed.height}px)`);
+await press('Enter');
+const twoLines = await waitFor(() => bob.eval(`(() => {
+  const el = [...document.querySelectorAll('.msg-text')].find((n) => n.textContent === 'a\\nb');
+  return el ? el.getClientRects().length && el.getBoundingClientRect().height > parseFloat(getComputedStyle(el).lineHeight) * 1.5 : false;
+})()`), { timeout: 10000 });
+ok(twoLines, 'Enter sends it, and it arrives on two lines');
+ok(await alice.eval(`document.querySelector('#msg-input').value === ''
+  && document.querySelector('#msg-input').offsetHeight === ${oneLine}`), 'the field empties back to one line');
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.

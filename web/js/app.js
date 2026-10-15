@@ -323,9 +323,19 @@ class DeadDrop {
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
     this.el.msgInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendMessage(); }
+      // Enter sends and Shift+Enter starts a new line — with a keyboard. On a
+      // touch screen the return key writes a new line and Send sends, as in
+      // every phone messenger. Never mid-composition: an IME uses Enter to
+      // commit Japanese, Chinese or Korean text, not to send half of it.
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      if (window.matchMedia('(pointer: coarse)').matches) return;
+      e.preventDefault();
+      this.sendMessage();
     });
-    this.el.msgInput.addEventListener('input', () => this._sendTyping());
+    this.el.msgInput.addEventListener('input', () => {
+      this._fitComposer();
+      this._sendTyping();
+    });
     // Panic wipe: button or three Escapes within a second.
     this.el.panicBtn.addEventListener('click', () => this._panicWipe());
     window.addEventListener('keydown', (e) => this._onGlobalKey(e));
@@ -1137,6 +1147,13 @@ class DeadDrop {
     this._renderVerifyBar();
   }
 
+  /** Grow the message field with what is typed; CSS caps the height. */
+  _fitComposer() {
+    const field = this.el.msgInput;
+    field.style.height = 'auto';
+    field.style.height = `${field.scrollHeight + (field.offsetHeight - field.clientHeight)}px`;
+  }
+
   /** A disabled message field says what it is waiting for, not "Type a message". */
   _updateComposerHint() {
     if (this._recorder?.state === 'recording') return;
@@ -1638,6 +1655,7 @@ class DeadDrop {
 
     this._renderMsg(id, text, true, ttl, burn);
     this.el.msgInput.value = '';
+    this._fitComposer();
   }
 
   async _onPeerMessage(peerId, msg) {

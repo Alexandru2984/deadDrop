@@ -36,6 +36,7 @@ body {
 
 button,
 input,
+textarea,
 select {
   max-width: 100%;
 }
@@ -350,6 +351,7 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 
 input[type="text"],
 input[type="password"],
+textarea,
 select {
   padding: 10px 14px;
   border: 1px solid var(--border);
@@ -365,7 +367,8 @@ select {
 }
 
 input[type="text"]:focus,
-input[type="password"]:focus {
+input[type="password"]:focus,
+textarea:focus {
   border-color: var(--accent);
 }
 
@@ -838,7 +841,20 @@ select { cursor: pointer; width: auto; }
   align-items: center;
 }
 
-.input-row input { flex: 1; min-width: 0; }
+.input-row input,
+.input-row textarea { flex: 1; min-width: 0; }
+
+/* One line until there is more to say: the script grows it with the text up to
+   about eight lines, then it scrolls. */
+#msg-input {
+  resize: none;
+  line-height: 1.4;
+  max-height: min(30vh, 11em);
+  overflow-y: auto;
+}
+
+/* A message keeps the line breaks it was written with. */
+.msg-text { white-space: pre-wrap; }
 
 #send-btn { min-width: 72px; }
 
