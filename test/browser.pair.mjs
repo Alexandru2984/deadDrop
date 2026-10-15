@@ -84,6 +84,19 @@ ok(/compare/i.test(told || ''), `the other side learns its peer has confirmed ($
 ok(await bob.clickVerify(), 'peer B confirms the safety code');
 ok(await waitFor(() => alice.verified()) && await waitFor(() => bob.verified()),
   'mutual confirmation unlocks both sides');
+
+// The QR dialog is modal in fact, not just in its ARIA: the conversation and
+// the panic button behind it cannot take focus, and Escape gives them back.
+await bob.eval(`document.querySelector('#verify-rows .verify-actions .btn').click(); true`);
+const qrModal = await waitFor(() => bob.eval(`(() => {
+  if (document.querySelector('#qr-verify').classList.contains('hidden')) return false;
+  return ['#msg-input', '#panic-btn'].every((s) => document.querySelector(s).closest('[inert]'))
+    && !document.querySelector('#qr-verify').closest('[inert]');
+})()`), { timeout: 10000 });
+ok(qrModal, 'with the QR dialog open, the page behind it is inert');
+await bob.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true`);
+ok(await waitFor(() => bob.eval(`document.querySelector('#qr-verify').classList.contains('hidden')
+  && !document.querySelector('[inert]')`)), 'Escape closes it and nothing stays inert');
 // Six emoji are 36 bits; the row has to say so, and point at the QR.
 // Verified, the bar folds to a single line so the conversation keeps the
 // screen; the sentences are still there for screen readers and one tap away.

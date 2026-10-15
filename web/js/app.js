@@ -1432,6 +1432,7 @@ class DeadDrop {
     this.el.qrVerifyStatus.textContent = `${s.label} — ${t('qr.scanning')}`;
     this.el.qrVerifyStatus.classList.remove('match', 'mismatch');
     this.el.qrVerify.classList.remove('hidden');
+    this._makeModal(this.el.qrVerify);
     this._captureFocus(this.el.qrVerify);
     await this._startQrScan(token);
   }
@@ -1498,6 +1499,7 @@ class DeadDrop {
   _closeQrVerify() {
     this._stopQrScan();
     this.el.qrVerify.classList.add('hidden');
+    this._makeModal(null);
     this._restoreFocus();
   }
 
@@ -1875,6 +1877,8 @@ class DeadDrop {
     this._callRole = 'callee';
     this.callState = 'incoming';
     this._callVideo = msg.video;
+    // The QR dialog is modal and would leave the ring unanswerable behind it.
+    if (!this.el.qrVerify.classList.contains('hidden')) this._closeQrVerify();
     // Name the caller: in a room you have verified, the label is who it is.
     this.el.incomingText.textContent = t(msg.video ? 'call.incomingVideo' : 'call.incomingFrom')
       .replace('{peer}', session.label);
@@ -1995,8 +1999,13 @@ class DeadDrop {
   _toggleCallOverlay(show) {
     const wasOpen = !this.el.callOverlay.classList.contains('hidden');
     this.el.callOverlay.classList.toggle('hidden', !show);
-    if (show && !wasOpen) this._captureFocus(this.el.callOverlay);
-    else if (!show && wasOpen) this._restoreFocus();
+    if (show && !wasOpen) {
+      this._makeModal(this.el.callOverlay);
+      this._captureFocus(this.el.callOverlay);
+    } else if (!show && wasOpen) {
+      this._makeModal(null);
+      this._restoreFocus();
+    }
   }
 
   /** Who the call is with and how long it has run — and that it is encrypted. */
@@ -2423,6 +2432,29 @@ class DeadDrop {
     // The container itself is the fallback, which is why it carries tabindex="-1":
     // a dialog with nothing to focus should still put the reader inside it.
     (target || dialog).focus?.();
+  }
+
+  /**
+   * Make everything outside `dialog` inert, or undo it with null.
+   *
+   * Moving focus into a modal is half of it: Tab past its last control used to
+   * walk on into the page underneath — the message field, the panic button —
+   * controls the user could not see and could operate. `inert` takes the rest of
+   * the page out of focus, clicks and the accessibility tree until the dialog
+   * closes. Siblings of each ancestor are marked, so only the dialog's own
+   * branch stays live.
+   */
+  _makeModal(dialog) {
+    for (const el of this._inerted || []) el.inert = false;
+    this._inerted = [];
+    if (!dialog) return;
+    for (let node = dialog; node && node !== document.body; node = node.parentElement) {
+      for (const sibling of node.parentElement?.children || []) {
+        if (sibling === node || sibling.inert || sibling.tagName === 'SCRIPT') continue;
+        sibling.inert = true;
+        this._inerted.push(sibling);
+      }
+    }
   }
 
   _restoreFocus() {

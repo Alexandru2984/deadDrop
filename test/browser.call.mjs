@@ -125,6 +125,22 @@ const aliceMedia = await waitFor(async () => {
   return s.remote && s.remote.live > 0 ? s : false;
 }, { timeout: 45000 });
 ok(aliceMedia, 'peer A receives live remote tracks');
+// The call screen is modal: nothing behind it can take focus or a click
+// while it is up, and everything comes back when it closes.
+const modal = await alice.eval(`(() => {
+  const overlay = document.querySelector('#call-overlay');
+  const behind = ['#msg-input', '#panic-btn', '#send-btn'].map((s) => document.querySelector(s));
+  const field = document.querySelector('#msg-input');
+  field.focus();
+  return {
+    behindInert: behind.every((el) => el.closest('[inert]')),
+    overlayLive: !overlay.closest('[inert]'),
+    focusRefused: document.activeElement !== field,
+  };
+})()`);
+ok(modal.behindInert && modal.overlayLive && modal.focusRefused,
+  `the page behind a call cannot be reached (${JSON.stringify(modal)})`);
+
 const clock = await waitFor(async () => {
   const text = await alice.eval(`document.querySelector('#call-status-bar').textContent`);
   return /🔒 .+ · \d\d:\d\d/.test(text) ? text : false;
@@ -164,6 +180,8 @@ ok(await waitFor(async () => {
   const s = await alice.mediaState();
   return s.local === null && s.remote === null;
 }), 'the caller releases its own camera and microphone');
+ok(await alice.eval(`!document.querySelector('[inert]')`) && await bob.eval(`!document.querySelector('[inert]')`),
+  'once the call is over nothing is left inert on either side');
 
 // The session itself must survive the call ending.
 const after = 'still here ' + suffix;
