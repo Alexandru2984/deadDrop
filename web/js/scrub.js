@@ -19,6 +19,27 @@ const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_PIXELS = 50_000_000;
 const JPEG_QUALITY = 0.92;
 
+const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+
+// Names a camera, a screenshot tool or a messaging app writes by itself. They
+// carry the same thing EXIF did — IMG_20261014_153212, PXL_…, Screenshot
+// 2026-10-14 at 15.32.12 — the moment it was taken, and often which phone.
+const GENERATED_PREFIX = /^(img|pxl|dsc|dscn|dcim|mvimg|vid|photo|image|screenshot|screen ?shot|scr|captura|whatsapp ?image|signal|telegram|snapchat|fb_img)[-_ .]/i;
+const DATE_OR_TIME = /\d{8}|\d{6}[-_]\d{6}|\d{4}[-_.]\d{2}[-_.]\d{2}|\d{2}[.:]\d{2}[.:]\d{2}|\d{10,}/;
+
+/**
+ * The name to send a scrubbed image under. A name a person chose ("cat.jpg")
+ * is kept; one a device generated, with the capture time in it, becomes
+ * "photo.<ext>" — stripping EXIF and then sending the timestamp in the file
+ * name would be keeping half the promise.
+ */
+export function scrubbedName(name, type) {
+  const ext = EXT[String(type || '').toLowerCase()] || 'jpg';
+  const base = String(name || '').replace(/\.[^.]*$/, '');
+  if (!base || GENERATED_PREFIX.test(base) || DATE_OR_TIME.test(base)) return `photo.${ext}`;
+  return String(name);
+}
+
 /** True when `file` is an image this module rewrites before sending. */
 export function isScrubbable(file) {
   return SCRUBBABLE.has(String(file?.type || '').toLowerCase());
@@ -40,7 +61,7 @@ export async function scrubImage(file) {
     }
     const blob = await encode(bitmap, type);
     if (!blob || blob.type !== type) throw new Error('re-encoding failed');
-    return new File([blob], file.name, { type, lastModified: 0 });
+    return new File([blob], scrubbedName(file.name, type), { type, lastModified: 0 });
   } finally {
     bitmap.close?.();
   }

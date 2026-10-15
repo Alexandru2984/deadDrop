@@ -2,6 +2,7 @@
 
 import { FileTransferManager, assertFileSizeBinding, safeFileMeta } from '../web/js/filetransfer.js';
 import { MessageManager } from '../web/js/messages.js';
+import { scrubbedName } from '../web/js/scrub.js';
 
 let failures = 0;
 const ok = (condition, message) => {
@@ -127,6 +128,23 @@ ok(safeFileMeta({ fileName: '\u200b\u0000', fileType: '', fileSize: 1 }).fileNam
    'invisible and control characters are made visible');
 ok(safeFileMeta({ fileName: 42, fileType: null, fileSize: -1 })?.fileName === 'file',
    'malformed metadata falls back to safe defaults');
+
+console.log('scrubbed photo names');
+for (const [name, type] of [
+  ['IMG_20261014_153212.jpg', 'image/jpeg'],
+  ['PXL_20261014_153212123.jpg', 'image/jpeg'],
+  ['Screenshot_2026-10-14-15-32-12.png', 'image/png'],
+  ['Screenshot 2026-10-14 at 15.32.12.png', 'image/png'],
+  ['WhatsApp Image 2026-10-14 at 15.32.12.jpeg', 'image/jpeg'],
+  ['signal-2026-10-14-153212.jpg', 'image/jpeg'],
+  ['DSC_0042.JPG', 'image/jpeg'],
+  ['1791987292317.webp', 'image/webp'],
+]) {
+  ok(/^photo\.(jpg|png|webp)$/.test(scrubbedName(name, type)), `a device-generated name is not sent (${name} → ${scrubbedName(name, type)})`);
+}
+ok(scrubbedName('cat.jpg', 'image/jpeg') === 'cat.jpg', 'a name a person chose is kept');
+ok(scrubbedName('holiday plan v2.png', 'image/png') === 'holiday plan v2.png', 'ordinary words and small numbers are kept');
+ok(scrubbedName('', 'image/webp') === 'photo.webp', 'a missing name gets a neutral one');
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);
