@@ -182,7 +182,13 @@ console.log('\ncontrast');
 // inherits colours through places nobody thinks to check, and a token that
 // passes in isolation can still land on a surface where it does not.
 const contrastIssues = () => peer.eval(`
-  (() => {
+  (async () => {
+    // Measure what settles on screen, not a frame of a fade-in: messages
+    // appear from transparent, and on a slow machine the check otherwise lands
+    // mid-animation. Endless animations (the logo's pulse) are not waited on.
+    await Promise.all(document.getAnimations()
+      .filter((a) => a.effect?.getTiming().iterations !== Infinity)
+      .map((a) => a.finished.catch(() => {})));
     const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
     const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
     const rgb = (s) => (s.match(/\\d+/g) || []).slice(0, 3).map(Number);
