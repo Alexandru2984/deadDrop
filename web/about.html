@@ -45,7 +45,9 @@
 
     <h2>What is end-to-end encrypted</h2>
     <ul>
-      <li><strong>Messages, files, and app controls.</strong> Pairwise protocol v4 combines ephemeral P-256 ECDH and ML-KEM-768, derives direction- and context-specific keys with HKDF-SHA256, and seals data with AES-256-GCM. The transcript, role, epoch, and content class are authenticated; replays are rejected.</li>
+      <li><strong>Messages, files, and app controls.</strong> Pairwise protocol v6 combines ephemeral P-256 ECDH and ML-KEM-768, derives direction- and context-specific keys with HKDF-SHA256, and seals data with AES-256-GCM. The transcript, role, epoch, and content class are authenticated; replays are rejected.</li>
+      <li><strong>Nothing can be silently removed or reordered.</strong> Every sealed envelope carries its position in the stream inside the encryption. Whoever carries the bytes can still drop or shuffle them, but the receiver notices the gap and ends the session rather than show a conversation with a piece missing.</li>
+      <li><strong>The safety code cannot be steered.</strong> It is derived only from values both sides committed to before either revealed its keys, so someone relaying the handshake cannot keep retrying until two sessions happen to show the same emoji.</li>
       <li><strong>Groups are pairwise meshes.</strong> A room holds at most six people and has no group key. Your browser creates a separate handshake, safety code, ratchet, and ciphertext for each recipient. Verify each row independently.</li>
       <li><strong>Calls use WebRTC DTLS-SRTP.</strong> Media is not wrapped in the app's AES envelope. Instead, the exact DTLS certificate fingerprint set is confirmed over the verified encrypted session before a 1:1 call is enabled.</li>
       <li><strong>Periodic key evolution.</strong> Fresh ECDH is mixed in about every ten minutes. The current and two prior epochs remain for in-flight data. This offers limited forward-secrecy/key-evolution properties, not a formally verified Double Ratchet guarantee; a browser cannot prove that dropped key objects were physically erased from RAM.</li>
@@ -54,6 +56,16 @@
 
     <h2>Traffic shape is only partly hidden</h2>
     <p>Encrypted app envelopes use size buckets. This hides exact plaintext length within a bucket and makes some short control events resemble short messages. It does <strong>not</strong> hide timing, packet count, bucket changes, large files, call traffic, or total volume. Optional cover traffic adds one randomized short decoy roughly every 4–16 seconds; it is not constant-rate shaping and cannot make activity invisible to a capable observer.</p>
+
+    <h2>What the other person learns</h2>
+    <p>Encryption protects a message from everyone in between; it delivers everything inside it to the person you are talking to. So the client keeps what it sends to what you meant to send.</p>
+    <ul>
+      <li><strong>No clock.</strong> Messages carry no timestamp from your device: one in every message would let the other side measure your clock's skew and recognise the same device in a later room.</li>
+      <li><strong>Photos without their history.</strong> With photo metadata stripping on — the default — JPEG, PNG and WebP images are re-encoded on your device, dropping GPS position, capture time and camera details, and a name the camera or screenshot tool generated (with the capture time in it) is replaced by <code>photo.jpg</code>. Other files are sent exactly as chosen, name included.</li>
+      <li><strong>Voice notes</strong> are sent as <code>voice.webm</code>, not under a timestamped name.</li>
+      <li><strong>Your IP address</strong> is hidden from the peer while relay-only mode is on (the default) and TURN works; the app says when no relay is available. The typing indicator can be switched off.</li>
+      <li><strong>Separate sessions.</strong> With saved contacts off, the client keeps nothing between sessions that would identify you to the other side. What still can: your IP address outside relay-only mode, how and what you write, and anything your browser reveals on its own.</li>
+    </ul>
 
     <h2>What the service and network can see</h2>
     <ul>
