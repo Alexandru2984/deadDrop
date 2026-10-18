@@ -101,16 +101,31 @@ function serverMessage(text, fallbackKey) {
 // cannot say one place and go to another. No preview is ever fetched: that
 // would tell the linked site this device's address before anyone clicked.
 const URL_IN_TEXT = /\bhttps?:\/\/[^\s<>"'`]+/gi;
-const TRAILING_PUNCTUATION = /[.,;:!?'")\]}]+$/;
+
+// "see https://example.com." — the full stop belongs to the sentence. A
+// closing bracket belongs to the address only when it closes one inside it,
+// as in https://en.wikipedia.org/wiki/Foo_(bar).
+function trimUrl(raw) {
+  const pairs = { ')': '(', ']': '[', '}': '{' };
+  let end = raw.length;
+  while (end > 0) {
+    const ch = raw[end - 1];
+    if ('.,;:!?\'"'.includes(ch)) { end--; continue; }
+    const open = pairs[ch];
+    if (open) {
+      const body = raw.slice(0, end);
+      if (body.split(ch).length > body.split(open).length) { end--; continue; }
+    }
+    break;
+  }
+  return raw.slice(0, end);
+}
 
 function linkify(text) {
   const parts = [];
   let last = 0;
   for (const match of text.matchAll(URL_IN_TEXT)) {
-    let raw = match[0];
-    // "see https://example.com." — the full stop belongs to the sentence.
-    const trailing = raw.match(TRAILING_PUNCTUATION)?.[0] || '';
-    raw = raw.slice(0, raw.length - trailing.length);
+    const raw = trimUrl(match[0]);
     let href;
     try {
       const url = new URL(raw);

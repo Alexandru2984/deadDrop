@@ -331,6 +331,19 @@ await sleep(2500);
 ok(await bob.eval(`document.querySelectorAll('.file-msg').length`) === before,
   'pasting text that comes with a picture of itself sends no picture');
 
+// A bracket that closes one inside the address belongs to it.
+const wiki = 'read https://en.wikipedia.org/wiki/Foo_(bar) (and https://example.org/x).';
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(wiki)};
+  document.querySelector('#send-btn').click(); true
+`);
+const wikiLinks = await waitFor(() => bob.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg-text')].find((n) => n.textContent === ${JSON.stringify(wiki)});
+  return bubble && [...bubble.querySelectorAll('a')].map((a) => a.textContent);
+})()`), { timeout: 10000 });
+ok(JSON.stringify(wikiLinks) === JSON.stringify(['https://en.wikipedia.org/wiki/Foo_(bar)', 'https://example.org/x']),
+  `brackets: kept inside an address, dropped around one (${JSON.stringify(wikiLinks)})`);
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.
