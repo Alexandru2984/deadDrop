@@ -405,7 +405,9 @@ class DeadDrop {
     // through the same metadata stripping. Pasted text is left to the field.
     this.el.msgInput.addEventListener('paste', (e) => {
       const files = [...(e.clipboardData?.files || [])];
-      if (!files.length) return;
+      // Word, Excel and others put a picture of the selection on the clipboard
+      // beside its text. Text there means the person copied text: paste it.
+      if (!files.length || e.clipboardData.getData('text/plain')) return;
       e.preventDefault();
       if (!this.encrypted) return;
       for (const file of files.slice(0, 5)) this.sendFile(file);

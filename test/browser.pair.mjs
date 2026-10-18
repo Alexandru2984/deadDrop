@@ -314,6 +314,23 @@ const pasted = await waitFor(() => bob.eval(`(() => {
 })()`), { timeout: 20000 });
 ok(pasted, 'a pasted screenshot arrives as an image, under a neutral name');
 
+// Copying from a word processor puts a picture of the selection beside the
+// text. That is a text paste, and must not send the picture.
+const before = await bob.eval(`document.querySelectorAll('.file-msg').length`);
+await alice.eval(`(async () => {
+  const canvas = new OffscreenCanvas(20, 10);
+  canvas.getContext('2d').fillRect(0, 0, 20, 10);
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  const data = new DataTransfer();
+  data.setData('text/plain', 'quarterly numbers');
+  data.items.add(new File([blob], 'image.png', { type: 'image/png' }));
+  document.querySelector('#msg-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  return true;
+})()`);
+await sleep(2500);
+ok(await bob.eval(`document.querySelectorAll('.file-msg').length`) === before,
+  'pasting text that comes with a picture of itself sends no picture');
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.
