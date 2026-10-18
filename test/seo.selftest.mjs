@@ -48,7 +48,7 @@ for (const page of pages) {
 
 console.log('\nwhat is meant to be found, and what is not');
 
-const indexable = { 'index.html': true, 'about.html': true, 'about.ro.html': true, 'verify.html': false, '404.html': false };
+const indexable = { 'index.html': true, 'about.html': true, 'about.ro.html': true, 'verify.html': false, 'verify.ro.html': false, '404.html': false };
 for (const [page, wanted] of Object.entries(indexable)) {
   const html = read(page);
   const blocked = /<meta\s+name="robots"[^>]*content="[^"]*noindex/i.test(html);
@@ -77,6 +77,7 @@ for (const page of ['index.html', 'about.html', 'about.ro.html']) {
 console.log('\nthe security page in both languages');
 {
   const en = read('about.html'), ro = read('about.ro.html');
+  const ven = read('verify.html'), vro = read('verify.ro.html');
   const alt = (html, lang, url) => new RegExp(`<link rel="alternate" hreflang="${lang}" href="${url}"`).test(html);
   ok(alt(en, 'ro', OURS + '/about.ro.html') && alt(ro, 'en', OURS + '/about.html'),
     'each language version names the other as its alternate');
@@ -85,11 +86,16 @@ console.log('\nthe security page in both languages');
   const count = (html, tag) => (html.match(new RegExp(`<${tag}[ >]`, 'g')) || []).length;
   ok(count(en, 'h2') === count(ro, 'h2') && count(en, 'li') === count(ro, 'li'),
     `both versions carry the same sections and points (${count(en, 'h2')}/${count(ro, 'h2')} sections, ${count(en, 'li')}/${count(ro, 'li')} points)`);
+  ok(count(ven, 'h2') === count(vro, 'h2') && count(ven, 'li') === count(vro, 'li') && count(ven, 'p') === count(vro, 'p'),
+    'the verifier carries the same steps and caveats in both languages');
+  // The Romanian verifier must run the same check: same script, same ids.
+  const ids = (html) => [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]).sort().join();
+  ok(ids(ven) === ids(vro) && /src="js\/verify\.js"/.test(vro), 'and runs the same script against the same elements');
 }
 
 console.log('\nrobots and sitemap agree with the pages');
 const robots = read('robots.txt');
-ok(robots.includes('Disallow: /verify.html'), 'robots.txt keeps the live verifier out of search');
+ok(robots.includes('Disallow: /verify.html') && robots.includes('Disallow: /verify.ro.html'), 'robots.txt keeps the live verifier out of search, in both languages');
 ok(robots.includes('Disallow: /api/'), 'robots.txt keeps the API out of search');
 ok(/Sitemap:\s*https:\/\/\S+sitemap\.xml/.test(robots), 'robots.txt points at the sitemap');
 

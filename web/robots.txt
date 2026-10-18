@@ -17,6 +17,7 @@ Allow: /og.png
 # The verifier reports what *this* server is currently serving. An indexed copy
 # would be a snapshot of a check that only means anything live.
 Disallow: /verify.html
+Disallow: /verify.ro.html
 # Nothing here answers a GET worth indexing.
 Disallow: /api/
 

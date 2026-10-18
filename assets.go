@@ -87,7 +87,7 @@ func BundleDigest() (string, error) {
 
 // importMapPages carry an inline import map listing a hash for every module.
 // Keep in step with IMPORTMAP_PAGES in scripts/gen-integrity.mjs.
-var importMapPages = []string{"index.html", "verify.html"}
+var importMapPages = []string{"index.html", "verify.html", "verify.ro.html"}
 
 const (
 	importMapOpen  = `<script type="importmap">`

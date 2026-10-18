@@ -22,6 +22,36 @@ const MAX_MANIFEST_BYTES = 256 * 1024;
 
 const $ = (id) => document.getElementById(id);
 
+// The page's own language decides the words. Kept here rather than in the
+// app's i18n module so this check stays a small, separately readable script.
+const TEXT = {
+  en: {
+    fetching: 'Fetching manifest…',
+    loadFailed: (e) => `Could not load /SHA256SUMS (${e}).`,
+    invalid: (e) => `Invalid /SHA256SUMS (${e}).`,
+    checking: (n) => `Checking ${n} files…`,
+    fetchFailed: (e) => 'fetch failed: ' + e,
+    mismatch: 'HASH MISMATCH',
+    allMatch: (n) => `✓ All ${n} fresh responses match the served manifest.`,
+    someBad: (bad, n) => `✗ ${bad} of ${n} files DO NOT match — do not trust this page.`,
+    cmdMatch: '✓ MATCHES the open-source repo',
+    cmdDiffer: '✗ DIFFERENT — investigate',
+  },
+  ro: {
+    fetching: 'Se descarcă manifestul…',
+    loadFailed: (e) => `Nu s-a putut încărca /SHA256SUMS (${e}).`,
+    invalid: (e) => `/SHA256SUMS invalid (${e}).`,
+    checking: (n) => `Se verifică ${n} fișiere…`,
+    fetchFailed: (e) => 'descărcare eșuată: ' + e,
+    mismatch: 'HASH DIFERIT',
+    allMatch: (n) => `✓ Toate cele ${n} răspunsuri proaspete se potrivesc cu manifestul servit.`,
+    someBad: (bad, n) => `✗ ${bad} din ${n} fișiere NU se potrivesc — nu avea încredere în această pagină.`,
+    cmdMatch: '✓ SE POTRIVEȘTE cu depozitul open-source',
+    cmdDiffer: '✗ DIFERIT — investighează',
+  },
+};
+const T = TEXT[document.documentElement.lang] || TEXT.en;
+
 const toHex = (buf) =>
   [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
 
@@ -52,7 +82,7 @@ async function run() {
   const results = $('results');
   const summary = $('summary');
   results.replaceChildren();
-  summary.textContent = 'Fetching manifest…';
+  summary.textContent = T.fetching;
   summary.className = 'verify-summary';
 
   let manifestText;
@@ -64,7 +94,7 @@ async function run() {
     if (manifestBytes.byteLength > MAX_MANIFEST_BYTES) throw new Error('manifest is too large');
     manifestText = new TextDecoder('utf-8', { fatal: true }).decode(manifestBytes);
   } catch (e) {
-    summary.textContent = `Could not load /SHA256SUMS (${e.message}).`;
+    summary.textContent = T.loadFailed(e.message);
     summary.className = 'verify-summary verify-bad';
     return;
   }
@@ -77,11 +107,11 @@ async function run() {
   try {
     files = parseIntegrityManifest(manifestText);
   } catch (e) {
-    summary.textContent = `Invalid /SHA256SUMS (${e.message}).`;
+    summary.textContent = T.invalid(e.message);
     summary.className = 'verify-summary verify-bad';
     return;
   }
-  summary.textContent = `Checking ${files.length} files…`;
+  summary.textContent = T.checking(files.length);
 
   let ok = 0;
   let bad = 0;
@@ -98,7 +128,7 @@ async function run() {
       if (!res.ok) throw new Error(String(res.status));
       got = await sha256Hex(await res.arrayBuffer());
     } catch (e) {
-      pending.replaceWith(row(path, 'bad', 'fetch failed: ' + e.message));
+      pending.replaceWith(row(path, 'bad', T.fetchFailed(e.message)));
       bad++;
       continue;
     }
@@ -106,16 +136,16 @@ async function run() {
       pending.replaceWith(row(path, 'ok'));
       ok++;
     } else {
-      pending.replaceWith(row(path, 'bad', 'HASH MISMATCH'));
+      pending.replaceWith(row(path, 'bad', T.mismatch));
       bad++;
     }
   }
 
   if (bad === 0) {
-    summary.textContent = `✓ All ${ok} fresh responses match the served manifest.`;
+    summary.textContent = T.allMatch(ok);
     summary.className = 'verify-summary verify-ok';
   } else {
-    summary.textContent = `✗ ${bad} of ${files.length} files DO NOT match — do not trust this page.`;
+    summary.textContent = T.someBad(bad, files.length);
     summary.className = 'verify-summary verify-bad';
   }
 }
@@ -126,7 +156,7 @@ function wireStaticBits() {
   const cmd =
     `diff <(curl -s ${origin}/SHA256SUMS) \\\n` +
     `     <(curl -s ${ghRaw}) \\\n` +
-    `  && echo "✓ MATCHES the open-source repo" || echo "✗ DIFFERENT — investigate"`;
+    `  && echo "${T.cmdMatch}" || echo "${T.cmdDiffer}"`;
   $('cmd').textContent = cmd;
   const link = $('gh-link');
   link.href = `https://github.com/${GH_REPO}/blob/${GH_BRANCH}/${MANIFEST_PATH}`;

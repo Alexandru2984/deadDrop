@@ -706,7 +706,7 @@ for (const vp of VIEWPORTS) {
 // The standalone pages carry the security explanations and the integrity
 // checker. They are reached from the app but never exercised by any other
 // suite, so nothing would notice them breaking on a phone.
-for (const page of ['about.html', 'about.ro.html', 'verify.html']) {
+for (const page of ['about.html', 'about.ro.html', 'verify.html', 'verify.ro.html']) {
   for (const vp of VIEWPORTS) {
     await emulatePhone(vp);
     await sessionSend('Page.navigate', { url: `${BASE}/${page}` });
@@ -723,6 +723,14 @@ for (const page of ['about.html', 'about.ro.html', 'verify.html']) {
     }
   }
 }
+
+// The Romanian verifier runs the same check and reports it in Romanian.
+await sessionSend('Page.navigate', { url: `${BASE}/verify.ro.html` });
+const roVerdict = await waitFor(async () => {
+  const text = await sessionEval(`document.querySelector('#summary').textContent`).catch(() => '');
+  return /^✓ Toate cele \d+ răspunsuri/.test(text) ? text : false;
+}, { timeout: 30000 });
+ok(roVerdict, `the Romanian verifier checks every file and says so in Romanian (${roVerdict || 'no verdict'})`);
 
 await sessionSend('Emulation.clearDeviceMetricsOverride');
 await sessionSend('Emulation.setEmulatedMedia', { features: [] });

@@ -40,6 +40,7 @@ const SRI_TARGETS = {
   'about.html': ['css/style.css', 'css/about.css'],
   'about.ro.html': ['css/style.css', 'css/about.css'],
   'verify.html': ['css/style.css', 'css/about.css', 'js/verify.js'],
+  'verify.ro.html': ['css/style.css', 'css/about.css', 'js/verify.js'],
 };
 
 // Pages whose module graph the browser should verify, not just the entry. An
@@ -49,7 +50,7 @@ const SRI_TARGETS = {
 // Each page carries a `<script type="importmap">…</script>` placeholder in its
 // head, before any module script. The server derives the CSP hash for it from
 // the embedded page (see appassets.ImportMapHashes).
-const IMPORTMAP_PAGES = ['index.html', 'verify.html'];
+const IMPORTMAP_PAGES = ['index.html', 'verify.html', 'verify.ro.html'];
 
 const sha256hex = (buf) => createHash('sha256').update(buf).digest('hex');
 const sha256b64 = (buf) => createHash('sha256').update(buf).digest('base64');
@@ -130,7 +131,7 @@ function injectImportMaps(check) {
 // modulepreload links up front lets the browser fetch it in one go. Each link
 // carries the same hash as the import map, so a preload is held to it too.
 // Dynamic import() is left out on purpose: that code loads only when used.
-const PRELOAD_ENTRIES = { 'index.html': 'js/app.js', 'verify.html': 'js/verify.js' };
+const PRELOAD_ENTRIES = { 'index.html': 'js/app.js', 'verify.html': 'js/verify.js', 'verify.ro.html': 'js/verify.js' };
 const STATIC_IMPORT = /(?:^|[;\n])\s*(?:import|export)\s+(?:[\w*{}\s,$]+?\s+from\s+)?['"](\.{1,2}\/[^'"]+)['"]/g;
 
 function staticGraph(entry) {
