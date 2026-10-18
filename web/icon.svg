@@ -1,5 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="96" fill="#0a0a0f"/>
-  <rect x="16" y="16" width="480" height="480" rx="84" fill="none" stroke="#00e87b" stroke-opacity="0.25" stroke-width="6"/>
-  <text x="256" y="256" font-size="300" text-anchor="middle" dominant-baseline="central">💀</text>
+  <rect x="16" y="16" width="480" height="480" rx="84" fill="none" stroke="#00e87b" stroke-opacity="0.35" stroke-width="6"/>
+  <svg x="97.28" y="97.28" width="317.44" height="317.44" viewBox="0 0 100 100">
+  <path d="M50 8C29 8 14 23 14 43c0 11 4 19 11 25 3 3 4 6 4 10v4a5 5 0 0 0 5 5h32a5 5 0 0 0 5-5v-4c0-4 1-7 4-10 7-6 11-14 11-25C86 23 71 8 50 8Z" fill="#e8e8ee"/>
+  <ellipse cx="35" cy="45" rx="10" ry="12" fill="#0a0a0f"/>
+  <ellipse cx="65" cy="45" rx="10" ry="12" fill="#0a0a0f"/>
+  <path d="M50 58l-6 11h12l-6-11Z" fill="#0a0a0f"/>
+  <rect x="38" y="80" width="5" height="10" rx="2" fill="#0a0a0f"/>
+  <rect x="47.5" y="80" width="5" height="10" rx="2" fill="#0a0a0f"/>
+  <rect x="57" y="80" width="5" height="10" rx="2" fill="#0a0a0f"/>
+  </svg>
 </svg>

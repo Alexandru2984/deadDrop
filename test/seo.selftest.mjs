@@ -93,6 +93,32 @@ console.log('\nthe security page in both languages');
   ok(ids(ven) === ids(vro) && /src="js\/verify\.js"/.test(vro), 'and runs the same script against the same elements');
 }
 
+console.log('\ninstalled on a home screen');
+{
+  const manifest = JSON.parse(read('manifest.json'));
+  const pngSize = (rel) => {
+    const buf = readFileSync(join(WEB, rel));
+    return buf.toString('ascii', 1, 4) === 'PNG' ? [buf.readUInt32BE(16), buf.readUInt32BE(20)] : null;
+  };
+  const bad = manifest.icons.filter((icon) => {
+    if (icon.type !== 'image/png') return false;
+    const [w, h] = pngSize(icon.src.replace(/^\//, '')) || [];
+    return `${w}x${h}` !== icon.sizes;
+  });
+  ok(bad.length === 0, `every PNG icon the manifest lists exists at the size it claims${bad.length ? ': ' + bad.map((i) => i.src).join(', ') : ''}`);
+  ok(manifest.icons.some((i) => i.sizes === '192x192') && manifest.icons.some((i) => i.sizes === '512x512' && i.purpose === 'any'),
+    'Android gets the 192 and 512 icons it asks for');
+  // "any maskable" in one entry tells the launcher it may crop an icon that was
+  // not drawn to be cropped. The maskable one keeps the skull in the safe zone.
+  ok(manifest.icons.every((i) => !/any maskable|maskable any/.test(i.purpose || ''))
+    && manifest.icons.some((i) => i.purpose === 'maskable'), 'a separate maskable icon, never "any maskable"');
+  ok(!('orientation' in manifest), 'the installed app is not locked to portrait — calls and the landscape layout need it');
+  const touch = /<link rel="apple-touch-icon" href="\/([^"]+)"/.exec(read('index.html'))?.[1];
+  ok(touch && JSON.stringify(pngSize(touch)) === '[180,180]',
+    `iOS gets a 180px PNG, not an SVG it would ignore for a page screenshot (${touch})`);
+  ok(!/<text\b/.test(read('icon.svg')), 'the SVG icon is drawn, not an emoji that needs a font to show');
+}
+
 console.log('\nrobots and sitemap agree with the pages');
 const robots = read('robots.txt');
 ok(robots.includes('Disallow: /verify.html') && robots.includes('Disallow: /verify.ro.html'), 'robots.txt keeps the live verifier out of search, in both languages');
