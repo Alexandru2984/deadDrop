@@ -363,7 +363,7 @@ update `CHANGELOG.md`, commit, tag, then deploy.
 
 ```bash
 /opt/deaddrop/deaddrop version      # release and served-client digest
-git tag -a v0.4.0 -m "0.4.0"
+git tag -a v0.5.0 -m "0.5.0"
 ```
 
 `deaddrop version` prints both halves because a name alone proves nothing. The

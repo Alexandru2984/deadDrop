@@ -9,9 +9,12 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.5.0 — 2026-10-19
 
-No protocol change: tabs on 0.4.0 and on this talk to each other.
+**Update when you can.** Your messages no longer tell the other person your
+device's clock, photos and voice notes no longer carry the moment they were
+made in their names, and the server can no longer end a running conversation.
+No protocol change: a tab on 0.4.0 and one on 0.5.0 talk to each other.
 
 ### Security
 
