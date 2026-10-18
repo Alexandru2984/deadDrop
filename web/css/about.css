@@ -14,6 +14,7 @@
 .doc .note { margin-top: 8px; }
 .yes { color: var(--accent); } .no { color: var(--danger); }
 .back { display: inline-block; margin-bottom: 16px; color: var(--dim); text-decoration: none; }
+.lang-switch { float: right; margin: 0 0 8px 12px; font-size: 13px; }
 .pill { display:inline-block; font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--dim); margin-left: 6px; }
 
 /* ── Code-verification page (/verify.html) ── */
@@ -39,6 +40,7 @@
    need a finger-sized target. Inline links inside sentences are left alone. */
 @media (pointer: coarse) {
   .back,
+  .lang-switch a,
   #gh-link {
     min-height: 44px;
     display: inline-flex;

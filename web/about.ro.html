@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="referrer" content="no-referrer" />
+  <title>💀 Dead Drop — securitate și confidențialitate</title>
+  <meta name="description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
+  <link rel="alternate" hreflang="en" href="https://dead.micutu.com/about.html" />
+  <link rel="alternate" hreflang="ro" href="https://dead.micutu.com/about.ro.html" />
+  <link rel="canonical" href="https://dead.micutu.com/about.ro.html" />
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Dead Drop" />
+  <meta property="og:title" content="💀 Dead Drop — securitate și confidențialitate" />
+  <meta property="og:description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
+  <meta property="og:url" content="https://dead.micutu.com/about.ro.html" />
+  <meta property="og:image" content="https://dead.micutu.com/og.png" />
+  <meta property="og:locale" content="ro" />
+  <meta property="og:locale:alternate" content="en" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Dead Drop — criptare end-to-end verificată, direct între parteneri" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="💀 Dead Drop — securitate și confidențialitate" />
+  <meta name="twitter:description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
+  <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — securitate și confidențialitate","inLanguage":"ro","url":"https://dead.micutu.com/about.ro.html","description":"Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-iyWdiwPNpqJje3MFZVdKZ03UMcETBS7FOauuTxF4A2g=" />
+  <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💀</text></svg>" />
+</head>
+<body>
+  <main class="doc">
+    <a class="back" href="/">← Înapoi la Dead Drop</a>
+    <p class="lang-switch"><a href="/about.html" hreflang="en" lang="en">English</a></p>
+    <h1>SECURITATE &amp; CONFIDENȚIALITATE</h1>
+    <p class="lead">Un model de amenințare precis: ce e criptat, ce metadate rămân și ce promisiuni nu poate face un site web.</p>
+
+    <h2>Înainte să ai încredere într-o conversație</h2>
+    <ul>
+      <li>Folosește dispozitive și browsere necompromise, care au primit codul de client intenționat.</li>
+      <li>Compară codul de siguranță al fiecărui partener pe un <strong>canal separat, de încredere</strong>, apoi confirmați-l amândoi. Mesajele, fișierele și apelurile rămân blocate până la confirmarea reciprocă.</li>
+      <li>Tratează cele 6 emoji ca pe o verificare manuală de 36 de biți. Pentru o verificare mai sigură, față în față, scanează codul QR complet de 128 de biți.</li>
+      <li>Dacă codurile diferă sau handshake-ul eșuează, oprește-te. Un cod care se potrivește autentifică puternic această sesiune, în ipotezele protocolului; nu înseamnă că nimeni nu poate observa sau înregistra textul cifrat și metadatele.</li>
+    </ul>
+
+    <h2>Ce e criptat end-to-end</h2>
+    <ul>
+      <li><strong>Mesajele, fișierele și comenzile aplicației.</strong> Protocolul pereche v6 combină ECDH P-256 efemer cu ML-KEM-768, derivă chei separate pe direcție și pe context cu HKDF-SHA256 și sigilează datele cu AES-256-GCM. Transcrierea, rolul, epoca și tipul conținutului sunt autentificate; reluările sunt respinse.</li>
+      <li><strong>Nimic nu poate fi eliminat sau reordonat pe ascuns.</strong> Fiecare plic sigilat își poartă poziția în flux în interiorul criptării. Cine transportă octeții îi poate în continuare arunca sau amesteca, dar destinatarul observă golul și închide sesiunea, în loc să afișeze o conversație cu o bucată lipsă.</li>
+      <li><strong>Codul de siguranță nu poate fi dirijat.</strong> E derivat doar din valori pe care ambele părți s-au angajat înainte ca vreuna să-și dezvăluie cheile, așa că cineva care retransmite handshake-ul nu poate reîncerca până când două sesiuni ajung întâmplător să arate aceleași emoji.</li>
+      <li><strong>Grupurile sunt rețele de perechi.</strong> O cameră are cel mult șase persoane și nicio cheie de grup. Browserul tău face un handshake, un cod de siguranță, un ratchet și un text cifrat separat pentru fiecare destinatar. Verifică fiecare rând independent.</li>
+      <li><strong>Apelurile folosesc WebRTC DTLS-SRTP.</strong> Media nu e împachetată în plicul AES al aplicației. În schimb, setul exact de amprente ale certificatelor DTLS e confirmat prin sesiunea criptată verificată înainte ca un apel 1:1 să fie permis.</li>
+      <li><strong>Evoluția periodică a cheilor.</strong> Un ECDH nou e amestecat cam la fiecare zece minute. Epoca curentă și două anterioare rămân pentru datele aflate în tranzit. Asta oferă proprietăți limitate de forward secrecy / evoluție a cheilor, nu garanția unui Double Ratchet verificat formal; un browser nu poate dovedi că obiectele-cheie abandonate au fost șterse fizic din RAM.</li>
+      <li><strong>Domeniul hibrid / post-cuantic.</strong> ML-KEM e menit să protejeze traficul înregistrat, dacă securitatea și implementarea lui rezistă, chiar și atunci când P-256 nu mai e suficient. „Post-cuantic” e un obiectiv de design, nu o garanție împotriva criptanalizei viitoare, a compromiterii dispozitivelor sau a bug-urilor de implementare.</li>
+    </ul>
+
+    <h2>Forma traficului e ascunsă doar parțial</h2>
+    <p>Plicurile criptate ale aplicației folosesc categorii de mărime. Asta ascunde lungimea exactă a textului în interiorul unei categorii și face unele evenimente scurte de control să semene cu mesaje scurte. <strong>Nu</strong> ascunde momentul, numărul de pachete, schimbarea categoriei, fișierele mari, traficul apelurilor sau volumul total. Traficul de acoperire opțional adaugă un mesaj-momeală scurt, aleatoriu, cam la fiecare 4–16 secunde; nu e un flux cu rată constantă și nu poate face activitatea invizibilă pentru un observator capabil.</p>
+
+    <h2>Ce află celălalt participant</h2>
+    <p>Criptarea protejează un mesaj de toți cei aflați la mijloc; pe destinatar îl lasă să vadă tot ce e în el. De aceea clientul trimite doar ce ai vrut să trimiți.</p>
+    <ul>
+      <li><strong>Fără ceas.</strong> Mesajele nu conțin nicio oră de pe dispozitivul tău: una în fiecare mesaj i-ar permite celuilalt să măsoare decalajul ceasului tău și să recunoască același dispozitiv într-o cameră ulterioară.</li>
+      <li><strong>Poze fără istoric.</strong> Cu eliminarea metadatelor din poze activă — implicit — imaginile JPEG, PNG și WebP sunt re-codate pe dispozitivul tău, fără poziție GPS, ora capturii și detaliile camerei, iar un nume generat de cameră sau de unealta de captură de ecran (cu ora capturii în el) e înlocuit cu <code>photo.jpg</code>. Celelalte fișiere sunt trimise exact cum le-ai ales, inclusiv numele.</li>
+      <li><strong>Mesajele vocale</strong> sunt trimise ca <code>voice.webm</code>, nu sub un nume cu marcaj de timp.</li>
+      <li><strong>Adresa ta IP</strong> e ascunsă de partener cât timp modul doar-relay e activ (implicit) și TURN funcționează; aplicația îți spune când nu există niciun relay. Indicatorul de tastare poate fi oprit.</li>
+      <li><strong>Sesiuni separate.</strong> Cu contactele salvate oprite, clientul nu păstrează între sesiuni nimic care să te identifice în fața celuilalt. Ce încă poate: adresa ta IP în afara modului doar-relay, cum și ce scrii și orice dezvăluie browserul tău de la sine.</li>
+    </ul>
+
+    <h2>Ce văd serviciul și rețeaua</h2>
+    <ul>
+      <li><span class="no">Conținut:</span> cu clientul intenționat, dispozitive necompromise și coduri de siguranță verificate reciproc, serverul de semnalizare / relay-ul TURN primește text cifrat, nu textul mesajelor, al fișierelor sau al apelurilor.</li>
+      <li><span class="yes">Metadate de cont și de sesiune:</span> serverul Go poate asocia un nume de utilizator / o sesiune și IP-ul sursă cu un cod de cameră, un ID de partener, ceilalți membri ai camerei, orele conexiunilor și semnalizarea SDP/ICE pe care o retransmite. Aceste valori sunt păstrate în memorie pentru sesiunile active, dar nu sunt scrise în logul aplicației.</li>
+      <li><span class="yes">Metadate de rețea:</span> nginx, Cloudflare, journald, coturn, gazda VPS-ului și rețelele din amonte pot înregistra adrese IP, căi, momente, mărimi sau volumul traficului. Logurile generice ale aplicației nu sunt singurele loguri din sistem.</li>
+      <li><strong>Modul doar-relay</strong> ascunde IP-ul fiecărui capăt de celălalt partener, când TURN reușește. Operatorul VPS-ului / TURN vede în continuare IP-urile ambelor capete și momentele. E confidențialitatea IP-ului față de partener, nu anonimat.</li>
+      <li><strong>Cloudflare</strong> termină TLS-ul pe clearnet și poate vedea / modifica pagina, API-ul, cookie-urile și traficul de semnalizare WebSocket. În mod normal nu transportă canalul de date P2P. Ruta onion îl scoate pe Cloudflare din livrarea paginii, a API-ului și a semnalizării, dar WebRTC/TURN urmează o cale de rețea separată.</li>
+    </ul>
+
+    <h2>Stocare, TTL, ardere și panică</h2>
+    <ul>
+      <li>Serverul păstrează numele de utilizator, verificatorii de parolă / etichetele KDF, verificatorii opționali de constrângere, invitațiile și un secret împotriva enumerării. Nu păstrează camere de chat, mesaje, fișiere sau apeluri.</li>
+      <li>TTL-ul, arderea după citire și ștergerea bilaterală sunt comportamente cooperative ale browserului. Un partener poate face captură de ecran, salva, instrumenta sau modifica clientul; fișierele descărcate și urmele forensice ale sistemului de operare / browserului pot supraviețui.</li>
+      <li>Butonul de panică șterge starea din memorie a acestui tab, închide conexiunile și încearcă deconectarea. Nu poate șterge alt dispozitiv, logurile infrastructurii, crash dump-urile, swap-ul, extensiile sau datele deja copiate.</li>
+    </ul>
+
+    <h2>Autentificare și constrângere</h2>
+    <p>Conturile noi și cele actualizate folosesc SRP-6a. Parola nu e trimisă la o autentificare SRP normală; serverul stochează un verificator, care, dacă e furat, permite totuși încercări offline de dicționar. PBKDF2-SHA256 (în prezent 600.000 de iterații) ridică acest cost, dar nu salvează o parolă slabă. Un cont vechi bcrypt își trimite parola o singură dată către originea Go — prin Cloudflare pe clearnet — apoi trece la SRP.</p>
+    <p>Parola opțională de constrângere deschide o sesiune-capcană cu aspect normal, iar răspunsurile API nu o etichetează pentru browser. Serverul știe, inevitabil, care credențial a reușit. Cineva hotărât să constrângă, operatorul, compromiterea dispozitivului sau o comparație forensică pot destrăma iluzia; nu e o autentificare negabilă criptografic.</p>
+
+    <h2>Încrederea în codul livrat browserului tău</h2>
+    <p>Aceasta e limita fundamentală a criptării E2E în browser. Un server compromis sau constrâns, ori un furnizor care termină TLS-ul, poate trimite JavaScript care copiază textul sau cheile înainte de criptare. CSP, SRI, un pachet încorporat și <code>/SHA256SUMS</code> reduc modificările accidentale și unele modificări din lanțul de aprovizionare, dar un răspuns malițios de la sursă poate altera împreună pagina, scriptul, manifestul și verificatorul din pagină.</p>
+    <p><a href="/verify.html">Verifică codul</a> (în engleză) explică cum compari manifestul printr-un canal independent. Nici asta nu poate dovedi octeții care rulează deja și nu poate detecta orice răspuns țintit. Un client instalat separat, semnat / fixat, e necesar atunci când serverul însuși face parte din modelul de amenințare.</p>
+
+    <h2>Alte non-obiective și riscuri reziduale</h2>
+    <ul>
+      <li>Dispozitive compromise, parteneri rău-intenționați, privitul peste umăr, capturile de ecran și keyloggerele.</li>
+      <li>Analiza globală a traficului sau ascunderea faptului că serviciul a fost contactat.</li>
+      <li>Recuperarea contului: nu există email sau alt canal de recuperare.</li>
+      <li>Asigurare formală: acest protocol propriu are teste adversariale automate, dar niciun audit criptografic profesionist independent.</li>
+    </ul>
+
+    <h2>Adresa Tor <span class="pill">cale fără Cloudflare pentru pagină / semnalizare</span></h2>
+    <span class="onion">http://bhfutxa5e7tvpw4y4zhm2bc7o3kvbdgug34i6bahjr2eb5ifpfobuvid.onion</span>
+    <p class="note">Tor transportă TCP. Comportamentul WebRTC al browserului și conectivitatea TURN sunt separate; folosirea adresei onion nu anonimizează automat calea live pentru media / date.</p>
+
+    <a class="back" href="/">← Înapoi la Dead Drop</a>
+  </main>
+</body>
+</html>

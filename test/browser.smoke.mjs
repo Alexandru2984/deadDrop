@@ -258,6 +258,15 @@ const booted = await waitFor(async () => sessionEval(
 ).catch(() => false));
 ok(booted, 'the app boots and shows the auth page');
 
+// The security explanation is offered in the language the interface is in.
+const aboutHref = async () => sessionEval(`document.querySelector('#auth .about-link').getAttribute('href')`);
+const hrefEn = await aboutHref();
+await sessionEval(`document.querySelector('.lang-btn').click(); true`);
+const hrefRo = await aboutHref();
+await sessionEval(`document.querySelector('.lang-btn').click(); true`);
+ok(hrefEn === '/about.html' && hrefRo === '/about.ro.html',
+  `the security page link follows the interface language (${hrefEn} / ${hrefRo})`);
+
 // A failed login says so in the interface's words, not the server's
 // lower-case English.
 await sessionEval(`
@@ -697,7 +706,7 @@ for (const vp of VIEWPORTS) {
 // The standalone pages carry the security explanations and the integrity
 // checker. They are reached from the app but never exercised by any other
 // suite, so nothing would notice them breaking on a phone.
-for (const page of ['about.html', 'verify.html']) {
+for (const page of ['about.html', 'about.ro.html', 'verify.html']) {
   for (const vp of VIEWPORTS) {
     await emulatePhone(vp);
     await sessionSend('Page.navigate', { url: `${BASE}/${page}` });

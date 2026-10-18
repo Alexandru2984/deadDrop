@@ -11,6 +11,7 @@
 User-agent: *
 Allow: /$
 Allow: /about.html
+Allow: /about.ro.html
 Allow: /og.png
 
 # The verifier reports what *this* server is currently serving. An indexed copy

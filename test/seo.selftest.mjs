@@ -48,7 +48,7 @@ for (const page of pages) {
 
 console.log('\nwhat is meant to be found, and what is not');
 
-const indexable = { 'index.html': true, 'about.html': true, 'verify.html': false, '404.html': false };
+const indexable = { 'index.html': true, 'about.html': true, 'about.ro.html': true, 'verify.html': false, '404.html': false };
 for (const [page, wanted] of Object.entries(indexable)) {
   const html = read(page);
   const blocked = /<meta\s+name="robots"[^>]*content="[^"]*noindex/i.test(html);
@@ -56,7 +56,7 @@ for (const [page, wanted] of Object.entries(indexable)) {
     `${page} is ${wanted ? 'indexable' : 'kept out of search'}`);
 }
 
-for (const page of ['index.html', 'about.html']) {
+for (const page of ['index.html', 'about.html', 'about.ro.html']) {
   const html = read(page);
   const desc = /<meta\s+name="description"\s+content="([^"]+)"/.exec(html)?.[1] ?? '';
   ok(desc.length >= 80 && desc.length <= 320,
@@ -72,6 +72,19 @@ for (const page of ['index.html', 'about.html']) {
   try { parsed = JSON.parse(ld); } catch { /* reported below */ }
   ok(parsed && parsed['@context'] === 'https://schema.org' && parsed['@type'],
     `${page} carries parseable structured data (${parsed?.['@type'] ?? 'invalid'})`);
+}
+
+console.log('\nthe security page in both languages');
+{
+  const en = read('about.html'), ro = read('about.ro.html');
+  const alt = (html, lang, url) => new RegExp(`<link rel="alternate" hreflang="${lang}" href="${url}"`).test(html);
+  ok(alt(en, 'ro', OURS + '/about.ro.html') && alt(ro, 'en', OURS + '/about.html'),
+    'each language version names the other as its alternate');
+  ok(/<html lang="ro">/.test(ro) && /og:locale" content="ro"/.test(ro), 'the Romanian page says it is Romanian');
+  // A translation that drops a section drops a caveat. Keep them in step.
+  const count = (html, tag) => (html.match(new RegExp(`<${tag}[ >]`, 'g')) || []).length;
+  ok(count(en, 'h2') === count(ro, 'h2') && count(en, 'li') === count(ro, 'li'),
+    `both versions carry the same sections and points (${count(en, 'h2')}/${count(ro, 'h2')} sections, ${count(en, 'li')}/${count(ro, 'li')} points)`);
 }
 
 console.log('\nrobots and sitemap agree with the pages');

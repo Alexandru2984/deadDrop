@@ -37,6 +37,7 @@ const STRINGS = {
     'aria.settings': 'Account settings',
     'aria.copyCode': 'Copy the room code',
     'aria.msgInput': 'Message',
+    'about.href': '/about.html',
     'aria.copyLink': 'Copy the invite link',
     'aria.call': 'Start a call',
     'aria.panic': 'Panic — clear this tab and log out',
@@ -243,6 +244,7 @@ const STRINGS = {
     'aria.settings': 'Setările contului',
     'aria.copyCode': 'Copiază codul camerei',
     'aria.msgInput': 'Mesaj',
+    'about.href': '/about.ro.html',
     'aria.copyLink': 'Copiază linkul de invitație',
     'aria.call': 'Începe un apel',
     'aria.panic': 'Panică — șterge acest tab și deconectează-te',
@@ -441,6 +443,7 @@ export function applyI18n() {
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
+  document.querySelectorAll('[data-i18n-href]').forEach((el) => { el.setAttribute('href', t(el.dataset.i18nHref)); });
   // Accessible names for controls whose only visible content is an icon. Without
   // these a screen reader announces the emoji — "skull" for the panic button —
   // which is worse than silence because it sounds like information.
