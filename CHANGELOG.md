@@ -32,6 +32,11 @@ No protocol change: tabs on 0.4.0 and on this talk to each other.
   not trust — could end any conversation by saying so, and one phone switching
   networks ended it for both.
 
+- **Lookalike link hosts are shown for what they are.** Addresses in messages
+  became links in this release; one whose host uses another script — `аpple.com`
+  with a Cyrillic а — is shown in punycode (`xn--pple-43d.com`) instead of as
+  the name it imitates.
+
 ### Fixed
 
 - A network change no longer ends a conversation: an interrupted direct
@@ -48,6 +53,10 @@ No protocol change: tabs on 0.4.0 and on this talk to each other.
   above the top of the screen, out of reach.
 - Server errors, connection states, tooltips and the call screens are now
   translated; the Romanian ring said "call in progress" for an unanswered call.
+- The QR and call dialogs are modal for the keyboard too: Tab past their last
+  control used to reach the message field and panic button hidden behind them.
+- The notes under the privacy switches were drawn at 3.5:1 contrast; they now
+  meet WCAG AA, and the contrast check measures painted opacity on every view.
 
 ### Changed
 
@@ -62,6 +71,16 @@ No protocol change: tabs on 0.4.0 and on this talk to each other.
 - Received files are a compact row with a Save button; a desktop conversation
   keeps to a readable column; the invitation is centred in an empty room and
   can be sent through the phone's share sheet.
+- Messages can have more than one line (Shift+Enter, or the return key on a
+  phone), never sent mid-IME composition; web addresses become links that open
+  without a referrer and are never previewed; a screenshot pasted into the
+  message field is sent as an image, while pasted text stays text.
+- The client is served gzip-compressed and its module graph is preloaded: the
+  first load went from about 436 KB to 157 KB, and startup on a 150 ms link
+  from about 1.33 s to 0.95 s. Pages stay no-store, so no visit is cached.
+- The security page and the code verifier are published in Romanian, and the
+  security page describes protocol v6 and what the other person learns from
+  what you send. The 404 page reads in both languages.
 
 ## 0.4.0 — 2026-10-13
 
