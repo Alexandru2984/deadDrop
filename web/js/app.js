@@ -127,14 +127,19 @@ function linkify(text) {
   for (const match of text.matchAll(URL_IN_TEXT)) {
     const raw = trimUrl(match[0]);
     let href;
+    let shown = raw;
     try {
       const url = new URL(raw);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
       href = url.href;
+      // A host in another script can be drawn to look like a familiar one —
+      // "аpple.com" with a Cyrillic а. Browsers show such hosts in their
+      // punycode form so the difference is visible; so does the link.
+      if (url.hostname.split('.').some((label) => label.startsWith('xn--'))) shown = href;
     } catch { continue; }
     if (match.index > last) parts.push(text.slice(last, match.index));
     parts.push(h('a', {
-      href, text: raw, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'msg-link',
+      href, text: shown, target: '_blank', rel: 'noopener noreferrer nofollow', class: 'msg-link',
     }));
     last = match.index + raw.length;
   }

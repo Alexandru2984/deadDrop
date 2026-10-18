@@ -344,6 +344,20 @@ const wikiLinks = await waitFor(() => bob.eval(`(() => {
 ok(JSON.stringify(wikiLinks) === JSON.stringify(['https://en.wikipedia.org/wiki/Foo_(bar)', 'https://example.org/x']),
   `brackets: kept inside an address, dropped around one (${JSON.stringify(wikiLinks)})`);
 
+// A lookalike host is shown as what it is. "аpple.com" below begins with a
+// Cyrillic а; the link must not read as apple.com.
+const homograph = 'login at https://\u0430pple.com/account now';
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(homograph)};
+  document.querySelector('#send-btn').click(); true
+`);
+const spoof = await waitFor(() => bob.eval(`(() => {
+  const a = [...document.querySelectorAll('.msg-link')].find((l) => l.getAttribute('href').includes('xn--'));
+  return a && { text: a.textContent, href: a.getAttribute('href') };
+})()`), { timeout: 10000 });
+ok(spoof && spoof.text === spoof.href && spoof.text.includes('xn--pple'),
+  `a lookalike host is shown in punycode, not as the name it imitates (${spoof?.text})`);
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.
