@@ -362,8 +362,24 @@ await sessionEval(`
 // once sat on "Joining room…" forever because nothing came back to say so.
 const emptyCode = [...crypto.getRandomValues(new Uint8Array(12))]
   .map((b) => b.toString(16).padStart(2, '0')).join('');
+// Something that is not a code is refused where it was typed — the error used
+// to go to the hidden conversation log, so the button seemed to do nothing.
 await sessionEval(`
-  document.querySelector('#room-code-input').value = '${emptyCode}';
+  document.querySelector('#room-code-input').value = 'not a room';
+  document.querySelector('#join-room').click();
+  true
+`);
+const refusedHere = await waitFor(() => sessionEval(`(() => {
+  const err = document.querySelector('#landing-error');
+  return !err.classList.contains('hidden') && err.getBoundingClientRect().height > 0
+    && document.querySelector('#room-code-input').getAttribute('aria-invalid') !== null
+    && !document.querySelector('#landing').classList.contains('hidden') ? err.textContent : false;
+})()`), { timeout: 5000 });
+ok(refusedHere, `a bad room code is refused visibly, on the landing page (${refusedHere || 'nothing shown'})`);
+
+// The whole invitation link is what people are sent, and what they paste.
+await sessionEval(`
+  document.querySelector('#room-code-input').value = location.origin + '/#join=${emptyCode}';
   document.querySelector('#join-room').click();
   true
 `);
@@ -371,6 +387,8 @@ const aloneInRoom = await waitFor(async () => sessionEval(
   `document.querySelector('#status').classList.contains('waiting')
    && !!document.querySelector('.share-link')`).catch(() => false), { timeout: 15000 });
 ok(aloneInRoom, 'joining an empty room by code ends in "waiting", with the invitation to share');
+ok(await sessionEval(`document.querySelector('#room-code').textContent`) === emptyCode,
+  'a pasted invitation link joins the room it names');
 
 // A phone changing networks drops the signaling socket. Someone waiting alone
 // must get back into the same room by themselves, or whoever they invited

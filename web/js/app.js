@@ -147,6 +147,17 @@ function linkify(text) {
   return parts;
 }
 
+/**
+ * The room code in what someone typed or pasted: the code itself, or the whole
+ * invitation link — which is what people are actually sent, and used to be cut
+ * to its first 24 characters by the field's maxlength and refused.
+ */
+function roomCodeFrom(input) {
+  const text = String(input || '').trim().toLowerCase();
+  const match = text.match(/#join=([0-9a-f]{24})(?![0-9a-f])/) || text.match(/^([0-9a-f]{24})$/);
+  return match ? match[1] : null;
+}
+
 function needsKdfUpgrade(kdf) {
   const match = /^pbkdf2:(\d+)$/.exec(kdf || '');
   return !match || Number(match[1]) < CURRENT_KDF_ITERATIONS;
@@ -272,6 +283,7 @@ class DeadDrop {
       copyBtn:     $('#copy-code'),
       messages:    $('#messages'),
       msgInput:    $('#msg-input'),
+      landingError: $('#landing-error'),
       sendBtn:     $('#send-btn'),
       attachBtn:   $('#attach-btn'),
       recordBtn:   $('#record-btn'),
@@ -796,18 +808,30 @@ class DeadDrop {
 
   /* ── Room management ── */
 
+  /**
+   * Room creation and joining fail on the landing page, where the conversation
+   * log is hidden: an error rendered there was never seen, and the button
+   * simply seemed to do nothing. Say it under the buttons instead.
+   */
+  _landingError(text) {
+    this.el.landingError.textContent = text || '';
+    this.el.landingError.classList.toggle('hidden', !text);
+    this.el.roomInput.toggleAttribute('aria-invalid', !!text);
+  }
+
   async createRoom() {
+    this._landingError('');
     // Request a server-generated room code (stronger entropy)
     try {
       const res = await fetch('/api/room', { method: 'POST' });
       const data = await res.json();
       if (!res.ok || typeof data.code !== 'string' || !ROOM_CODE_RE.test(data.code)) {
-        this._renderSystem(serverMessage(data.error, 'err.roomCreate'));
+        this._landingError(serverMessage(data.error, 'err.roomCreate'));
         return;
       }
       this.roomCode = data.code;
     } catch {
-      this._renderSystem(t('err.roomCreate'));
+      this._landingError(t('err.roomCreate'));
       return;
     }
     await this._loadIceServers();
@@ -815,7 +839,7 @@ class DeadDrop {
       await this._connectSignaling();
       this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
     } catch {
-      this._renderSystem(t('err.signaling'));
+      this._landingError(t('err.signaling'));
       return;
     }
     this._enterChat(this.roomCode);
@@ -887,17 +911,18 @@ class DeadDrop {
   }
 
   async joinRoom() {
-    const code = this.el.roomInput.value.trim().toLowerCase();
-    if (!code) return;
-    if (!ROOM_CODE_RE.test(code)) {
-      this._renderSystem(t('err.roomCode'));
+    this._landingError('');
+    if (!this.el.roomInput.value.trim()) return;
+    const code = roomCodeFrom(this.el.roomInput.value);
+    if (!code || !ROOM_CODE_RE.test(code)) {
+      this._landingError(t('err.roomCode'));
       return;
     }
     await this._loadIceServers();
     try {
       await this._connectSignaling();
     } catch {
-      this._renderSystem(t('err.signaling'));
+      this._landingError(t('err.signaling'));
       return;
     }
     this.roomCode = code;
