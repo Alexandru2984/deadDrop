@@ -864,6 +864,7 @@ class DeadDrop {
     await this._loadIceServers();
     try {
       await this._connectSignaling();
+      this._joinPending = true;
       this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
     } catch {
       this._landingError(t('err.signaling'));
@@ -953,6 +954,7 @@ class DeadDrop {
       return;
     }
     this.roomCode = code;
+    this._joinPending = true;
     this.ws.send(JSON.stringify({ type: 'join', room: code }));
     this._enterChat(code);
     this._setStatus('connecting', t('st.joining'));
@@ -1081,6 +1083,7 @@ class DeadDrop {
       }
       if (this.roomCode !== room) return;
       this._warnedSignalLost = false;
+      this._joinPending = true;
       this.ws.send(JSON.stringify({ type: 'join', room }));
     }, delay);
   }
@@ -1119,6 +1122,7 @@ class DeadDrop {
       }
 
       case 'joined':
+        this._joinPending = false;
         // The server has us in the room. If nobody else is, this is a wait,
         // not a join in progress — say so, and offer the invitation, since
         // whoever entered a code first is the one who has to share it.
@@ -1131,6 +1135,18 @@ class DeadDrop {
         break;
 
       case 'error':
+        // Refused at the door — a full room, a code the server will not take.
+        // The chat view was already up, so the refusal used to sit in its
+        // header over an empty room. Go back to where the code was entered and
+        // say it there.
+        if (this._joinPending) {
+          this._joinPending = false;
+          const reason = serverMessage(msg.error, 'st.unknownError');
+          this._cleanup();
+          this._showPage('landing');
+          this._landingError(reason);
+          break;
+        }
         this._setStatus('disconnected', t('st.error').replace('{e}', serverMessage(msg.error, 'st.unknownError')));
         break;
 
@@ -2470,6 +2486,7 @@ class DeadDrop {
     this._rejoinTimer = null;
     this._warnedSignalLost = false;
     this._warnedSessionEnded = false;
+    this._joinPending = false;
     this._closeQrVerify();
     this._stopCoverTraffic();
     this._endCallCleanup();

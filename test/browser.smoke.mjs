@@ -358,6 +358,28 @@ await sessionEval(`
   })()
 `);
 
+// A join the server refuses — here, by sending it a malformed code — returns to
+// the landing page with the reason, instead of leaving an empty chat view
+// whose header holds the only clue.
+await sessionEval(`(() => {
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    const msg = JSON.parse(data);
+    if (msg.type === 'join') { WebSocket.prototype.send = send; msg.room = 'zz'; data = JSON.stringify(msg); }
+    return send.call(this, data);
+  };
+  document.querySelector('#room-code-input').value = 'a1b2c3d4e5f6a1b2c3d4e5f6';
+  document.querySelector('#join-room').click();
+  return true;
+})()`);
+const turnedAway = await waitFor(() => sessionEval(`(() => {
+  const err = document.querySelector('#landing-error');
+  return !document.querySelector('#landing').classList.contains('hidden')
+    && document.querySelector('#chat-wrap').classList.contains('hidden')
+    && !err.classList.contains('hidden') ? err.textContent : false;
+})()`), { timeout: 15000 });
+ok(turnedAway, `a refused join goes back to the landing page and says why (${turnedAway || 'stuck'})`);
+
 // Typing a code nobody is using yet puts you in that room, alone. The client
 // once sat on "Joining room…" forever because nothing came back to say so.
 const emptyCode = [...crypto.getRandomValues(new Uint8Array(12))]
