@@ -62,6 +62,19 @@ const room = await waitFor(async () => {
 });
 ok(room, 'peer A creates a room');
 
+// Someone arriving through the invitation, not logged in, is told why they
+// are looking at a sign-in page and that the room will be waiting.
+const visitor = await Peer.open(cdp, 'visitor');
+await visitor.goto(`${BASE}/#join=${room}`);
+const invitedNote = await waitFor(() => visitor.eval(`(() => {
+  const note = document.querySelector('#auth-invited');
+  return !document.querySelector('#auth').classList.contains('hidden') && !note.classList.contains('hidden')
+    ? note.textContent : false;
+})()`), { timeout: 10000 });
+ok(invitedNote && /invited/i.test(invitedNote), `an invited visitor is told the room will be ready after signing in (${invitedNote || 'nothing'})`);
+ok(await visitor.eval(`location.hash === ''`), 'and the room code is taken out of the address bar');
+await cdp.send('Target.closeTarget', { targetId: visitor.targetId });
+
 await bob.eval(`
   document.querySelector('#room-code-input').value = ${JSON.stringify(room)};
   document.querySelector('#join-room').click(); true

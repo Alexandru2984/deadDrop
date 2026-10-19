@@ -272,6 +272,14 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 
 .relay-toggle input { accent-color: var(--accent); flex-shrink: 0; }
 
+.invited-note {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  max-width: 320px;
+}
+
 .gen-pass-btn { align-self: flex-start; }
 .gen-pass-note { color: var(--warn); margin: 0; }
 .relay-toggle small { color: var(--dim); }

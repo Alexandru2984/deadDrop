@@ -284,6 +284,8 @@ class DeadDrop {
       messages:    $('#messages'),
       msgInput:    $('#msg-input'),
       landingError: $('#landing-error'),
+      authInvited: $('#auth-invited'),
+      landingInvited: $('#landing-invited'),
       sendBtn:     $('#send-btn'),
       attachBtn:   $('#attach-btn'),
       recordBtn:   $('#record-btn'),
@@ -812,6 +814,11 @@ class DeadDrop {
     this.el.landing.classList.add('hidden');
     this.el.chatWrap.classList.add('hidden');
 
+    // Arriving through an invitation link: say so on whichever page comes
+    // first, until the room is joined or left behind.
+    this.el.authInvited.classList.toggle('hidden', !this._pendingJoin);
+    this.el.landingInvited.classList.toggle('hidden', !(name === 'landing' && this._pendingJoin));
+
     switch (name) {
       case 'auth':
         this.el.auth.classList.remove('hidden');
@@ -940,6 +947,7 @@ class DeadDrop {
 
   async joinRoom() {
     this._landingError('');
+    this.el.landingInvited.classList.add('hidden');
     if (!this.el.roomInput.value.trim()) return;
     const code = roomCodeFrom(this.el.roomInput.value);
     if (!code || !ROOM_CODE_RE.test(code)) {
