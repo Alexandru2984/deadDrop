@@ -165,6 +165,11 @@ ok(stray.length === 0, `no bubble renders a stray null or undefined (${stray[0] 
 // quietly stops burning — and nothing would have noticed.
 const burning = 'burn this ' + suffix;
 await alice.sendBurning(burning);
+// The badge is the only sign the sender gets that it will vanish; it is
+// translated like every other word on screen, not left in English.
+ok(await waitFor(() => alice.eval(`[...document.querySelectorAll('.burn-badge')]
+  .some((b) => b.dataset.i18n === 'msg.burnBadge' && b.textContent.includes('🔥'))`), { timeout: 3000 }),
+  'the burn badge is labelled through the translation table');
 ok(await waitFor(async () => (await bob.transcript()).includes(burning)),
   'a burn-after-reading message reaches B');
 ok(await waitFor(async () => !(await bob.transcript()).includes(burning), { timeout: 15000 }),

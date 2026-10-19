@@ -2369,7 +2369,7 @@ class DeadDrop {
   _metaRow(burn, ttl) {
     if (!burn && ttl <= 0) return null;
     return h('div', { class: 'msg-meta' },
-      burn && h('span', { class: 'burn-badge', text: '🔥 BURN' }),
+      burn && h('span', { class: 'burn-badge', 'data-i18n': 'msg.burnBadge', text: t('msg.burnBadge') }),
       burn && ttl > 0 && ' ',
       ttl > 0 && h('span', { class: 'countdown', text: `${ttl}s` }),
     );

@@ -77,6 +77,7 @@ const STRINGS = {
     'intro.limits': 'It does not make you anonymous. The service can still see who '
       + 'connects, when, and to whom — and it says so plainly rather than leaving you to find out.',
     'msg.peerRemoved': 'The other side removed a message',
+    'msg.burnBadge': '🔥 BURN',
     'boot.unsupported': 'This browser cannot run Dead Drop safely.',
     'boot.explain': 'Everything protecting a conversation runs in your browser, '
       + 'and this one is missing something it needs. Rather than take your password '
@@ -113,7 +114,7 @@ const STRINGS = {
     'idle.warning': 'No activity — this tab wipes itself in 30 seconds. Touch anything to stay.',
     'logout': 'Logout',
     'chat.burn': '🔥 Burn',
-    'chat.ttl.none': 'No TTL',
+    'chat.ttl.none': 'No timer',
     'chat.msg': 'Type a message…',
     'chat.waitingPh': 'Waiting for someone to join…',
     'chat.lockedPh': 'Compare the safety code to start',
@@ -291,6 +292,7 @@ const STRINGS = {
     'intro.limits': 'Nu te face anonim. Serviciul tot poate vedea cine se conectează, '
       + 'când și cu cine — și o spune direct, în loc să te lase să afli singur.',
     'msg.peerRemoved': 'Interlocutorul a șters un mesaj',
+    'msg.burnBadge': '🔥 SE ARDE',
     'boot.unsupported': 'Acest browser nu poate rula Dead Drop în siguranță.',
     'boot.explain': 'Tot ce protejează o conversație rulează în browserul tău, '
       + 'iar acestuia îi lipsește ceva de care are nevoie. În loc să îți ia parola '
@@ -327,7 +329,7 @@ const STRINGS = {
     'idle.warning': 'Nicio activitate — tab-ul se șterge singur în 30 de secunde. Atinge orice ca să rămâi.',
     'logout': 'Deconectare',
     'chat.burn': '🔥 Ardere',
-    'chat.ttl.none': 'Fără TTL',
+    'chat.ttl.none': 'Fără timer',
     'chat.msg': 'Scrie un mesaj…',
     'chat.waitingPh': 'Se așteaptă să intre cineva…',
     'chat.lockedPh': 'Compară codul de siguranță ca să începi',
