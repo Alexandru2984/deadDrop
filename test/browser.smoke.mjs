@@ -736,6 +736,27 @@ for (const vp of VIEWPORTS) {
 
   assertLayout(await measureLayout(vp.name), `${vp.name} (${vp.width}px)`);
 
+  // Romanian runs longer than English almost everywhere, and every check
+  // above was only ever made in English. Measure each screen in both.
+  for (const lang of ['en', 'ro']) {
+    await sessionEval(`document.documentElement.lang === ${JSON.stringify(lang)}
+      || (document.querySelector('#lang-btn').click(), true)`);
+    for (const [view, show] of [['chat', '#chat-wrap'], ['landing', '#landing'], ['sign-in', '#auth']]) {
+      await sessionEval(`
+        for (const id of ['#chat-wrap', '#landing', '#auth']) {
+          document.querySelector(id).classList.toggle('hidden', id !== ${JSON.stringify(show)});
+        }
+        true`);
+      await sleep(150);
+      assertLayout(await measureLayout(view), `${view} in ${lang} on ${vp.name} (${vp.width}px)`);
+    }
+  }
+  await sessionEval(`
+    document.documentElement.lang === 'en' || document.querySelector('#lang-btn').click();
+    document.querySelector('#auth').classList.add('hidden');
+    document.querySelector('#landing').classList.add('hidden');
+    document.querySelector('#chat-wrap').classList.remove('hidden'); true`);
+
   // The status pill is how anyone knows whether the room is safe to type in.
   // The room code may ellipsize; "Waiting for peer…" must not.
   const status = await sessionEval(`(() => {
