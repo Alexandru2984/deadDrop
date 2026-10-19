@@ -402,6 +402,42 @@ const rejoined = await waitFor(() => sessionEval(
    && window.__sockets.length >= 2 && window.__sockets.at(-1).readyState === 1
    && document.querySelectorAll('.share-link').length === 1`), { timeout: 15000 });
 ok(rejoined, 'it rejoins the same room on its own, with one invitation on screen');
+
+// A network that is simply gone is not a logged-out user. Each failed
+// reconnect used to rerun the boot-time login check; with no answer from the
+// server that read as "signed out", and the room was swapped for the sign-in
+// page while the session was still good.
+await sessionSend('Network.enable');
+await sessionSend('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+await sessionEval(`window.__sockets.at(-1).close(); true`);
+await sleep(7000); // long enough for at least two failed reconnects
+const heldRoom = await sessionEval(`({
+  chat: !document.querySelector('#chat-wrap').classList.contains('hidden'),
+  auth: !document.querySelector('#auth').classList.contains('hidden'),
+  status: document.querySelector('#status').textContent,
+})`);
+ok(heldRoom.chat && !heldRoom.auth, `offline, the room is kept rather than swapped for sign-in (${heldRoom.status})`);
+await sessionSend('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+ok(await waitFor(() => sessionEval(`document.querySelector('#status').classList.contains('waiting')
+  && window.__sockets.at(-1).readyState === 1`), { timeout: 40000 }),
+  'and back online it rejoins the room by itself');
+
+// A login that really has ended — as after a server restart — goes to sign-in
+// with the reason, since nobody is waiting in this room to talk to.
+await sessionEval(`fetch('/api/logout', { method: 'POST' }).then(() => { window.__sockets.at(-1).close(); return true; })`);
+const endedNote = await waitFor(() => sessionEval(`(() => {
+  const auth = document.querySelector('#auth');
+  const err = document.querySelector('#auth-error');
+  return !auth.classList.contains('hidden') && !err.classList.contains('hidden') ? err.textContent : false;
+})()`), { timeout: 20000 });
+ok(/ended/i.test(endedNote || ''), `an ended login lands on sign-in and says why (${endedNote || 'nothing shown'})`);
+await sessionEval(`
+  document.querySelector('#auth-user').value = ${JSON.stringify(USER)};
+  document.querySelector('#auth-pass').value = ${JSON.stringify(NEW_PASS)};
+  document.querySelector('#login-btn').click(); true
+`);
+ok(await waitFor(() => sessionEval(`!document.querySelector('#landing').classList.contains('hidden')`), { timeout: 30000 }),
+  'and logging in again works');
 await sessionEval(`location.reload(); true`);
 await waitFor(async () => sessionEval(
   `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });

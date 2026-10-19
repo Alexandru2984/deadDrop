@@ -238,6 +238,15 @@ ok(nasty, 'the hostile filename arrives as text, not markup');
 ok(await bob.eval(`!document.querySelector('#messages img[src="x"]')`),
   'no element was created from the filename');
 
+// A socket error mid-conversation, with the login still valid, must leave
+// the conversation on screen. It used to rerun the boot-time check, which on
+// a good session showed the landing page — the room vanished mid-sentence.
+await alice.eval(`window.__sockets.at(-1).onerror(new Event('error')); true`);
+await sleep(1500);
+ok(await alice.eval(`!document.querySelector('#chat-wrap').classList.contains('hidden')
+  && document.querySelector('#landing').classList.contains('hidden')`),
+  'a socket error with a valid login leaves the conversation on screen');
+
 // Losing the server mid-conversation loses nothing already running: the
 // session is direct. A is told newcomers cannot arrive, and is not torn down
 // to reconnect — a rejoin would be a new peer and a new code to compare.

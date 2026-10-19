@@ -759,6 +759,33 @@ class DeadDrop {
     this.el.loginBtn.textContent = busy ? '…' : t('auth.login');
   }
 
+  /**
+   * The signaling socket failed: find out whether the login itself is gone.
+   *
+   * This used to rerun the boot-time check, which sent anyone whose network
+   * blinked to the sign-in page (no answer read as "not logged in") and
+   * anyone still logged in out of their room to the landing page. Only a 401
+   * ends anything now; a network failure is left to the reconnect logic. A
+   * conversation that is already running is direct and is not torn down —
+   * it is told the login ended, and the room goes to sign-in once empty.
+   */
+  async _recheckSession() {
+    let res;
+    try { res = await fetch('/api/me'); } catch { return; }
+    if (res.status !== 401) return;
+    if (this._verifiedSessions().length > 0) {
+      if (!this._warnedSessionEnded) {
+        this._warnedSessionEnded = true;
+        this._renderSystem(t('sys.sessionEnded'));
+      }
+      return;
+    }
+    this._cleanup();
+    this.username = null;
+    this._showPage('auth');
+    this._showAuthError(t('auth.sessionEnded'));
+  }
+
   async _logout() {
     this._cleanup();
     await fetch('/api/logout', { method: 'POST' });
@@ -1002,8 +1029,8 @@ class DeadDrop {
       socket.onerror = () => {
         clearTimeout(timer);
         if (generation !== this._signalGeneration || this.ws !== socket) return;
-        // Could be auth failure — recheck
-        this._checkAuth();
+        // Could be an ended session — but only the server saying so counts.
+        this._recheckSession();
         if (!settled) {
           settled = true;
           reject(new Error('WebSocket error'));
@@ -2442,6 +2469,7 @@ class DeadDrop {
     clearTimeout(this._rejoinTimer);
     this._rejoinTimer = null;
     this._warnedSignalLost = false;
+    this._warnedSessionEnded = false;
     this._closeQrVerify();
     this._stopCoverTraffic();
     this._endCallCleanup();
