@@ -1,0 +1,29 @@
+name: Vulnerability watch
+
+# CI scans on every push, but advisories are published whenever they are
+# found, not when someone happens to commit. GO-2026-6809 sat against the
+# production build until an unrelated change ran CI. This runs the same scan
+# daily against main, so a new standard-library or dependency advisory fails
+# here and GitHub mails whoever last edited this schedule.
+#
+# GitHub pauses scheduled workflows after 60 days without repository
+# activity; re-enable it from the Actions tab if that happens.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: Known-vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
