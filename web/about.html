@@ -105,6 +105,7 @@
     <h2>Tor address <span class="pill">Cloudflare-free page/signaling path</span></h2>
     <span class="onion">http://bhfutxa5e7tvpw4y4zhm2bc7o3kvbdgug34i6bahjr2eb5ifpfobuvid.onion</span>
     <p class="note">Tor carries TCP. Browser WebRTC behavior and TURN connectivity are separate; using the onion does not automatically anonymize the live media/data path.</p>
+    <p class="note">Tor Browser turns WebRTC off, so Dead Drop does not run there; it says so instead of starting. Reaching the onion from a browser that allows WebRTC (through a Tor proxy) keeps Cloudflare off the page and signaling, while the conversation itself still travels over WebRTC outside Tor.</p>
 
     <a class="back" href="/">← Back to Dead Drop</a>
   </main>

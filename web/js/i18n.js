@@ -83,6 +83,10 @@ const STRINGS = {
       + 'and this one is missing something it needs. Rather than take your password '
       + 'and encrypt nothing, Dead Drop stops here.',
     'boot.suggest': 'A current Firefox, Safari, Chrome or Edge will work.',
+    'boot.webrtcOff': 'WebRTC is turned off here. Tor Browser does that on purpose, and so do '
+      + 'some privacy settings and extensions. Dead Drop carries every message over a '
+      + 'WebRTC connection, so it needs a browser that allows one. That connection does '
+      + 'not go through Tor, even when this page was opened through the onion address.',
     'boot.degraded': 'Not available in this browser',
     'boot.stillSafe': 'Messages are protected either way.',
     'auth.user': 'Username',
@@ -298,6 +302,10 @@ const STRINGS = {
       + 'iar acestuia îi lipsește ceva de care are nevoie. În loc să îți ia parola '
       + 'și să nu cripteze nimic, Dead Drop se oprește aici.',
     'boot.suggest': 'Un Firefox, Safari, Chrome sau Edge recent va funcționa.',
+    'boot.webrtcOff': 'WebRTC este oprit aici. Tor Browser face asta intenționat, la fel și '
+      + 'unele setări sau extensii de confidențialitate. Dead Drop trimite fiecare mesaj printr-o '
+      + 'conexiune WebRTC, deci are nevoie de un browser care o permite. Acea conexiune nu trece '
+      + 'prin Tor, chiar dacă pagina a fost deschisă prin adresa onion.',
     'boot.degraded': 'Indisponibil în acest browser',
     'boot.stillSafe': 'Mesajele sunt protejate oricum.',
     'auth.user': 'Utilizator',

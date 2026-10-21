@@ -82,9 +82,16 @@ await refused(await withBroken('no-ecdh', `
   };
 `), 'without ECDH', 'ECDH');
 
-await refused(await withBroken('no-webrtc', `
+const noRtc = await withBroken('no-webrtc', `
   delete window.RTCPeerConnection;
-`), 'without WebRTC', 'WebRTC');
+`);
+await refused(noRtc, 'without WebRTC', 'WebRTC');
+// This is Tor Browser's default, so the advice cannot be "use Firefox".
+const rtcAdvice = await noRtc.eval(`document.querySelector('#boot-detail').textContent`);
+ok(/Tor Browser/.test(rtcAdvice) && !/current Firefox/.test(rtcAdvice),
+  'without WebRTC alone: explains it is switched off rather than suggesting another browser');
+ok(/not go through Tor/.test(rtcAdvice),
+  'and does not let the onion address imply the conversation is carried over Tor');
 
 // ── Optional capabilities degrade, they do not block ──
 // Refusing here would cost the user a working encrypted session and buy nothing.

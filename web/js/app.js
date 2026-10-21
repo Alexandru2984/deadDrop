@@ -2842,7 +2842,10 @@ function renderUnsupported(missing) {
     // names, and a user pasting one into a search or a bug report is better
     // served by the term the rest of the world uses.
     h('ul', {}, ...missing.map((item) => h('li', { text: `${item.label} — ${item.reason}` }))),
-    h('p', { text: t('boot.suggest') }),
+    // WebRTC alone missing is almost always a choice, not an old browser: Tor
+    // Browser turns it off, as do some privacy settings. "Use a current
+    // Firefox" means nothing to someone already in one.
+    h('p', { text: t(missing.every((item) => item.id === 'webrtc') ? 'boot.webrtcOff' : 'boot.suggest') }),
   );
   detail.classList.remove('hidden');
 }
