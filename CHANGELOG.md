@@ -22,8 +22,22 @@ compare rather than take a hash on trust.
   and the refusal used to suggest "a current Firefox" to someone already in one.
   It now says WebRTC is switched off, and that the WebRTC connection would not
   go through Tor in any case.
+- **Account actions say what happened, and keep saying it.** Results used to
+  flash through the button label for two seconds, unannounced to screen
+  readers; a too-short decoy password showed nothing at all, and a failed
+  delete that was not a wrong password signed out as if the account were gone.
+  Each section now has its own status line.
+- **The decoy password follows the real password's strength rule and cannot
+  equal it.** The server only holds verifiers, so the browser is the one place
+  the two can be compared.
 - The burn badge is translated, the timer menu says "No timer" instead of "No
-  TTL", and the language button is a full-size touch target on phones.
+  TTL", the message field's hint stays on one line on small phones, and the
+  language button is a full-size touch target.
+
+### Development
+
+- govulncheck runs daily and in `deploy.sh`, not only on push. CI actions are
+  pinned by commit and off the deprecated Node 20 runtime.
 
 ## 0.5.0 — 2026-10-19
 
