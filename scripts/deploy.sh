@@ -46,9 +46,15 @@ node scripts/verify-vendor.mjs
 echo "▸ running pre-deploy tests…"
 go vet ./...
 go test -race ./...
-for suite in crypto lifecycle mlkem srp fingerprint config manifest callsignal property; do
+for suite in crypto lifecycle mlkem srp fingerprint config manifest callsignal ice-grace seo property; do
   node "test/$suite.selftest.mjs"
 done
+
+echo "▸ checking for known vulnerabilities…"
+# The Go patch level is a release gate (README), so it is enforced here rather
+# than trusted to CI: an advisory published since the last push would
+# otherwise ship. Same pinned scanner as CI.
+go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
 echo "▸ building (prod flags)…"
 CANDIDATE="$(mktemp "$ROOT/.deaddrop-build.XXXXXX")"
