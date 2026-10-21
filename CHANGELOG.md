@@ -9,6 +9,22 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+### Security
+
+- **Built with Go 1.26.10.** 1.26.9 carries GO-2026-6809 in crypto/x509, which
+  govulncheck reports as reachable from the server.
+
+### Changed
+
+- **Tor Browser is told why Dead Drop stops.** It turns WebRTC off on purpose,
+  and the refusal used to suggest "a current Firefox" to someone already in one.
+  It now says WebRTC is switched off, and that the WebRTC connection would not
+  go through Tor in any case.
+- The burn badge is translated, the timer menu says "No timer" instead of "No
+  TTL", and the language button is a full-size touch target on phones.
+
 ## 0.5.0 — 2026-10-19
 
 **Update when you can.** Your messages no longer tell the other person your
