@@ -177,6 +177,11 @@ select {
 }
 .account-hint { color: var(--dim); font-size: 11px; line-height: 1.5; }
 
+/* What the last action in a section did. It stays until the next attempt,
+   instead of flashing through the button label for two seconds. */
+.account-msg { font-size: 12px; line-height: 1.5; color: var(--danger); }
+.account-msg.ok { color: var(--accent); }
+
 /* Each thing the panel does is its own group with its explanation beside it;
    deleting the account sits apart, past a rule, not one button over from
    setting a password. */

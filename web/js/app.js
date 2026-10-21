@@ -268,6 +268,9 @@ class DeadDrop {
       genNewPassBtn: $('#gen-new-pass-btn'),
       changePassBtn: $('#change-pass-btn'),
       delAccountBtn:$('#del-account-btn'),
+      passMsg:      $('#pass-msg'),
+      duressMsg:    $('#duress-msg'),
+      deleteMsg:    $('#delete-msg'),
       createBtn:   $('#create-room'),
       joinBtn:     $('#join-room'),
       roomInput:   $('#room-code-input'),
@@ -339,6 +342,8 @@ class DeadDrop {
       if (this.el.accountPanel.classList.contains('hidden')) {
         this._restoreFocus();
       } else {
+        // A fresh look at the panel starts without last time's results.
+        for (const msg of [this.el.passMsg, this.el.duressMsg, this.el.deleteMsg]) msg.classList.add('hidden');
         this._renderContacts();
         this._captureFocus(this.el.accountPanel);
       }
@@ -635,113 +640,128 @@ class DeadDrop {
   async _changePassword() {
     const next = this.el.newPass.value;
     const current = this.el.currentPass.value;
-    const btn = this.el.changePassBtn;
-    const flash = (text) => {
-      btn.textContent = text;
-      setTimeout(() => (btn.textContent = t('account.changePass')), 2600);
-    };
+    const say = (text, ok = false) => this._accountMsg(this.el.passMsg, text, ok);
     const weak = passwordProblem(next, this.username);
     if (weak) {
       this.el.newPass.focus();
-      flash(t(weak));
+      say(t(weak));
       return;
     }
     if (!current) {
       this.el.currentPass.focus();
-      flash(t('account.needCurrent'));
+      say(t('account.needCurrent'));
       return;
     }
-    btn.disabled = true;
-    try {
+    await this._accountBusy(this.el.changePassBtn, say, async () => {
       let proof;
       try {
         proof = await this._reauthProof(this.username, current);
       } catch {
-        flash(t('account.wrongCurrent'));
+        say(t('account.wrongCurrent'));
         return;
       }
       const credential = await srpRegister(this.username, next);
       const res = await this._postJSON('/api/account/verifier', { ...credential, ...proof });
-      if (res.status === 401) { flash(t('account.wrongCurrent')); return; }
-      flash(res.ok ? t('account.passChanged') : serverMessage(res.data.error, 'err.connection'));
-      if (res.ok) {
-        this.el.newPass.value = '';
-        this.el.currentPass.value = '';
-        this._concealPasswords();
-      }
-    } catch {
-      flash(t('err.connection'));
-    } finally {
-      btn.disabled = false;
-    }
+      if (res.status === 401) { say(t('account.wrongCurrent')); return; }
+      if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
+      say(t('account.passChanged'), true);
+      this.el.newPass.value = '';
+      this.el.currentPass.value = '';
+      this._concealPasswords();
+    });
   }
 
-  // Set (or update) the duress password. Computed locally — never sent in the clear.
+  /**
+   * Set (or update) the duress password. Computed locally — never sent in the
+   * clear. Held to the same strength rule as the real password: a decoy that
+   * is easy to guess is a decoy that gets found.
+   */
   async _setDuress() {
     const pw = this.el.duressPass.value;
     const current = this.el.currentPass.value;
-    const flash = (key) => {
-      this.el.setDuressBtn.textContent = t(key);
-      setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);
-    };
-    if (pw.length < 8) {
+    const say = (text, ok = false) => this._accountMsg(this.el.duressMsg, text, ok);
+    const weak = passwordProblem(pw, this.username);
+    if (weak) {
       this.el.duressPass.focus();
-      flash('duress.set');
+      say(t(weak));
       return;
     }
     if (!current) {
       this.el.currentPass.focus();
-      flash('account.needCurrent');
+      say(t('account.needCurrent'));
       return;
     }
-    let proof;
-    try {
-      proof = await this._reauthProof(this.username, current);
-    } catch {
-      flash('account.wrongCurrent');
+    // The server stores only verifiers and cannot tell two equal passwords
+    // apart; this is the one place the comparison can be made.
+    if (pw === current) {
+      this.el.duressPass.focus();
+      say(t('duress.sameAsReal'));
       return;
     }
-    const { salt, verifier, kdf } = await srpRegister(this.username, pw);
-    const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf, ...proof });
-    this.el.duressPass.value = '';
-    this.el.currentPass.value = '';
-    if (res.status === 401) { flash('account.wrongCurrent'); return; }
-    this.el.setDuressBtn.textContent = res.ok ? t('duress.saved') : serverMessage(res.data.error, 'duress.set');
-    setTimeout(() => (this.el.setDuressBtn.textContent = t('duress.set')), 1800);
+    await this._accountBusy(this.el.setDuressBtn, say, async () => {
+      let proof;
+      try {
+        proof = await this._reauthProof(this.username, current);
+      } catch {
+        say(t('account.wrongCurrent'));
+        return;
+      }
+      const { salt, verifier, kdf } = await srpRegister(this.username, pw);
+      const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf, ...proof });
+      if (res.status === 401) { say(t('account.wrongCurrent')); return; }
+      if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
+      say(t('duress.saved'), true);
+      this.el.duressPass.value = '';
+      this.el.currentPass.value = '';
+    });
   }
 
   async _deleteAccount() {
     const current = this.el.currentPass.value;
+    const say = (text) => this._accountMsg(this.el.deleteMsg, text);
     if (!current) {
       this.el.currentPass.focus();
-      this.el.delAccountBtn.textContent = t('account.needCurrent');
-      setTimeout(() => (this.el.delAccountBtn.textContent = t('account.delete')), 1800);
+      say(t('account.needCurrent'));
       return;
     }
     if (!confirm(t('account.confirmDelete'))) return;
-    let proof;
+    await this._accountBusy(this.el.delAccountBtn, say, async () => {
+      let proof;
+      try {
+        proof = await this._reauthProof(this.username, current);
+      } catch {
+        say(t('account.wrongCurrent'));
+        return;
+      }
+      const res = await this._postJSON('/api/account/delete', proof);
+      if (res.status === 401) { say(t('account.wrongCurrent')); return; }
+      if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
+      this.el.currentPass.value = '';
+      this._cleanup();
+      location.replace(location.origin + '/');
+    });
+  }
+
+  /** Show what an account action did, under its own button, until the next one. */
+  _accountMsg(el, text, ok = false) {
+    el.textContent = text;
+    el.classList.toggle('ok', ok);
+    el.classList.remove('hidden');
+  }
+
+  /**
+   * Run one account action with its button held down, so a second click cannot
+   * send a second request, and with a network failure reported rather than lost.
+   */
+  async _accountBusy(btn, say, action) {
+    btn.disabled = true;
     try {
-      proof = await this._reauthProof(this.username, current);
+      await action();
     } catch {
-      this.el.delAccountBtn.textContent = t('account.wrongCurrent');
-      setTimeout(() => (this.el.delAccountBtn.textContent = t('account.delete')), 1800);
-      return;
+      say(t('err.connection'));
+    } finally {
+      btn.disabled = false;
     }
-    let res;
-    try {
-      res = await this._postJSON('/api/account/delete', proof);
-    } catch {
-      this.el.delAccountBtn.textContent = t('account.delete');
-      return;
-    }
-    this.el.currentPass.value = '';
-    if (res.status === 401) {
-      this.el.delAccountBtn.textContent = t('account.wrongCurrent');
-      setTimeout(() => (this.el.delAccountBtn.textContent = t('account.delete')), 1800);
-      return;
-    }
-    this._cleanup();
-    location.replace(location.origin + '/');
   }
 
   async _postJSON(path, body) {

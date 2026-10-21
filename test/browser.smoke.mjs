@@ -304,7 +304,13 @@ ok(panel, 'the account panel exposes a current-password field');
 
 // Changing the password: a weak one is refused before anything is sent, a good
 // one is accepted only with the current password proved again.
-const flashOf = () => sessionEval(`document.querySelector('#change-pass-btn').textContent`);
+// The outcome is written under the button and stays there: it used to flash
+// through the button label for two seconds, unannounced to a screen reader.
+const msgOf = (id) => sessionEval(`(() => {
+  const el = document.querySelector('#${id}');
+  return el.classList.contains('hidden') || el.getAttribute('role') !== 'status' ? '' : el.textContent;
+})()`);
+const flashOf = () => msgOf('pass-msg');
 await sessionEval(`
   document.querySelector('#new-pass').value = 'short';
   document.querySelector('#current-pass').value = ${JSON.stringify(PASS)};
@@ -312,6 +318,9 @@ await sessionEval(`
 `);
 ok(/12/.test(await flashOf()), 'a short new password is refused in the browser');
 await sleep(2800);
+ok(/12/.test(await flashOf()), 'and the reason is still there to read after the old flash would have gone');
+ok(await sessionEval(`document.querySelector('#change-pass-btn').textContent`) === 'Change password',
+  'while the button keeps its own label');
 const NEW_PASS = PASS + '-rotated';
 await sessionEval(`
   document.querySelector('#new-pass').value = ${JSON.stringify(NEW_PASS)};
@@ -322,6 +331,21 @@ const changed = await waitFor(async () => /✓/.test(await flashOf()), { timeout
 ok(changed, 'the password is changed after re-proving the current one');
 const stillSignedIn = await sessionEval(`fetch('/api/me').then((r) => r.status)`);
 ok(stillSignedIn === 200, 'the browser that changed it keeps its session');
+
+// The decoy password: held to the same strength rule, never equal to the real
+// one (only the browser can compare them), and a result that can be read.
+const setDuress = (pw, current) => sessionEval(`
+  document.querySelector('#duress-pass').value = ${JSON.stringify(pw)};
+  document.querySelector('#current-pass').value = ${JSON.stringify(current)};
+  document.querySelector('#set-duress-btn').click(); true
+`);
+await setDuress('short', NEW_PASS);
+ok(/12/.test(await msgOf('duress-msg')), `a short decoy password is refused with a reason (${await msgOf('duress-msg') || 'nothing shown'})`);
+await setDuress(NEW_PASS, NEW_PASS);
+ok(/differ/.test(await msgOf('duress-msg')), 'a decoy equal to the real password is refused');
+await setDuress('decoy-' + NEW_PASS.split('').reverse().join(''), NEW_PASS);
+ok(await waitFor(async () => /✓/.test(await msgOf('duress-msg')), { timeout: 20000 }),
+  'a good decoy password is saved and says so');
 
 // Settings survive a reload, and only the ones the user changed differ from
 // the protective defaults.
