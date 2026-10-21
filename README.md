@@ -237,15 +237,24 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -exclude-generated \
   -nosec-require-rules -nosec-require-justification ./...
 go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --no-banner --redact .
-node test/crypto.selftest.mjs
-node test/lifecycle.selftest.mjs
-node test/mlkem.selftest.mjs
-node test/srp.selftest.mjs
-node test/fingerprint.selftest.mjs
-node test/config.selftest.mjs
-node test/manifest.selftest.mjs
+for t in crypto lifecycle mlkem srp fingerprint config manifest callsignal \
+         ice-grace seo property; do node "test/$t.selftest.mjs"; done
 node scripts/gen-integrity.mjs --check
 ```
+
+The browser suites drive a real Chromium (Firefox and WebKit for their own
+files) against a running server. Each wants a fresh server and its own invite
+codes, since a suite's failed-login checks count against the per-IP lockout:
+
+```bash
+ALLOW_LOCAL_ORIGINS=1 PORT=8100 ./deaddrop &
+DD_URL=http://127.0.0.1:8100 DD_INVITE=$(./deaddrop invite) \
+  DD_INVITE2=$(./deaddrop invite) DD_INVITE3=$(./deaddrop invite) \
+  DD_REQUIRE_BROWSER=1 node test/browser.smoke.mjs
+```
+
+The same goes for `browser.{a11y,support,pair,group,call,hostile,integrity}.mjs`.
+`DD_SCREENSHOT_DIR=dir` keeps the smoke suite's phone-size screenshots.
 
 The live SRP migration test is `node test/srp.e2e.mjs` against a disposable local
 server. Production setup and the required pre-deploy configuration changes are in
