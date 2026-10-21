@@ -1,0 +1,16 @@
+# The workflows pin every action to a commit, which only stays safe if
+# someone moves the pins forward. Monthly, one grouped PR per ecosystem, so
+# this is a review rather than a stream of notifications.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: monthly
