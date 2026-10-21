@@ -774,6 +774,25 @@ for (const vp of VIEWPORTS) {
       await sleep(150);
       assertLayout(await measureLayout(view), `${view} in ${lang} on ${vp.name} (${vp.width}px)`);
     }
+    // The longest text in the app is behind the account panel and the privacy
+    // options, both closed above. Open them, with a result line showing.
+    await sessionEval(`(() => {
+      document.querySelector('#auth').classList.add('hidden');
+      document.querySelector('#landing').classList.remove('hidden');
+      document.querySelector('#account-panel').classList.remove('hidden');
+      document.querySelector('.prefs').open = true;
+      const msg = document.querySelector('#duress-msg');
+      msg.textContent = 'Parola-capcană trebuie să fie diferită de parola reală';
+      msg.classList.remove('hidden');
+      return true;
+    })()`);
+    await sleep(150);
+    assertLayout(await measureLayout('landing, panels open'),
+      `landing with every panel open in ${lang} on ${vp.name} (${vp.width}px)`);
+    await sessionEval(`
+      document.querySelector('#account-panel').classList.add('hidden');
+      document.querySelector('#duress-msg').classList.add('hidden');
+      document.querySelector('.prefs').open = false; true`);
   }
   await sessionEval(`
     document.documentElement.lang === 'en' || document.querySelector('#lang-btn').click();
