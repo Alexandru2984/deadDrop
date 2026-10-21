@@ -866,6 +866,16 @@ select { cursor: pointer; width: auto; }
   overflow-y: auto;
 }
 
+/* The hint changes with the room's state (waiting, locked, recording) and on a
+   phone is wider than the one-line field. Wrapped, its second line was cut
+   off half way down; on one line it reads as far as the field goes (Firefox
+   adds an ellipsis, Chrome clips). */
+#msg-input::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* A message keeps the line breaks it was written with. */
 .msg-text { white-space: pre-wrap; }
 .msg-link { color: var(--accent); text-decoration: underline; word-break: break-all; }
