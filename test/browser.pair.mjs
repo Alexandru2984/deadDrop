@@ -457,10 +457,32 @@ ok(!discarded.live && !discarded.recording && discarded.hidden && discarded.note
 await sleep(2500);
 ok(await voicesAtBob() === voicesBefore, 'and no voice note reaches the other side');
 
+
 // ── Second session: a saved contact must not need a new comparison ──
 // Fresh pages in the same browser contexts, so cookies and the pinned identity
 // survive exactly as they would for a returning user.
+//
+// B is recording when A goes. The record button is also the stop button and
+// is disabled once nobody verified is left, so the microphone must not be
+// left running with no way to end it.
+await bob.eval(`(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async (c) => (window.__mic = await real(c));
+  document.querySelector('#record-btn').click();
+  return true;
+})()`);
+ok(await waitFor(() => bob.eval(`!!document.querySelector('.chat-footer.recording')`), { timeout: 10000 }),
+  'B is recording a voice note');
 await alice.goto(BASE + '/');
+const orphaned = await waitFor(() => bob.eval(`(() => {
+  const note = [...document.querySelectorAll('.msg.system')].find((n) => /nobody verified/.test(n.textContent));
+  return note && {
+    live: window.__mic.getTracks().some((tr) => tr.readyState === 'live'),
+    recording: !!document.querySelector('.chat-footer.recording'),
+  };
+})()`), { timeout: 20000 });
+ok(orphaned && !orphaned.live && !orphaned.recording,
+  `when the peer leaves mid-recording the microphone stops and the reason is shown (${JSON.stringify(orphaned)})`);
 // Left alone, B reads who went and what the room is waiting for now.
 const leftNote = await waitFor(async () => (await bob.notices()).find((line) => line.includes('👋')) || false,
   { timeout: 15000 });

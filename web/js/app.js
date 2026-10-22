@@ -1296,6 +1296,13 @@ class DeadDrop {
     // Cover traffic runs whenever it's enabled and there's someone to cover for.
     if (this._coverEnabled && verified.length > 0 && !this._coverTimer) this._startCoverTraffic();
     else if (verified.length === 0) this._stopCoverTraffic();
+    // The record button is about to be disabled, and it is also the stop
+    // button: the microphone would stay live with no way to end it, for a
+    // recording nobody can receive.
+    if (!this.encrypted && this._recorder?.state === 'recording') {
+      this._discardRecording({ quiet: true });
+      this._renderSystem(t('rec.noOne'));
+    }
     for (const control of [this.el.msgInput, this.el.sendBtn, this.el.attachBtn, this.el.recordBtn]) {
       control.disabled = !this.encrypted;
     }
