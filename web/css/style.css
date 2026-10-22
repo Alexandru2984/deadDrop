@@ -1014,6 +1014,11 @@ select { cursor: pointer; width: auto; }
 }
 @keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+/* While recording, the attach button gives its place to a way out: stopping
+   sends, so without this a slip of the tongue went to the other side. */
+#rec-cancel-btn { font-size: 18px; padding: 6px 4px; min-width: 36px; }
+.chat-footer.recording #attach-btn { display: none; }
+
 /* ── File receiving progress ── */
 
 .file-receiving {
@@ -1300,13 +1305,15 @@ select { cursor: pointer; width: auto; }
 
   #attach-btn,
   #record-btn,
+  #rec-cancel-btn,
   #send-btn {
     min-height: 44px;
   }
 
   /* The id rules above set narrower widths and outrank .btn-icon. */
   #attach-btn,
-  #record-btn { min-width: 44px; }
+  #record-btn,
+  #rec-cancel-btn { min-width: 44px; }
 
   /* Verify-bar rows sit close together; keep their controls apart enough to
      hit the intended one. */

@@ -423,12 +423,39 @@ const voice = await waitFor(() => bob.eval(`(() => {
   return link && { name: link.getAttribute('download'),
     label: link.closest('.file-msg').querySelector('.file-name').textContent };
 })()`), { timeout: 30000 });
-ok(voice && /^voice\.(webm|ogg)$/.test(voice.name), `a voice note carries no timestamp (${voice?.name})`);
+ok(voice && /^voice\.(webm|ogg|m4a)$/.test(voice.name), `a voice note carries no timestamp (${voice?.name})`);
 ok(voice && voice.label === '🎙️ Voice message', `and is shown as a voice message (${voice?.label})`);
 ok(await alice.eval(`!document.querySelector('.chat-footer.recording')
   && document.querySelector('#msg-input').placeholder !== ''
   && !/🔴/.test(document.querySelector('#msg-input').placeholder)`),
   'the recording sign clears once the note is sent');
+
+// Stopping sends, so a recording needs a way to be thrown away: the discard
+// button ends the microphone at once and nothing reaches the other side.
+const voicesAtBob = () => bob.eval(`[...document.querySelectorAll('.file-download')]
+  .filter((a) => /^voice/.test(a.getAttribute('download'))).length`);
+const voicesBefore = await voicesAtBob();
+await alice.eval(`(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getUserMedia = async (c) => (window.__mic = await real(c));
+  document.querySelector('#record-btn').click();
+  return true;
+})()`);
+ok(await waitFor(() => alice.eval(`!!document.querySelector('.chat-footer.recording')
+  && !document.querySelector('#rec-cancel-btn').classList.contains('hidden')`), { timeout: 10000 }),
+  'while recording, a discard button is offered');
+await sleep(800);
+await alice.eval(`document.querySelector('#rec-cancel-btn').click(); true`);
+const discarded = await alice.eval(`({
+  live: window.__mic.getTracks().some((tr) => tr.readyState === 'live'),
+  recording: !!document.querySelector('.chat-footer.recording'),
+  hidden: document.querySelector('#rec-cancel-btn').classList.contains('hidden'),
+  note: [...document.querySelectorAll('.msg.system')].some((n) => /discarded/.test(n.textContent)),
+})`);
+ok(!discarded.live && !discarded.recording && discarded.hidden && discarded.note,
+  `discarding ends the microphone and says nothing was sent (${JSON.stringify(discarded)})`);
+await sleep(2500);
+ok(await voicesAtBob() === voicesBefore, 'and no voice note reaches the other side');
 
 // ── Second session: a saved contact must not need a new comparison ──
 // Fresh pages in the same browser contexts, so cookies and the pinned identity

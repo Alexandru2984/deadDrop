@@ -292,6 +292,7 @@ class DeadDrop {
       sendBtn:     $('#send-btn'),
       attachBtn:   $('#attach-btn'),
       recordBtn:   $('#record-btn'),
+      recCancelBtn: $('#rec-cancel-btn'),
       chatFooter:  $('.chat-footer'),
       fileInput:   $('#file-input'),
       burnToggle:  $('#burn-toggle'),
@@ -426,6 +427,7 @@ class DeadDrop {
       e.target.value = '';
     });
     this.el.recordBtn.addEventListener('click', () => this._toggleRecord());
+    this.el.recCancelBtn.addEventListener('click', () => this._discardRecording());
     // Drag-and-drop on messages area
     const drop = this.el.messages;
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(ev =>
@@ -1757,6 +1759,7 @@ class DeadDrop {
       rec.start();
       this.el.recordBtn.classList.add('recording');
       this.el.recordBtn.textContent = '⏹️';
+      this.el.recCancelBtn.classList.remove('hidden');
       this._recTimer = setTimeout(() => this._stopRecording(), 120000); // 2 min cap
       // The microphone is live: say so where the eye already is, with the time.
       const started = Date.now();
@@ -1778,12 +1781,31 @@ class DeadDrop {
     if (this._recorder && this._recorder.state === 'recording') this._recorder.stop();
   }
 
+  /**
+   * Stop without sending. Used by the discard button, by Escape, and by every
+   * way out of the room — leaving used to keep the microphone live until the
+   * two-minute cap, recording into a room that no longer existed.
+   */
+  _discardRecording({ quiet = false } = {}) {
+    if (!this._recorder) return;
+    this._recDiscard = true;
+    // The last chunk arrives after stop(); with nothing listening it is never
+    // kept, rather than sitting in memory until the next recording.
+    this._recorder.ondataavailable = null;
+    if (this._recordStream) for (const track of this._recordStream.getTracks()) track.stop();
+    this._stopRecording();
+    if (this._recorder?.state !== 'recording') this._finishRecording();
+    if (!quiet) this._renderSystem(t('rec.discarded'));
+  }
+
   _finishRecording() {
     clearInterval(this._recClock);
+    clearTimeout(this._recTimer);
     this.el.chatFooter?.classList.remove('recording');
     this._updateComposerHint();
     this.el.recordBtn.classList.remove('recording');
     this.el.recordBtn.textContent = '🎙️';
+    this.el.recCancelBtn.classList.add('hidden');
     if (this._recordStream) {
       for (const t of this._recordStream.getTracks()) t.stop();
       this._recordStream = null;
@@ -1791,9 +1813,13 @@ class DeadDrop {
     const type = (this._recorder && this._recorder.mimeType) || 'audio/webm';
     const blob = new Blob(this._recChunks, { type });
     this._recChunks = [];
+    if (this._recorder) this._recorder.onstop = null;
     this._recorder = null;
-    if (!blob.size || !this.encrypted) return;
-    const ext = type.includes('ogg') ? 'ogg' : 'webm';
+    const discarded = this._recDiscard;
+    this._recDiscard = false;
+    if (discarded || !blob.size || !this.encrypted) return;
+    // Safari records MP4/AAC; naming that .webm made a file nothing would open.
+    const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'm4a' : 'webm';
     // A fixed name: a timestamp here told the other side the exact
     // millisecond of the sender's clock. The type says it is audio; the
     // receiver labels it as a voice message.
@@ -2329,7 +2355,7 @@ class DeadDrop {
       h('div', { class: 'file-details' },
         !preview && h('span', { class: 'file-icon', 'aria-hidden': 'true', text: '📄' }),
         h('span', { class: 'file-name',
-          text: /^voice\.(webm|ogg)$/.test(meta.fileName) && meta.fileType.startsWith('audio/')
+          text: /^voice\.(webm|ogg|m4a)$/.test(meta.fileName) && meta.fileType.startsWith('audio/')
             ? t('voice.label') : meta.fileName }),
         h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) }),
         h('a', {
@@ -2546,6 +2572,7 @@ class DeadDrop {
     this._warnedSessionEnded = false;
     this._joinPending = false;
     this._closeQrVerify();
+    this._discardRecording({ quiet: true });
     this._stopCoverTraffic();
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
@@ -2592,6 +2619,11 @@ class DeadDrop {
       this._escTimes = [];
       return;
     }
+
+    // Escape also throws away a recording in progress. Unlike closing a
+    // dialog it still counts toward the triple-press wipe: someone mashing
+    // Escape while the microphone is on is the case the wipe exists for.
+    if (this._recorder?.state === 'recording') this._discardRecording();
 
     const now = Date.now();
     this._escTimes = (this._escTimes || []).filter((t) => now - t < 1000);
