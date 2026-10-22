@@ -2347,10 +2347,15 @@ class DeadDrop {
     el.className = 'msg theirs file-msg';
     el.id = this._domMessageId(key);
     el.append(
+      // `total` counts transfer chunks, which mean nothing to the reader;
+      // the percentage is what is shown and announced.
       h('div', { class: 'file-receiving' },
-        h('span', { text: '📦 Receiving file…' }),
-        h('div', { class: 'progress-bar' }, h('div', { class: 'progress-fill' })),
-        h('span', { class: 'progress-text', text: `0 / ${total}` }),
+        h('span', { text: t('file.receiving') }),
+        h('div', {
+          class: 'progress-bar', role: 'progressbar', 'aria-label': t('file.receiving'),
+          'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0',
+        }, h('div', { class: 'progress-fill' })),
+        h('span', { class: 'progress-text', text: '0%' }),
       ),
     );
     this.el.messages.appendChild(el);
@@ -2362,11 +2367,13 @@ class DeadDrop {
     if (!this._validMessageID(id) || !Number.isSafeInteger(received) || !Number.isSafeInteger(total) || total < 1) return;
     const el = document.getElementById(this._domMessageId(this._messageKey(peerId, id)));
     if (!el) return;
+    const bar  = el.querySelector('.progress-bar');
     const fill = el.querySelector('.progress-fill');
     const text = el.querySelector('.progress-text');
-    const pct  = Math.round((received / total) * 100);
+    const pct  = Math.min(100, Math.round((received / total) * 100));
+    if (bar) bar.setAttribute('aria-valuenow', String(pct));
     if (fill) fill.style.width = `${pct}%`;
-    if (text) text.textContent = `${received} / ${total}`;
+    if (text) text.textContent = `${pct}%`;
   }
 
   _renderFileComplete(id, blobUrl, meta, ttl, burn, sender = null, peerId = null) {

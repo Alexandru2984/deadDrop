@@ -194,6 +194,14 @@ ok((await alice.transcript()).includes(keeper),
 // both the ciphertext and the plaintext. None of that had ever run against a
 // real peer.
 const fileBody = 'dead drop file payload ' + suffix + '\n' + 'x'.repeat(120 * 1024);
+// Record every progress label the receiver shows while the file comes in.
+await bob.eval(`(() => {
+  window.__progress = [];
+  new MutationObserver(() => {
+    for (const n of document.querySelectorAll('.progress-text')) window.__progress.push(n.textContent);
+  }).observe(document.querySelector('#messages'), { subtree: true, childList: true, characterData: true });
+  return true;
+})()`);
 ok(await alice.sendFile('notes.txt', fileBody), 'peer A attaches a file');
 
 const received = await waitFor(async () => {
@@ -202,6 +210,9 @@ const received = await waitFor(async () => {
   return match || false;
 }, { timeout: 40000 });
 ok(received, 'peer B receives the file and renders it');
+const progress = await bob.eval(`window.__progress`);
+ok(progress.length > 0 && progress.every((p) => /^\d{1,3}%$/.test(p)),
+  `the receiver's progress reads as a percentage (${[...new Set(progress)].slice(0, 4).join(', ') || 'none seen'})`);
 
 // Both ends format the size from the same declared length, so a mismatch means
 // the metadata and the payload disagreed somewhere in between.
