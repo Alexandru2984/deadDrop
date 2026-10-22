@@ -1712,16 +1712,29 @@ class DeadDrop {
     // Fan out to every peer, each copy encrypted with that pair's own keys.
     // Send sequentially so a group cannot multiply the 25 MB plaintext and
     // ciphertext buffers in memory for every peer at once.
+    //
+    // The sender's copy appears at once, but on a slow link 25 MB takes a
+    // while to leave; closing the tab before then loses it. Say how far it got.
+    const targets = [...this.peers].filter(([, s]) => s.verified && s.conn.userVerified);
+    const own = document.getElementById(this._domMessageId(this._messageKey(null, id)));
+    const sending = own && targets.length
+      ? h('div', { class: 'file-sending', text: t('file.sending').replace('{pct}', '0') })
+      : null;
+    if (sending) own.append(sending);
     const results = [];
-    for (const [peerId, s] of this.peers) {
-      if (!s.verified || !s.conn.userVerified) continue;
+    for (const [index, [peerId, s]] of targets.entries()) {
+      const onProgress = sending && ((done, total) => {
+        const pct = Math.min(100, Math.floor(((index + done / total) / targets.length) * 100));
+        sending.textContent = t('file.sending').replace('{pct}', String(pct));
+      });
       try {
-        await this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn, null, peerId);
+        await this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn, onProgress, peerId);
         results.push({ status: 'fulfilled' });
       } catch (reason) {
         results.push({ status: 'rejected', reason });
       }
     }
+    sending?.remove();
     if (results.some((r) => r.status === 'rejected')) {
       console.error('File send failed:', results.find((r) => r.status === 'rejected')?.reason);
       this._renderSystem(t('err.fileFailed'));

@@ -876,6 +876,9 @@ select { cursor: pointer; width: auto; }
   text-overflow: ellipsis;
 }
 
+/* Under the sender's own copy of a file until it has left. */
+.file-sending { font-size: 11px; color: var(--dim); margin-top: 4px; }
+
 /* A message keeps the line breaks it was written with. */
 .msg-text { white-space: pre-wrap; }
 .msg-link { color: var(--accent); text-decoration: underline; word-break: break-all; }

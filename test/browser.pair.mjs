@@ -202,6 +202,13 @@ await bob.eval(`(() => {
   }).observe(document.querySelector('#messages'), { subtree: true, childList: true, characterData: true });
   return true;
 })()`);
+await alice.eval(`(() => {
+  window.__sending = [];
+  new MutationObserver(() => {
+    for (const n of document.querySelectorAll('.file-sending')) window.__sending.push(n.textContent);
+  }).observe(document.querySelector('#messages'), { subtree: true, childList: true, characterData: true });
+  return true;
+})()`);
 ok(await alice.sendFile('notes.txt', fileBody), 'peer A attaches a file');
 
 const received = await waitFor(async () => {
@@ -210,6 +217,11 @@ const received = await waitFor(async () => {
   return match || false;
 }, { timeout: 40000 });
 ok(received, 'peer B receives the file and renders it');
+const sentProgress = await alice.eval(`window.__sending`);
+ok(sentProgress.some((p) => /\d+%/.test(p)),
+  `the sender sees how far the file has gone (${[...new Set(sentProgress)].slice(-2).join(', ') || 'none seen'})`);
+ok(await waitFor(() => alice.eval(`!document.querySelector('.file-sending')`), { timeout: 10000 }),
+  'and the note goes once it has left');
 const progress = await bob.eval(`window.__progress`);
 ok(progress.length > 0 && progress.every((p) => /^\d{1,3}%$/.test(p)),
   `the receiver's progress reads as a percentage (${[...new Set(progress)].slice(0, 4).join(', ') || 'none seen'})`);
