@@ -519,6 +519,24 @@ const shareGap = await sessionEval(`
 `);
 ok(shareGap <= 40, `the invitation is centred in the empty room (off by ${shareGap}px)`);
 
+// A browser that refuses the clipboard used to leave the button unchanged,
+// which reads as "copied". It must select the link and say so instead.
+const copyRefused = await sessionEval(`(async () => {
+  const real = navigator.clipboard.writeText;
+  navigator.clipboard.writeText = () => Promise.reject(new DOMException('denied', 'NotAllowedError'));
+  document.querySelector('.copy-link-btn').click();
+  await new Promise((r) => setTimeout(r, 300));
+  navigator.clipboard.writeText = real;
+  const notes = [...document.querySelectorAll('.msg.system')].map((n) => n.textContent);
+  const selected = String(window.getSelection());
+  const note = notes.find((n) => /would not copy/.test(n)) || '';
+  document.querySelectorAll('.msg.system').forEach((n) => { if (n.textContent === note) n.remove(); });
+  window.getSelection().removeAllRanges();
+  return { note, selected };
+})()`);
+ok(copyRefused.note && copyRefused.selected.includes('#join='),
+  `a refused copy selects the link and says so (${copyRefused.note || 'nothing shown'})`);
+
 // The QR generator is fetched on demand rather than on every page load, so the
 // image arrives after the row. Nothing tested it before the change, which means
 // a green suite said nothing about whether it still worked — and a QR that

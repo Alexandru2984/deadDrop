@@ -919,7 +919,7 @@ class DeadDrop {
       this._copySecret(link).then(() => {
         btn.textContent = t('share.copiedClears');
         setTimeout(() => (btn.textContent = t('share.copy')), 2500);
-      }).catch(() => {});
+      }).catch(() => this._copyFailed(el.querySelector('.share-url')));
     });
     // On a phone the link is going to another app anyway; the system share
     // sheet gets it there without a stop in the clipboard, which every app
@@ -939,7 +939,7 @@ class DeadDrop {
       const img = document.createElement('img');
       img.className = 'share-qr';
       img.src = qr;
-      img.alt = 'QR code — scan to join';
+      img.alt = t('share.qrAlt');
       el.appendChild(img);
       this.el.messages.scrollTop = this.el.messages.scrollHeight;
     });
@@ -2443,7 +2443,17 @@ class DeadDrop {
     this._copySecret(this.roomCode).then(() => {
       this.el.copyBtn.textContent = '✓';
       setTimeout(() => (this.el.copyBtn.textContent = '📋'), 1500);
-    }).catch(() => {});
+    }).catch(() => this._copyFailed(this.el.roomCode));
+  }
+
+  /**
+   * The browser refused the clipboard (no permission, no focus, or no API at
+   * all). Nothing visible used to happen, which reads as "copied". Select the
+   * text instead so the system's own copy works, and say so.
+   */
+  _copyFailed(node) {
+    if (node) window.getSelection()?.selectAllChildren(node);
+    this._renderSystem(t('share.copyFailed'));
   }
 
   /**
