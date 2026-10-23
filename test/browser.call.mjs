@@ -205,6 +205,34 @@ ok(afterReject.remote === null && afterReject.local === null,
 ok(await waitFor(() => alice.mediaState().then((s) => s.local === null)),
   'declining releases the caller devices too');
 
+// ── The caller hangs up while the callee's permission prompt is still open ──
+// The camera and microphone granted after that belong to no call. They used
+// to be adopted anyway, live, with the call already gone on both sides.
+await alice.startCall();
+ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings for a third call');
+await bob.eval(`(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  window.__lateCall = null;
+  navigator.mediaDevices.getUserMedia = (c) => new Promise((resolve) => setTimeout(async () => {
+    window.__lateCall = await real(c);
+    resolve(window.__lateCall);
+  }, 2000));
+  window.__restoreGum = () => { navigator.mediaDevices.getUserMedia = real; };
+  return true;
+})()`);
+await bob.acceptCall();
+await sleep(300);
+await alice.endCall();
+const lateCall = await waitFor(() => bob.eval(`window.__lateCall && {
+  live: window.__lateCall.getTracks().some((tr) => tr.readyState === 'live'),
+  overlay: !document.querySelector('#call-overlay').classList.contains('hidden'),
+}`), { timeout: 15000 });
+await bob.eval(`window.__restoreGum(); true`);
+await sleep(500);
+const lateState = await bob.mediaState();
+ok(lateCall && !lateCall.live && lateState.local === null && !lateState.overlay,
+  `media granted after the call ended is stopped, not adopted (${JSON.stringify({ ...lateCall, local: lateState.local })})`);
+
 const errors = [...alice.errors, ...bob.errors];
 ok(errors.length === 0, `no uncaught exceptions${errors.length ? ': ' + errors[0] : ''}`);
 

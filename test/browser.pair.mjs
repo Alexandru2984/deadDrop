@@ -477,6 +477,27 @@ ok(!discarded.live && !discarded.recording && discarded.hidden && discarded.note
 await sleep(2500);
 ok(await voicesAtBob() === voicesBefore, 'and no voice note reaches the other side');
 
+// Two taps while the microphone prompt is open must not open two streams:
+// the first would be orphaned, live, with no button left to stop it.
+await alice.eval(`(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  window.__mics = [];
+  navigator.mediaDevices.getUserMedia = (c) => new Promise((resolve) => setTimeout(async () => {
+    const stream = await real(c);
+    window.__mics.push(stream);
+    resolve(stream);
+  }, 800));
+  window.__restoreGum = () => { navigator.mediaDevices.getUserMedia = real; };
+  document.querySelector('#record-btn').click();
+  document.querySelector('#record-btn').click();
+  return true;
+})()`);
+await waitFor(() => alice.eval(`!!document.querySelector('.chat-footer.recording')`), { timeout: 10000 });
+await sleep(1200);
+await alice.eval(`document.querySelector('#rec-cancel-btn').click(); window.__restoreGum(); true`);
+const mics = await alice.eval(`window.__mics.map((m) => m.getTracks().some((tr) => tr.readyState === 'live'))`);
+ok(mics.length === 1 && !mics[0], `a double tap opens one microphone, and discard ends it (${JSON.stringify(mics)})`);
+
 
 // ── Second session: a saved contact must not need a new comparison ──
 // Fresh pages in the same browser contexts, so cookies and the pinned identity

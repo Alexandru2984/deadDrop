@@ -29,6 +29,9 @@ const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PEER_ID_RE = /^[0-9a-f]{32}$/;
 const MAX_TEXT_LEN = 16 * 1024;
+
+/** Media arrived for a call that had already ended; nothing left to do. */
+class CallGone extends Error {}
 const MAX_RENDERED_NODES = 600;
 const MAX_REMOTE_PEERS = 5;
 const SIGNAL_WINDOW_MS = 10 * 1000;
@@ -1767,9 +1770,20 @@ class DeadDrop {
 
   async _toggleRecord() {
     if (this._recorder && this._recorder.state === 'recording') { this._stopRecording(); return; }
-    if (!this.encrypted) return;
+    // A second tap while the permission prompt is up used to open a second
+    // microphone stream; the first was then orphaned, live, with no button
+    // left that could stop it.
+    if (!this.encrypted || this._recStarting) return;
+    this._recStarting = true;
+    const room = this.roomCode;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Granted after the room was left, or after nobody verified was left
+      // in it: there is nothing to record for.
+      if (!this.encrypted || this.roomCode !== room) {
+        for (const track of stream.getTracks()) track.stop();
+        return;
+      }
       this._recordStream = stream;
       const rec = new MediaRecorder(stream);
       this._recorder = rec;
@@ -1793,6 +1807,8 @@ class DeadDrop {
       this.el.chatFooter?.classList.add('recording');
     } catch {
       this._renderSystem(t('err.micDenied'));
+    } finally {
+      this._recStarting = false;
     }
   }
 
@@ -2048,6 +2064,7 @@ class DeadDrop {
     try {
       this.localStream = await this._getMedia(this._callVideo);
     } catch (err) {
+      if (err instanceof CallGone) return;
       console.error('getUserMedia failed:', err);
       await this._sendBestEffort(this._callConn(), { type: 'call-reject', reason: 'media-error' });
       this._endCallCleanup();
@@ -2127,6 +2144,7 @@ class DeadDrop {
     try {
       this.localStream = await this._getMedia(this._callVideo);
     } catch (err) {
+      if (err instanceof CallGone) return;
       console.error('getUserMedia failed:', err);
       await this._sendBestEffort(this._callConn(), { type: 'call-end' });
       this._endCallCleanup();
@@ -2200,6 +2218,9 @@ class DeadDrop {
   }
 
   _endCallCleanup() {
+    // Media still being granted belongs to the call that asked for it; once
+    // that call is over, whatever arrives is stopped instead of adopted.
+    this._callGen = (this._callGen || 0) + 1;
     this.callState = 'idle';
     clearInterval(this._callClock);
     this._callClock = null;
@@ -2306,16 +2327,27 @@ class DeadDrop {
     this.el.toggleCam.textContent = '📹';
   }
 
+  /**
+   * Camera and microphone for the current call. The permission prompt can be
+   * answered after the call has ended — the other side hung up, or left — and
+   * a stream granted then would be live with no call to belong to, so it is
+   * stopped and the caller learns the call is gone (CallGone).
+   */
   async _getMedia(withVideo) {
+    const call = this._callGen;
+    let stream;
     try {
-      return await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
     } catch (err) {
-      if (withVideo) {
-        // Fallback to audio-only if camera unavailable
-        return await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      }
-      throw err;
+      if (!withVideo || call !== this._callGen) throw err;
+      // Fallback to audio-only if camera unavailable
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     }
+    if (call !== this._callGen) {
+      for (const track of stream.getTracks()) track.stop();
+      throw new CallGone();
+    }
+    return stream;
   }
 
   _renderMsg(id, text, mine, ttl, burn, sender = null, peerId = null) {
