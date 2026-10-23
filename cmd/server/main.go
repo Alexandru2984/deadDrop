@@ -300,7 +300,11 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/api/logout", authRL.Wrap(middleware.RequireSameOrigin(authH.Logout)))
+	// Logout is not rate limited. Behind the auth limiter, a burst of sign-ins
+	// from the same address — anyone else's on a shared one — answered a panic
+	// wipe's logout with 429 and left its session alive on the server. Ending
+	// a session costs a map delete; refusing it breaks the panic button.
+	mux.HandleFunc("/api/logout", middleware.RequireSameOrigin(authH.Logout))
 	mux.HandleFunc("/api/me", publicRL.Wrap(authH.Me))
 
 	// Liveness (no auth). A monitor that only fetches a page proves nginx is up

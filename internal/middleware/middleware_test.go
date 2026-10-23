@@ -516,3 +516,19 @@ func TestOnionCeilingCapsUnsafeRequestsOnly(t *testing.T) {
 		t.Fatalf("codes = %v, want [200 429 200]", codes)
 	}
 }
+
+func TestOnionCeilingNeverRefusesLogout(t *testing.T) {
+	h := OnionCeiling(NewRateLimiter(1, 1, time.Hour), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	for i, path := range []string{"/api/srp/challenge", "/api/srp/challenge", "/api/logout", "/api/logout"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, path, nil))
+		want := http.StatusOK
+		if i == 1 {
+			want = http.StatusTooManyRequests
+		}
+		if rec.Code != want {
+			t.Fatalf("request %d to %s = %d, want %d", i, path, rec.Code, want)
+		}
+	}
+}
+

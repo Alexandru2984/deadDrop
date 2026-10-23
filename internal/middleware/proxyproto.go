@@ -162,9 +162,12 @@ func circuitFrom(r *http.Request) (string, bool) {
 // OnionCeiling caps unsafe requests across every circuit together. Per-circuit
 // buckets stop one visitor crowding out the rest; this stops a client that
 // keeps building circuits from multiplying its share without bound.
+//
+// Logout is exempt. The ceiling is shared, so anyone could fill it, and a
+// panic wipe's logout refused with 429 would leave that session alive.
 func OnionCeiling(rl *RateLimiter, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isUnsafeMethod(r.Method) && !rl.Allow("onion-ceiling") {
+		if isUnsafeMethod(r.Method) && r.URL.Path != "/api/logout" && !rl.Allow("onion-ceiling") {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "60")
 			w.WriteHeader(http.StatusTooManyRequests)
