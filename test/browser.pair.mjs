@@ -110,6 +110,26 @@ ok(qrModal, 'with the QR dialog open, the page behind it is inert');
 await bob.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true`);
 ok(await waitFor(() => bob.eval(`document.querySelector('#qr-verify').classList.contains('hidden')
   && !document.querySelector('[inert]')`)), 'Escape closes it and nothing stays inert');
+
+// The camera permission prompt can outlast the dialog. A camera granted after
+// the dialog was closed used to start scanning, unseen, until the tab closed.
+await bob.eval(`(() => {
+  const real = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  window.__lateCam = null;
+  navigator.mediaDevices.getUserMedia = (c) => new Promise((resolve) => setTimeout(async () => {
+    window.__lateCam = await real(c);
+    resolve(window.__lateCam);
+  }, 1200));
+  window.__restoreGum = () => { navigator.mediaDevices.getUserMedia = real; };
+  document.querySelector('#verify-rows .verify-actions .btn').click();
+  return true;
+})()`);
+await waitFor(() => bob.eval(`!document.querySelector('#qr-verify').classList.contains('hidden')`), { timeout: 10000 });
+await bob.eval(`document.querySelector('#qr-verify-close').click(); true`);
+const lateCam = await waitFor(() => bob.eval(`window.__lateCam
+  && { live: window.__lateCam.getTracks().some((tr) => tr.readyState === 'live') }`), { timeout: 10000 });
+await bob.eval(`window.__restoreGum(); true`);
+ok(lateCam && !lateCam.live, `a camera granted after the QR dialog closed is stopped at once (${JSON.stringify(lateCam)})`);
 // Six emoji are 36 bits; the row has to say so, and point at the QR.
 // Verified, the bar folds to a single line so the conversation keeps the
 // screen; the sentences are still there for screen readers and one tap away.

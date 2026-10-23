@@ -1241,6 +1241,9 @@ class DeadDrop {
     if (!s) return;
     clearTimeout(this.peers.get(peerId)?.routeTimer);
     this.peers.delete(peerId); // delete first — close() re-enters _onConnState
+    // Scanning the code of someone who has gone can only end in a verdict
+    // about nobody, with the camera on in the meantime.
+    if (this._qrPeerId === peerId && !this.el.qrVerify.classList.contains('hidden')) this._closeQrVerify();
     this.fileMgr.abortScope(peerId);
     if (this._callPeerId === peerId) this._endCallCleanup();
     try { s.conn.close(); } catch { /* already closed */ }
@@ -1622,16 +1625,25 @@ class DeadDrop {
   }
 
   async _startQrScan(expected) {
+    // The permission prompt can outlast the dialog. A camera granted after
+    // the dialog was closed must be stopped, not kept scanning out of sight.
+    const scan = (this._qrScanGen = (this._qrScanGen || 0) + 1);
+    let stream;
     try {
       // The 250KB decoder is only ever loaded (same-origin) when scanning starts.
       await import('./vendor/jsqr.js');
-      this._qrStream = await navigator.mediaDevices.getUserMedia({
+      stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment' }, audio: false,
       });
     } catch {
-      this.el.qrVerifyStatus.textContent = t('qr.cameraFail');
+      if (scan === this._qrScanGen) this.el.qrVerifyStatus.textContent = t('qr.cameraFail');
       return;
     }
+    if (scan !== this._qrScanGen) {
+      for (const track of stream.getTracks()) track.stop();
+      return;
+    }
+    this._qrStream = stream;
     const video = this.el.qrVerifyVideo;
     video.srcObject = this._qrStream;
     await video.play().catch(() => {});
@@ -1672,6 +1684,7 @@ class DeadDrop {
   }
 
   _stopQrScan() {
+    this._qrScanGen = (this._qrScanGen || 0) + 1;
     if (this._qrRaf) { cancelAnimationFrame(this._qrRaf); this._qrRaf = null; }
     if (this._qrStream) {
       for (const track of this._qrStream.getTracks()) track.stop();
