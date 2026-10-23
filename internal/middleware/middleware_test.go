@@ -532,3 +532,38 @@ func TestOnionCeilingNeverRefusesLogout(t *testing.T) {
 	}
 }
 
+func TestWrapKeyedSeparatesAccountsOnOneAddress(t *testing.T) {
+	rl := NewRateLimiter(1, 1, time.Hour)
+	h := rl.WrapKeyed(func(r *http.Request) string {
+		return AccountTag(r.Header.Get("X-Test-Account"))
+	}, func(w http.ResponseWriter, r *http.Request) {})
+	codes := []int{}
+	for _, account := range []string{"alice", "alice", "bob"} {
+		req := httptest.NewRequest(http.MethodPost, "/api/room", nil)
+		req.RemoteAddr = "127.0.0.1:4321" // one shared address for all three
+		req.Header.Set("X-Test-Account", account)
+		rec := httptest.NewRecorder()
+		h(rec, req)
+		codes = append(codes, rec.Code)
+	}
+	if codes[0] != 200 || codes[1] != 429 || codes[2] != 200 {
+		t.Fatalf("codes = %v, want [200 429 200]: one account's limit must not spend another's", codes)
+	}
+}
+
+func TestAccountTagIsOpaqueAndApartFromClientTags(t *testing.T) {
+	if AccountTag("alice") != AccountTag("alice") {
+		t.Fatal("an account received two different tags")
+	}
+	if AccountTag("alice") == AccountTag("bob") {
+		t.Fatal("two accounts shared a tag")
+	}
+	if strings.Contains(AccountTag("alice"), "alice") {
+		t.Fatal("the tag carries the account name")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:4321"
+	if AccountTag(ExtractIP(req)) == ClientTag(req) {
+		t.Fatal("an account named like an address shares that address's bucket")
+	}
+}

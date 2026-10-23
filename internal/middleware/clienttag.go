@@ -40,6 +40,15 @@ func ClientTag(r *http.Request) string {
 	return hex.EncodeToString(mac.Sum(nil)[:16])
 }
 
+// AccountTag is ClientTag for a signed-in account: the key for limits on
+// routes that already require a session. The prefix keeps an account's bucket
+// apart from any address's, whatever the two strings are.
+func AccountTag(principal string) string {
+	mac := hmac.New(sha256.New, clientTagSecret)
+	mac.Write([]byte("account\x00" + principal))
+	return hex.EncodeToString(mac.Sum(nil)[:16])
+}
+
 // sourceKey collapses an IPv6 address to its /64.
 //
 // An IPv4 address is roughly one subscriber. An IPv6 address is not: every

@@ -290,8 +290,11 @@ func main() {
 	hub := signaling.NewHub()
 	go hub.Run()
 
-	// Rate limiters: auth = 10 req/min burst 15, WS = 5 conn/min burst 8
+	// Rate limiters: auth = 10 req/min burst 15 per address; per account,
+	// rooms and TURN credentials 10/min burst 15, WS = 5 conn/min burst 8.
 	authRL := middleware.NewRateLimiter(10, 15, time.Minute)
+	roomRL := middleware.NewRateLimiter(10, 15, time.Minute)
+	turnRL := middleware.NewRateLimiter(10, 15, time.Minute)
 	wsRL := middleware.NewRateLimiter(5, 8, time.Minute)
 	// Unauthenticated reads. Generous — a page load costs two — but bounded:
 	// each health probe parks a goroutine on the hub until it answers, and
@@ -299,6 +302,18 @@ func main() {
 	publicRL := middleware.NewRateLimiter(60, 60, time.Minute)
 
 	mux := http.NewServeMux()
+
+	// Routes that need a session are limited per account, checked after the
+	// session is. Per address, everyone behind one carrier NAT, office or
+	// onion listener without per-circuit tags shared five WebSocket
+	// connections and ten rooms a minute, and one of them could spend those
+	// for the rest. Invite-only accounts are the scarce thing; addresses are not.
+	perAccount := func(rl *middleware.RateLimiter, next http.HandlerFunc) http.HandlerFunc {
+		return authH.RequireAuth(rl.WrapKeyed(func(r *http.Request) string {
+			principal, _ := authH.SessionPrincipal(r)
+			return middleware.AccountTag(principal)
+		}, next))
+	}
 
 	// Logout is not rate limited. Behind the auth limiter, a burst of sign-ins
 	// from the same address — anyone else's on a shared one — answered a panic
@@ -367,7 +382,7 @@ func main() {
 	}
 
 	// Room code generation (server-side for stronger entropy, rate limited)
-	mux.HandleFunc("/api/room", authRL.Wrap(middleware.RequireSameOrigin(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/room", middleware.RequireSameOrigin(perAccount(roomRL, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -380,7 +395,7 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":"` + code + `"}`))
-	}))))
+	})))
 
 	// Ephemeral TURN/STUN credentials (auth required; never exposes the secret).
 	if turnCfg.Enabled() {
@@ -388,16 +403,16 @@ func main() {
 	} else {
 		log.Printf("[turn] no TURN configured — clients use STUN/host candidates only")
 	}
-	mux.HandleFunc("/api/turn", authRL.Wrap(middleware.RequireSameOrigin(authH.RequireAuth(turnCfg.Handler()))))
+	mux.HandleFunc("/api/turn", middleware.RequireSameOrigin(perAccount(turnRL, turnCfg.Handler())))
 
 	// WebSocket signaling — requires valid session + rate limited
-	mux.HandleFunc("/ws", wsRL.Wrap(authH.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws", perAccount(wsRL, func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := authH.SessionPrincipal(r)
 		signaling.HandleWebSocket(hub, w, r, signaling.ConnectionAccess{
 			Principal: principal,
 			Valid:     func() bool { return authH.SessionValid(r) },
 		})
-	})))
+	}))
 
 	// The audited browser bundle is compiled into the binary. Files edited in
 	// the checkout after build time are never served by this process.

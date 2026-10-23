@@ -112,8 +112,14 @@ func (rl *RateLimiter) Allow(ip string) bool {
 
 // Wrap returns HTTP middleware that rejects over-limit requests with 429.
 func (rl *RateLimiter) Wrap(next http.HandlerFunc) http.HandlerFunc {
+	return rl.WrapKeyed(ClientTag, next)
+}
+
+// WrapKeyed is Wrap with the bucket chosen by key — AccountTag of the session,
+// say, where the source address is shared by everyone behind it.
+func (rl *RateLimiter) WrapKeyed(key func(*http.Request) string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !rl.Allow(ClientTag(r)) {
+		if !rl.Allow(key(r)) {
 			w.Header().Set("Content-Type", "application/json")
 			retryAfter := int(math.Ceil(rl.interval.Seconds()))
 			if retryAfter < 1 {
