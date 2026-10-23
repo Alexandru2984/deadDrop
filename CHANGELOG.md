@@ -15,6 +15,13 @@ compare rather than take a hash on trust.
 
 - **Built with Go 1.26.10.** 1.26.9 carries GO-2026-6809 in crypto/x509, which
   govulncheck reports as reachable from the server.
+- **Camera and microphone are never left running for something that is
+  over.** Media granted after a call had already ended was adopted anyway —
+  live, with the call overlay back on screen. A camera granted after the QR
+  dialog closed scanned out of sight until the tab closed. Leaving a room, or
+  the other side leaving, while recording kept the microphone live for up to
+  two minutes, with the stop button disabled; a double tap opened a second
+  microphone stream nothing could stop.
 
 ### Changed
 
@@ -27,6 +34,12 @@ compare rather than take a hash on trust.
   readers; a too-short decoy password showed nothing at all, and a failed
   delete that was not a wrong password signed out as if the account were gone.
   Each section now has its own status line.
+- **A voice recording can be discarded** — stopping it was the only way out,
+  and stopping sent it. Safari's recordings are named `.m4a`, not `.webm`.
+- **Files show their progress to the sender too**, and as a percentage on both
+  sides rather than a count of transfer chunks.
+- **A refused copy says so**, with the link or code selected for a manual copy,
+  instead of looking copied.
 - **The decoy password follows the real password's strength rule and cannot
   equal it.** The server only holds verifiers, so the browser is the one place
   the two can be compared.
