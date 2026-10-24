@@ -32,7 +32,8 @@ compare rather than take a hash on trust.
   a reload, and disarmed by signing out — before, it went on to wipe the
   identity and contacts of someone who had already left.
 - **Timed messages expire on time after sleep too**, instead of staying on
-  screen until the paused timer caught up.
+  screen until the paused timer caught up. So does the copied room link,
+  which is taken back out of the clipboard a minute after copying.
 - **Burn after reading waits for a reader.** A message that arrived in a
   background tab, or behind the privacy screen, burned two seconds later in
   front of nobody, and its read receipt took the sender's copy at arrival.
@@ -49,6 +50,9 @@ compare rather than take a hash on trust.
   under it — that someone is calling, not who.
 - **The typing indicator follows each person in a room**, so one member's
   message no longer hides another still typing.
+- **A second tap on Create or Join is ignored** while the first is still
+  waiting on the network, so a slow connection cannot end up showing one
+  room's invitation while connected to another.
 
 - **Tor Browser is told why Dead Drop stops.** It turns WebRTC off on purpose,
   and the refusal used to suggest "a current Firefox" to someone already in one.
