@@ -22,8 +22,33 @@ compare rather than take a hash on trust.
   the other side leaving, while recording kept the microphone live for up to
   two minutes, with the stop button disabled; a double tap opened a second
   microphone stream nothing could stop.
+- **The panic button always ends the session on the server.** Its logout
+  shared the sign-in rate limit; after a burst of sign-ins from the same
+  address it was refused, the tab reloaded as if wiped, and the session
+  stayed alive. Logout is no longer rate limited, on any listener.
+- **The idle lock keeps time while a phone sleeps.** Timers stop with the
+  phone, so a five-minute lock was still waiting the next morning; it now
+  checks the wall clock whenever the page comes back. It is also armed after
+  a reload, and disarmed by signing out — before, it went on to wipe the
+  identity and contacts of someone who had already left.
+- **Timed messages expire on time after sleep too**, instead of staying on
+  screen until the paused timer caught up.
+- **Burn after reading waits for a reader.** A message that arrived in a
+  background tab, or behind the privacy screen, burned two seconds later in
+  front of nobody, and its read receipt took the sender's copy at arrival.
+  Both now wait until the message can be seen, and the time to read it grows
+  with its length; a received file gets fifteen seconds.
 
 ### Changed
+
+- **Rooms, TURN credentials and connections are limited per account**, not
+  per address, so people behind one carrier NAT or office address no longer
+  share — and cannot spend — each other's allowance.
+- **A message or call that arrives while the tab is away marks the tab
+  title**, and a ring is announced on the privacy screen instead of hidden
+  under it — that someone is calling, not who.
+- **The typing indicator follows each person in a room**, so one member's
+  message no longer hides another still typing.
 
 - **Tor Browser is told why Dead Drop stops.** It turns WebRTC off on purpose,
   and the refusal used to suggest "a current Firefox" to someone already in one.
