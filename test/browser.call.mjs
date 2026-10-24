@@ -104,8 +104,27 @@ ok(JSON.stringify(aLocal) !== JSON.stringify(bLocal),
   'the two ends hold different certificates (nothing is being reused)');
 
 // ── Ring, accept, connect ──
+// B has left the tab: the privacy screen is up when the call comes in.
+await bob.eval(`window.dispatchEvent(new Event('blur')); true`);
 await alice.startCall();
 ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings');
+// The ring used to sit under the privacy screen, out of sight.
+const behindScreen = await bob.eval(`(() => {
+  const screen = document.querySelector('#privacy-screen');
+  const note = document.querySelector('#privacy-ringing');
+  return {
+    screen: !screen.classList.contains('hidden'),
+    note: !note.classList.contains('hidden') && screen.contains(note) ? note.textContent : '',
+    title: document.title,
+  };
+})()`);
+ok(behindScreen.screen && /calling/i.test(behindScreen.note),
+  `the privacy screen says someone is calling (${behindScreen.note || 'nothing'})`);
+ok(!behindScreen.note.includes(await bob.eval(`document.querySelector('.verify-row .peer-tag').textContent`)),
+  'without saying who');
+ok(behindScreen.title.startsWith('● '), `and the tab title is marked (${behindScreen.title})`);
+await bob.eval(`document.querySelector('#privacy-screen').click(); true`);
+ok(!(await bob.eval(`document.title`)).startsWith('●'), 'the mark goes once the screen is lifted');
 const ringText = await bob.eval(`document.querySelector('#incoming-call-text').textContent`);
 const callerLabel = await bob.eval(`document.querySelector('.verify-row .peer-tag').textContent`);
 ok(ringText.includes(callerLabel), `the ring names who is calling (${ringText})`);
@@ -153,6 +172,8 @@ ok(bobMedia && bobMedia.local && bobMedia.local.live > 0,
   'B is also sending: the call is two-way, not a one-way push');
 ok(await waitFor(() => bob.ringing().then((r) => !r)),
   'the incoming-call prompt closes once the call is up');
+ok(await bob.eval(`document.querySelector('#privacy-ringing').classList.contains('hidden')`),
+  'and so does the note on the privacy screen');
 
 // ontrack fires when the track is negotiated; bytes prove SRTP actually flowed.
 const flowed = await waitFor(async () => {

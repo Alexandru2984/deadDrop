@@ -208,9 +208,12 @@ ok(await waitFor(async () => (await bob.transcript()).includes(unseen)),
 await sleep(5000);
 ok((await bob.transcript()).includes(unseen) && (await alice.transcript()).includes(unseen),
   'and is still there, on both sides, while nobody can see it');
+ok((await bob.eval(`document.title`)).startsWith('● '),
+  'and the tab title is marked, so B knows something came in');
 await bob.eval(`document.querySelector('#privacy-screen').click(); true`);
 ok(await waitFor(async () => !(await bob.transcript()).includes(unseen), { timeout: 15000 }),
   'and burns once the screen is lifted and it has been read');
+ok(!(await bob.eval(`document.title`)).startsWith('●'), 'the mark goes once the screen is lifted');
 ok(await waitFor(async () => !(await alice.transcript()).includes(unseen), { timeout: 15000 }),
   "and only then does the receipt burn the sender's copy");
 

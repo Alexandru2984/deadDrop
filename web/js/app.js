@@ -304,6 +304,7 @@ class DeadDrop {
       panicBtn:    $('#panic-btn'),
       typingIndicator: $('#typing-indicator'),
       privacyScreen:   $('#privacy-screen'),
+      privacyRinging:  $('#privacy-ringing'),
       verifyBar:   $('#verify-bar'),
       verifyRows:  $('#verify-rows'),
       qrVerify:       $('#qr-verify'),
@@ -2062,7 +2063,7 @@ class DeadDrop {
   }
 
   async _acceptCall() {
-    this.el.incomingCall.classList.add('hidden');
+    this._showRinging(false);
     this.callState = 'connecting';
 
     try {
@@ -2138,7 +2139,19 @@ class DeadDrop {
     // Name the caller: in a room you have verified, the label is who it is.
     this.el.incomingText.textContent = t(msg.video ? 'call.incomingVideo' : 'call.incomingFrom')
       .replace('{peer}', session.label);
-    this.el.incomingCall.classList.remove('hidden');
+    this._showRinging(true);
+    if (!this._onScreen()) this._markTitle();
+  }
+
+  /**
+   * The ring sat under the privacy screen, so someone coming back to the tab
+   * was told only that it was hidden while the call went unanswered. The
+   * screen now says that someone is calling — not who, since it is there to
+   * hide the conversation from whoever else can see the display.
+   */
+  _showRinging(on) {
+    this.el.incomingCall.classList.toggle('hidden', !on);
+    this.el.privacyRinging.classList.toggle('hidden', !on);
   }
 
   async _onCallAccept() {
@@ -2243,7 +2256,7 @@ class DeadDrop {
     // connect to.
     this._showCallStatus('');
     this._toggleCallOverlay(false);
-    this.el.incomingCall.classList.add('hidden');
+    this._showRinging(false);
     this.el.remotePlaceholder.classList.remove('hidden');
     this._updateCallBtn(false);
     this._resetMuteButtons();
@@ -2392,6 +2405,7 @@ class DeadDrop {
   _markSeen(key, readMs, receipt = null) {
     if (!this._onScreen()) {
       (this._unseen ||= new Map()).set(key, { readMs, receipt });
+      this._markTitle();
       return;
     }
     if (!this.msgMgr.has(key)) return;
@@ -2406,8 +2420,27 @@ class DeadDrop {
     return !document.hidden && this.el.privacyScreen.classList.contains('hidden');
   }
 
+  /**
+   * A tab in the background gave no sign that a message or a call had come
+   * in, so a reply could wait unseen for as long as the tab stayed hidden.
+   * The title gets a dot: no count and no name, since the tab strip is on show
+   * to anyone who can see the screen.
+   */
+  _markTitle() {
+    if (this._plainTitle == null) this._plainTitle = document.title;
+    document.title = '● ' + this._plainTitle;
+  }
+
+  _clearTitle() {
+    if (this._plainTitle == null) return;
+    document.title = this._plainTitle;
+    this._plainTitle = null;
+  }
+
   _flushUnseen() {
-    if (!this._unseen || !this._onScreen()) return;
+    if (!this._onScreen()) return;
+    this._clearTitle();
+    if (!this._unseen) return;
     const due = [...this._unseen];
     this._unseen.clear();
     for (const [key, { readMs, receipt }] of due) this._markSeen(key, readMs, receipt);
@@ -2670,6 +2703,7 @@ class DeadDrop {
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
     this._unseen?.clear();
+    this._clearTitle();
     // Tear down every pairwise session; clear the map first so the close
     // callbacks find nothing to re-process.
     const sessions = [...this.peers.values()];

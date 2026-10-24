@@ -449,6 +449,7 @@ select { cursor: pointer; width: auto; }
   padding: 24px;
 }
 .privacy-screen-icon { font-size: 48px; }
+.privacy-ringing { color: var(--accent); font-size: 15px; font-weight: 600; }
 
 .chat-header {
   display: flex;
