@@ -416,8 +416,8 @@ class DeadDrop {
     // Privacy screen: blur messages whenever the tab is backgrounded.
     document.addEventListener('visibilitychange', () => this._onVisibilityChange());
     window.addEventListener('blur', () => this._showPrivacyScreen());
-    window.addEventListener('focus', () => this._idleOverdue());
-    window.addEventListener('pageshow', () => this._idleOverdue());
+    window.addEventListener('focus', () => this._onPageBack());
+    window.addEventListener('pageshow', () => this._onPageBack());
     for (const type of ['keydown', 'pointerdown', 'touchstart', 'wheel']) {
       document.addEventListener(type, () => this._noteActivity(), { passive: true, capture: true });
     }
@@ -2872,7 +2872,14 @@ class DeadDrop {
 
   _onVisibilityChange() {
     if (document.hidden) this._showPrivacyScreen();
-    else this._idleOverdue();
+    else this._onPageBack();
+  }
+
+  /** The page is on screen again, perhaps after the phone slept: whatever
+   *  ran out meanwhile goes now, before anyone sees it. */
+  _onPageBack() {
+    if (this._idleOverdue()) return;
+    this.msgMgr?.sweep();
   }
 
   /** Cover the conversation. Also on window blur: a phone's app switcher

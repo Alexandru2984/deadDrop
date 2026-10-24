@@ -57,6 +57,10 @@ export class MessageManager {
     this.blobBytes += entry.blobBytes;
 
     if (ttl > 0) {
+      // The timer alone runs on a monotonic clock that stops while a phone
+      // sleeps: a ten-second message was still on screen when it woke an hour
+      // later. The deadline is wall-clock time, and sweep() holds to it.
+      entry.deadline = Date.now() + ttl * 1000;
       entry.timer = setTimeout(() => this.destroy(id), ttl * 1000);
       this._startCountdown(entry);
     }
@@ -64,6 +68,14 @@ export class MessageManager {
     this._enforceLimits();
 
     return entry;
+  }
+
+  /** Destroy every message whose time has run out, timer or not. Called
+   *  when the page comes back from the background or from sleep. */
+  sweep(now = Date.now()) {
+    for (const [id, m] of [...this.messages]) {
+      if (m.deadline && now >= m.deadline) this.destroy(id);
+    }
   }
 
   /** Mark a message as read — triggers burn if burn-after-reading. */
@@ -154,11 +166,13 @@ export class MessageManager {
     const el = entry.element?.querySelector('.countdown');
     if (!el) return;
 
-    let remaining = entry.ttl;
+    // Counted from the deadline, not by ticks: a throttled background tab
+    // fires fewer of them, and the count used to lag the real time left.
     entry.interval = setInterval(() => {
-      remaining--;
+      const remaining = Math.ceil((entry.deadline - Date.now()) / 1000);
       if (remaining <= 0) {
         clearInterval(entry.interval);
+        this.destroy(entry.id);
         return;
       }
       el.textContent = `${remaining}s`;

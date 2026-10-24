@@ -110,6 +110,20 @@ messages.add('self:wire', null, 0, false, true, null, { wireId: 'wire' });
 messages.remoteDestroy('self:wire');
 ok(notifications.length === 1, 'remote destruction does not echo back');
 
+console.log('timed messages keep wall-clock time');
+// A phone asleep stops the timers, not the clock. Coming back must take what
+// ran out meanwhile, and only that.
+const timed = new MessageManager(() => {});
+timed.add('short', null, 10, false, true);
+timed.add('long', null, 300, false, true);
+timed.add('untimed', null, 0, false, true);
+timed.sweep(Date.now() + 5_000);
+ok(timed.has('short'), 'a message with time left survives a sweep');
+timed.sweep(Date.now() + 11_000);
+ok(!timed.has('short') && timed.has('long') && timed.has('untimed'),
+   'a sweep after its deadline destroys an expired message, and only that one');
+timed.destroyAll();
+
 console.log('received file metadata');
 for (const declared of ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'application/pdf', 'TEXT/HTML']) {
   ok(safeFileMeta({ fileName: 'x', fileType: declared, fileSize: 1 }).fileType === 'application/octet-stream',

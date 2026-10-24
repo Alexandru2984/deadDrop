@@ -209,6 +209,39 @@ await sleep(4000);
 ok((await alice.transcript()).includes(keeper),
   'and is still on the sender side after the burn window');
 
+// ── Timed messages ──
+// A timer is meant to take the message from both screens. Timers stop while a
+// phone sleeps, so a page coming back has to drop what ran out meanwhile at
+// once — not ten seconds of paused timer later, in front of whoever woke it.
+const timedText = 'timed ' + suffix;
+await alice.eval(`(() => {
+  const ttl = document.querySelector('#ttl-select');
+  ttl.value = '10'; ttl.dispatchEvent(new Event('change'));
+  document.querySelector('#msg-input').value = ${JSON.stringify(timedText)};
+  document.querySelector('#send-btn').click();
+  return true;
+})()`);
+ok(await waitFor(async () => (await bob.transcript()).includes(timedText)),
+  'a message with a timer arrives');
+await alice.eval(`(() => {
+  const ttl = document.querySelector('#ttl-select');
+  ttl.value = '0'; ttl.dispatchEvent(new Event('change'));
+  return true;
+})()`);
+const timedBubble = `[...document.querySelectorAll('.msg')].find((n) => n.textContent.includes(${JSON.stringify(timedText)}))`;
+const countdown = await bob.eval(`${timedBubble}?.querySelector('.countdown')?.textContent || ''`);
+ok(/^([1-9]|10)s$/.test(countdown), `and shows the time it has left (${countdown || 'nothing'})`);
+const afterSleep = (p) => p.eval(`(() => {
+  const real = Date.now;
+  Date.now = () => real() + 11_000;
+  try {
+    document.dispatchEvent(new Event('visibilitychange'));
+    const node = ${timedBubble};
+    return !node || node.classList.contains('burning');
+  } finally { Date.now = real; }
+})()`);
+ok(await afterSleep(bob), 'a page back from sleep drops an expired message at once');
+
 // ── Files ──
 // filetransfer.js chunks, reassembles and re-checks the declared size against
 // both the ciphertext and the plaintext. None of that had ever run against a
