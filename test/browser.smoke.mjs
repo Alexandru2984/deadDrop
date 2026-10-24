@@ -597,6 +597,29 @@ const copyRefused = await sessionEval(`(async () => {
 ok(copyRefused.note && copyRefused.selected.includes('#join='),
   `a refused copy selects the link and says so (${copyRefused.note || 'nothing shown'})`);
 
+// A copied link is taken back out of the clipboard after a minute — by the
+// wall clock, so a phone that slept through that minute clears it on waking.
+const clipWrites = await sessionEval(`(async () => {
+  const real = navigator.clipboard.writeText;
+  const writes = [];
+  navigator.clipboard.writeText = (v) => { writes.push(v); return Promise.resolve(); };
+  const hasFocus = document.hasFocus;
+  document.hasFocus = () => true;
+  try {
+    document.querySelector('.copy-link-btn').click();
+    await new Promise((r) => setTimeout(r, 300));
+    const now = Date.now;
+    Date.now = () => now() + 61_000;
+    try { window.dispatchEvent(new Event('focus')); } finally { Date.now = now; }
+    return writes;
+  } finally {
+    navigator.clipboard.writeText = real;
+    document.hasFocus = hasFocus;
+  }
+})()`);
+ok(clipWrites.length === 2 && clipWrites[0].includes('#join=') && clipWrites[1] === '',
+  `a copied link is cleared on coming back after its minute is up (${JSON.stringify(clipWrites.map((w) => w.slice(0, 12)))})`);
+
 // The QR generator is fetched on demand rather than on every page load, so the
 // image arrives after the row. Nothing tested it before the change, which means
 // a green suite said nothing about whether it still worked — and a QR that

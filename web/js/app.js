@@ -2642,6 +2642,9 @@ class DeadDrop {
     await navigator.clipboard.writeText(text);
     const generation = (this._clipGeneration = (this._clipGeneration || 0) + 1);
     clearTimeout(this._clipTimer);
+    // Also held to the wall clock, like the idle lock: a phone that slept
+    // with the code copied would otherwise keep it there a minute after waking.
+    this._clipDeadline = Date.now() + 60_000;
     this._clipTimer = setTimeout(() => this._clearClipboard(generation), 60_000);
   }
 
@@ -2656,6 +2659,7 @@ class DeadDrop {
       return;
     }
     this._clipGeneration = 0;
+    this._clipDeadline = 0;
     navigator.clipboard.writeText('').catch(() => {});
   }
 
@@ -2976,6 +2980,7 @@ class DeadDrop {
    *  ran out meanwhile goes now, before anyone sees it. */
   _onPageBack() {
     if (this._idleOverdue()) return;
+    if (this._clipDeadline && Date.now() >= this._clipDeadline) this._clearClipboard();
     this.msgMgr?.sweep();
     this._flushUnseen();
   }
