@@ -548,13 +548,38 @@ await sessionEval(`location.reload(); true`);
 await waitFor(async () => sessionEval(
   `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });
 
-// Enter a room so the chat view, header and verify bar all render.
-await sessionEval(`document.querySelector('#create-room').click(); true`);
+// Enter a room so the chat view, header and verify bar all render. Tapped
+// twice, as an impatient thumb on a slow connection does: that used to make
+// two rooms, two signalling connections and two invitations.
+const socketsBefore = await sessionEval(`window.__sockets.filter((w) => w.readyState <= 1).length`);
+await sessionEval(`(() => {
+  window.__joins = [];
+  const send = WebSocket.prototype.send;
+  WebSocket.prototype.send = function (data) {
+    try { const m = JSON.parse(data); if (m.type === 'join') window.__joins.push(m.room); } catch { /* binary */ }
+    return send.call(this, data);
+  };
+  document.querySelector('#create-room').click();
+  document.querySelector('#create-room').click();
+  return true;
+})()`);
 const inRoom = await waitFor(async () => sessionEval(
   `!document.querySelector('#chat-wrap').classList.contains('hidden')
    && document.querySelector('#room-code').textContent.length === 24`,
 ).catch(() => false), { timeout: 15000 });
 ok(inRoom, 'a room is created and the chat view renders');
+await sleep(1500);
+const once = await sessionEval(`({
+  links: document.querySelectorAll('.share-link').length,
+  joins: window.__joins,
+  shown: document.querySelector('#room-code').textContent,
+  sockets: window.__sockets.filter((w) => w.readyState <= 1).length,
+  matches: [...document.querySelectorAll('.share-url')].every((n) =>
+    n.textContent.endsWith(document.querySelector('#room-code').textContent)),
+})`);
+ok(once.links === 1 && once.matches && once.sockets <= Math.max(1, socketsBefore)
+  && once.joins.length === 1 && once.joins[0] === once.shown,
+  `a double tap creates one room (${JSON.stringify(once)})`);
 
 // The share-link row is built by the DOM path that replaced innerHTML.
 const shareRendered = await sessionEval(`

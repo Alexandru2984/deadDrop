@@ -886,7 +886,27 @@ class DeadDrop {
     this.el.roomInput.toggleAttribute('aria-invalid', !!text);
   }
 
-  async createRoom() {
+  /**
+   * One room action at a time. Both await the network before they commit to
+   * a room, and on a slow connection a second tap started a second run that
+   * could overwrite the room code between the first one's join and its
+   * invitation.
+   */
+  async _landingAction(action) {
+    if (this._landingBusy) return;
+    this._landingBusy = true;
+    try { await action(); } finally { this._landingBusy = false; }
+  }
+
+  createRoom() {
+    return this._landingAction(() => this._createRoom());
+  }
+
+  joinRoom() {
+    return this._landingAction(() => this._joinRoom());
+  }
+
+  async _createRoom() {
     this._landingError('');
     // Request a server-generated room code (stronger entropy)
     try {
@@ -978,7 +998,7 @@ class DeadDrop {
     } catch { return null; }
   }
 
-  async joinRoom() {
+  async _joinRoom() {
     this._landingError('');
     this.el.landingInvited.classList.add('hidden');
     if (!this.el.roomInput.value.trim()) return;
