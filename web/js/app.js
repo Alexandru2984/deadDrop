@@ -2992,14 +2992,37 @@ class DeadDrop {
   /* ── Privacy screen ── */
 
   _onVisibilityChange() {
-    if (document.hidden) this._showPrivacyScreen();
-    else this._onPageBack();
+    if (document.hidden) {
+      this._hiddenAt = Date.now();
+      this._showPrivacyScreen();
+    } else {
+      this._onPageBack();
+    }
+  }
+
+  /**
+   * After a minute out of sight — a phone asleep, most often — the server has
+   * stopped hearing pongs and taken this tab out of the room, while the
+   * browser may still report the socket open. Someone following the link then
+   * found an empty room. Alone, a fresh join disturbs nobody, so make one.
+   * With peers the data channels carry the conversation and a rejoin is not
+   * attempted, as when the signalling connection drops.
+   */
+  _resumeSignaling() {
+    const away = this._hiddenAt ? Date.now() - this._hiddenAt : 0;
+    this._hiddenAt = 0;
+    if (away < 45_000 || !this.roomCode || !this.ws || this.peers.size > 0) return;
+    // A dead connection can take its time to report closed, so stop waiting
+    // on it: once this.ws is let go, its late close event is ignored.
+    try { this.ws.close(); } catch { /* already closing */ }
+    this._onSignalingLost();
   }
 
   /** The page is on screen again, perhaps after the phone slept: whatever
    *  ran out meanwhile goes now, before anyone sees it. */
   _onPageBack() {
     if (this._idleOverdue()) return;
+    if (!document.hidden) this._resumeSignaling();
     if (this._clipDeadline && Date.now() >= this._clipDeadline) this._clearClipboard();
     this.msgMgr?.sweep();
     this._flushUnseen();

@@ -581,6 +581,32 @@ ok(once.links === 1 && once.matches && once.sockets <= Math.max(1, socketsBefore
   && once.joins.length === 1 && once.joins[0] === once.shown,
   `a double tap creates one room (${JSON.stringify(once)})`);
 
+// Alone in a room after a minute out of sight, the server has dropped this
+// tab for missing pongs while the browser may still think the socket open.
+// Coming back rejoins the same room on a fresh connection.
+const resumed = await sessionEval(`(async () => {
+  const room = document.querySelector('#room-code').textContent;
+  const before = window.__sockets.length;
+  window.__joins = [];
+  const hidden = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+  document.dispatchEvent(new Event('visibilitychange'));
+  const now = Date.now;
+  Date.now = () => now() + 60_000;
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+  try { document.dispatchEvent(new Event('visibilitychange')); } finally {
+    Date.now = now;
+    delete document.hidden;
+  }
+  document.querySelector('#privacy-screen').click();
+  for (let i = 0; i < 60 && !window.__joins.length; i++) await new Promise((r) => setTimeout(r, 100));
+  return { fresh: window.__sockets.length > before, joins: window.__joins, room };
+})()`);
+ok(resumed.fresh && resumed.joins.length === 1 && resumed.joins[0] === resumed.room,
+  `back after a minute away, alone in a room, it rejoins on a fresh connection (${JSON.stringify(resumed)})`);
+ok(await waitFor(() => sessionEval(`document.querySelector('#status').classList.contains('waiting')`), { timeout: 10000 }),
+  'and is waiting in the room again');
+
 // The share-link row is built by the DOM path that replaced innerHTML.
 const shareRendered = await sessionEval(`
   (() => {
