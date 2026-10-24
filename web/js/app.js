@@ -416,6 +416,8 @@ class DeadDrop {
     // Privacy screen: blur messages whenever the tab is backgrounded.
     document.addEventListener('visibilitychange', () => this._onVisibilityChange());
     window.addEventListener('blur', () => this._showPrivacyScreen());
+    window.addEventListener('focus', () => this._idleOverdue());
+    window.addEventListener('pageshow', () => this._idleOverdue());
     for (const type of ['keydown', 'pointerdown', 'touchstart', 'wheel']) {
       document.addEventListener(type, () => this._noteActivity(), { passive: true, capture: true });
     }
@@ -497,6 +499,9 @@ class DeadDrop {
         // forgotten on reload — the exact case the feature exists for.
         await this._restoreIdentity().catch(() => {});
         this._showPage('landing');
+        // Nor did a reload arm the idle lock: it waited for the first key or
+        // touch, so a tab reloaded and left alone was never wiped.
+        this._armIdleLock();
       } else {
         this._showPage('auth');
       }
@@ -807,6 +812,7 @@ class DeadDrop {
       }
       return;
     }
+    this._disarmIdleLock();
     this._cleanup();
     this.username = null;
     this._showPage('auth');
@@ -814,6 +820,7 @@ class DeadDrop {
   }
 
   async _logout() {
+    this._disarmIdleLock();
     this._cleanup();
     await fetch('/api/logout', { method: 'POST' });
     this.username = null;
@@ -2865,6 +2872,7 @@ class DeadDrop {
 
   _onVisibilityChange() {
     if (document.hidden) this._showPrivacyScreen();
+    else this._idleOverdue();
   }
 
   /** Cover the conversation. Also on window blur: a phone's app switcher
@@ -2885,17 +2893,42 @@ class DeadDrop {
     clearTimeout(this._idleTimer);
     clearTimeout(this._idleWarnTimer);
     this._idleWarned = false;
+    this._idleDeadline = 0;
     const minutes = Number.parseInt(this.el.idleSelect.value, 10);
     if (!minutes || !this.username) return;
     const ms = minutes * 60_000;
+    // Timers count a monotonic clock that stops while a phone sleeps, so a
+    // five-minute lock would still be waiting after a night in a pocket. The
+    // deadline is wall-clock time, checked again whenever the page comes back.
+    this._idleDeadline = Date.now() + ms;
     this._idleWarnTimer = setTimeout(() => {
+      if (this._idleOverdue()) return;
       this._idleWarned = true;
       if (!this.el.chatWrap.classList.contains('hidden')) this._renderSystem(t('idle.warning'));
     }, ms - 30_000);
-    this._idleTimer = setTimeout(() => this._panicWipe(), ms);
+    this._idleTimer = setTimeout(() => this._idleOverdue(), ms);
+  }
+
+  /** Signing out ends what the idle lock protects; wiping afterwards would
+   *  only take the identity and pinned contacts the user chose to keep. */
+  _disarmIdleLock() {
+    clearTimeout(this._idleTimer);
+    clearTimeout(this._idleWarnTimer);
+    this._idleWarned = false;
+    this._idleDeadline = 0;
+  }
+
+  /** Wipe if the idle deadline has passed; true when it did. */
+  _idleOverdue() {
+    if (!this._idleDeadline || !this.username || Date.now() < this._idleDeadline) return false;
+    this._disarmIdleLock();
+    this._panicWipe();
+    return true;
   }
 
   _noteActivity() {
+    // The touch that wakes a phone is not activity from before it slept.
+    if (this._idleOverdue()) return;
     const now = Date.now();
     // Re-arming on every mousemove would be thousands of timers a minute.
     if (!this._idleWarned && now - (this._lastActivity || 0) < 5000) return;

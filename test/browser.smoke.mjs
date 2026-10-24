@@ -484,6 +484,66 @@ await sessionEval(`
 `);
 ok(await waitFor(() => sessionEval(`!document.querySelector('#landing').classList.contains('hidden')`), { timeout: 30000 }),
   'and logging in again works');
+
+// The idle lock. Timers stop while a phone sleeps, so it has to judge by the
+// wall clock when the page comes back; and signing out disarms it, or it would
+// later wipe the identity and contacts of someone who had already left.
+const signIn = async () => {
+  await sessionEval(`
+    document.querySelector('#auth-user').value = ${JSON.stringify(USER)};
+    document.querySelector('#auth-pass').value = ${JSON.stringify(NEW_PASS)};
+    document.querySelector('#login-btn').click(); true
+  `);
+  return waitFor(() => sessionEval(`!document.querySelector('#landing').classList.contains('hidden')`)
+    .catch(() => false), { timeout: 30000 });
+};
+const skipClock = `(() => {
+  const real = Date.now;
+  Date.now = () => real() + 6 * 60_000;
+  return () => { Date.now = real; };
+})()`;
+await sessionEval(`(() => {
+  const idle = document.querySelector('#idle-select');
+  idle.value = '5'; idle.dispatchEvent(new Event('change'));
+  window.__idleMark = 1;
+  document.querySelector('#logout-btn').click();
+  return true;
+})()`);
+await waitFor(() => sessionEval(`!document.querySelector('#auth').classList.contains('hidden')`), { timeout: 10000 });
+await sessionEval(`(() => {
+  const restore = ${skipClock};
+  window.dispatchEvent(new Event('focus'));
+  document.dispatchEvent(new Event('visibilitychange'));
+  restore();
+  return true;
+})()`);
+await sleep(1500);
+ok(await sessionEval(`window.__idleMark === 1`).catch(() => false),
+  'after signing out, the idle lock no longer fires');
+ok(await signIn(), 'signing back in after that works');
+// Reloaded first, because a reload used to leave the lock unarmed until the
+// first key or touch.
+await sessionEval(`location.reload(); true`);
+await sleep(1500);
+await waitFor(() => sessionEval(`!document.querySelector('#landing').classList.contains('hidden')`)
+  .catch(() => false), { timeout: 20000 });
+await sessionEval(`(() => {
+  window.__idleMark = 1;
+  const restore = ${skipClock};
+  document.dispatchEvent(new Event('visibilitychange'));
+  restore();
+  return true;
+})()`);
+ok(await waitFor(() => sessionEval(`window.__idleMark === undefined
+  && document.readyState === 'complete'
+  && !document.querySelector('#auth').classList.contains('hidden')`).catch(() => false), { timeout: 20000 }),
+  'coming back after the idle period has passed on the wall clock wipes the tab, even untouched since a reload');
+ok(await signIn(), 'and signing in after the wipe works');
+await sessionEval(`(() => {
+  const idle = document.querySelector('#idle-select');
+  idle.value = '0'; idle.dispatchEvent(new Event('change'));
+  return true;
+})()`);
 await sessionEval(`location.reload(); true`);
 await waitFor(async () => sessionEval(
   `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });
