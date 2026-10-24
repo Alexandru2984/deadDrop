@@ -78,14 +78,14 @@ export class MessageManager {
     }
   }
 
-  /** Mark a message as read — triggers burn if burn-after-reading. */
-  markRead(id) {
+  /** Mark a message as read — triggers burn if burn-after-reading, once the
+   *  reader has had `readMs` to read it. */
+  markRead(id, readMs = 2000) {
     const m = this.messages.get(id);
-    if (!m) return;
+    if (!m || m.burnTimer) return;
 
     if (m.burnAfterReading && !m.isMine) {
-      // Give the user a brief moment to read before burning
-      m.burnTimer = setTimeout(() => this.destroy(id), 2000);
+      m.burnTimer = setTimeout(() => this.destroy(id), readMs);
     }
   }
 

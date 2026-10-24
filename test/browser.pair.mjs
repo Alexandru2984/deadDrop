@@ -197,6 +197,23 @@ ok(await waitFor(async () => !(await bob.transcript()).includes(burning), { time
 ok(await waitFor(async () => !(await alice.transcript()).includes(burning), { timeout: 15000 }),
   "and the reader's receipt burns the sender's copy too");
 
+// It burns once read, not once it arrives. A message that comes in behind
+// the privacy screen — the tab was left, the phone locked — used to burn two
+// seconds later in front of nobody.
+const unseen = 'burn unseen ' + suffix;
+await bob.eval(`window.dispatchEvent(new Event('blur')); true`);
+await alice.sendBurning(unseen);
+ok(await waitFor(async () => (await bob.transcript()).includes(unseen)),
+  'a burn-after-reading message reaches B behind the privacy screen');
+await sleep(5000);
+ok((await bob.transcript()).includes(unseen) && (await alice.transcript()).includes(unseen),
+  'and is still there, on both sides, while nobody can see it');
+await bob.eval(`document.querySelector('#privacy-screen').click(); true`);
+ok(await waitFor(async () => !(await bob.transcript()).includes(unseen), { timeout: 15000 }),
+  'and burns once the screen is lifted and it has been read');
+ok(await waitFor(async () => !(await alice.transcript()).includes(unseen), { timeout: 15000 }),
+  "and only then does the receipt burn the sender's copy");
+
 // An ordinary message must survive all of that: only what was sent to burn burns.
 const keeper = 'keep this ' + suffix;
 await alice.eval(`

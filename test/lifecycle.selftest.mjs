@@ -124,6 +124,18 @@ ok(!timed.has('short') && timed.has('long') && timed.has('untimed'),
    'a sweep after its deadline destroys an expired message, and only that one');
 timed.destroyAll();
 
+console.log('burn after reading');
+const burns = new MessageManager(() => {});
+burns.add('in', null, 0, true, false);
+burns.markRead('in', 50);
+burns.markRead('in', 60_000); // a second look must not restart or add a clock
+burns.add('out', null, 0, true, true);
+burns.markRead('out', 50);
+await new Promise((r) => setTimeout(r, 150));
+ok(!burns.has('in'), 'a received burn message goes once its reading time is up');
+ok(burns.has('out'), 'our own copy waits for the reader, not for us');
+burns.destroyAll();
+
 console.log('received file metadata');
 for (const declared of ['text/html', 'image/svg+xml', 'application/xhtml+xml', 'application/pdf', 'TEXT/HTML']) {
   ok(safeFileMeta({ fileName: 'x', fileType: declared, fileSize: 1 }).fileType === 'application/octet-stream',

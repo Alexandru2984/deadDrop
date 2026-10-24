@@ -1920,9 +1920,6 @@ class DeadDrop {
           const text = await s.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
           this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading, s, peerId);
-          if (msg.burnAfterReading) {
-            await this._sendBestEffort(s.conn, { type: 'read', id: msg.id });
-          }
         } catch (err) {
           console.error('Decryption failed:', err.message);
         }
@@ -2377,7 +2374,43 @@ class DeadDrop {
 
     const key = this._messageKey(mine ? null : peerId, id);
     this.msgMgr.add(key, el, ttl, burn, mine, null, { wireId: id, peerId });
-    if (!mine) this.msgMgr.markRead(key);
+    // Two seconds was the same for a word as for a paragraph; this is about
+    // the pace of careful reading, within limits.
+    if (!mine) {
+      this._markSeen(key, Math.min(30_000, 2000 + String(text).length * 60),
+        burn ? { peerId, id } : null);
+    }
+  }
+
+  /**
+   * Start a received message's burn-after-reading clock — once someone can
+   * actually see it. It used to start on arrival, so a message that came in
+   * while the tab was in the background, or behind the privacy screen, burned
+   * two seconds later in front of nobody. The read receipt that burns the
+   * sender's copy went out on arrival too, and now waits for the same moment.
+   */
+  _markSeen(key, readMs, receipt = null) {
+    if (!this._onScreen()) {
+      (this._unseen ||= new Map()).set(key, { readMs, receipt });
+      return;
+    }
+    if (!this.msgMgr.has(key)) return;
+    this.msgMgr.markRead(key, readMs);
+    if (receipt) {
+      const s = this.peers.get(receipt.peerId);
+      if (s?.verified) this._sendBestEffort(s.conn, { type: 'read', id: receipt.id });
+    }
+  }
+
+  _onScreen() {
+    return !document.hidden && this.el.privacyScreen.classList.contains('hidden');
+  }
+
+  _flushUnseen() {
+    if (!this._unseen || !this._onScreen()) return;
+    const due = [...this._unseen];
+    this._unseen.clear();
+    for (const [key, { readMs, receipt }] of due) this._markSeen(key, readMs, receipt);
   }
 
   /* ── UI helpers ── */
@@ -2435,7 +2468,8 @@ class DeadDrop {
       peerId,
       blobBytes: meta.fileSize,
     });
-    if (!mine) this.msgMgr.markRead(key);
+    // Long enough to open or save it, not just to see that it came.
+    if (!mine) this._markSeen(key, 15_000);
   }
 
   _renderFileProgress(id, received, total, peerId) {
@@ -2635,6 +2669,7 @@ class DeadDrop {
     this._stopCoverTraffic();
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
+    this._unseen?.clear();
     // Tear down every pairwise session; clear the map first so the close
     // callbacks find nothing to re-process.
     const sessions = [...this.peers.values()];
@@ -2880,6 +2915,7 @@ class DeadDrop {
   _onPageBack() {
     if (this._idleOverdue()) return;
     this.msgMgr?.sweep();
+    this._flushUnseen();
   }
 
   /** Cover the conversation. Also on window blur: a phone's app switcher
@@ -2945,6 +2981,7 @@ class DeadDrop {
 
   _hidePrivacyScreen() {
     this.el.privacyScreen.classList.add('hidden');
+    this._flushUnseen();
   }
 
   _normalizeTTL(value) {
