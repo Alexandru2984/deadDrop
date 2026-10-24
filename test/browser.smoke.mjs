@@ -619,6 +619,21 @@ const shareRendered = await sessionEval(`
 `);
 ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder');
 
+// Switching language turns the invitation too. It was drawn once, in the
+// language of the moment, and stayed in it — a Romanian button in an English
+// screen after switching back.
+const shareLangs = await sessionEval(`(() => {
+  const read = () => document.querySelector('.copy-link-btn').textContent
+    + ' | ' + document.querySelector('.share-intro').textContent
+    + ' | ' + document.querySelector('#status').textContent;
+  const flip = () => document.querySelector('#lang-btn').click();
+  const first = read(); flip(); const second = read(); flip();
+  return { first, second, back: read() };
+})()`);
+const [firstParts, secondParts] = [shareLangs.first, shareLangs.second].map((x) => x.split(' | '));
+ok(firstParts.every((part, i) => part !== secondParts[i]) && shareLangs.back === shareLangs.first,
+  `the invitation and the room status follow a language switch (${shareLangs.second})`);
+
 // Alone in a fresh room the invitation sits in the middle of the empty space,
 // not pinned to the top over a blank screen.
 const shareGap = await sessionEval(`

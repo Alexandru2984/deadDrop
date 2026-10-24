@@ -340,7 +340,10 @@ class DeadDrop {
     // Auth
     this.el.authForm.addEventListener('submit', (e) => { e.preventDefault(); this._login(); });
     this.el.registerBtn.addEventListener('click', () => this._register());
-    this.el.langBtn.addEventListener('click', () => setLang(getLang() === 'ro' ? 'en' : 'ro'));
+    this.el.langBtn.addEventListener('click', () => {
+      setLang(getLang() === 'ro' ? 'en' : 'ro');
+      this._drawStatus();
+    });
     this.el.logoutBtn.addEventListener('click', () => this._logout());
     this.el.settingsBtn.addEventListener('click', () => {
       this.el.accountPanel.classList.toggle('hidden');
@@ -932,17 +935,19 @@ class DeadDrop {
     }
     this._enterChat(this.roomCode);
     this._renderShareLink(this.roomCode);
-    this._setStatus('waiting', t('st.waiting'));
+    this._setStatus('waiting', () => t('st.waiting'));
   }
 
   _renderShareLink(code) {
     const link = `${location.origin}/#join=${code}`;
     const el = document.createElement('div');
     el.className = 'msg system share-link';
-    const btn = h('button', { class: 'btn btn-sm copy-link-btn', text: t('share.copy') });
+    // Keyed for the translator, so switching language turns the invitation
+    // too instead of leaving it in the one it was drawn in.
+    const btn = h('button', { class: 'btn btn-sm copy-link-btn', 'data-i18n': 'share.copy', text: t('share.copy') });
     const actions = h('div', { class: 'share-actions' }, btn);
     el.append(
-      h('span', { class: 'share-intro', text: t('share.intro') }),
+      h('span', { class: 'share-intro', 'data-i18n': 'share.intro', text: t('share.intro') }),
       h('br'),
       h('span', { class: 'share-url', text: link }),
       ' ',
@@ -950,15 +955,19 @@ class DeadDrop {
     );
     btn.addEventListener('click', () => {
       this._copySecret(link).then(() => {
+        btn.dataset.i18n = 'share.copiedClears';
         btn.textContent = t('share.copiedClears');
-        setTimeout(() => (btn.textContent = t('share.copy')), 2500);
+        setTimeout(() => {
+          btn.dataset.i18n = 'share.copy';
+          btn.textContent = t('share.copy');
+        }, 2500);
       }).catch(() => this._copyFailed(el.querySelector('.share-url')));
     });
     // On a phone the link is going to another app anyway; the system share
     // sheet gets it there without a stop in the clipboard, which every app
     // with clipboard access can read.
     if (typeof navigator.share === 'function') {
-      const shareBtn = h('button', { class: 'btn btn-sm native-share-btn', text: t('share.native') });
+      const shareBtn = h('button', { class: 'btn btn-sm native-share-btn', 'data-i18n': 'share.native', text: t('share.native') });
       shareBtn.addEventListener('click', () => {
         navigator.share({ url: link }).catch(() => { /* dismissed */ });
       });
@@ -1018,7 +1027,7 @@ class DeadDrop {
     this._joinPending = true;
     this.ws.send(JSON.stringify({ type: 'join', room: code }));
     this._enterChat(code);
-    this._setStatus('connecting', t('st.joining'));
+    this._setStatus('connecting', () => t('st.joining'));
   }
 
   _enterChat(code) {
@@ -1083,7 +1092,7 @@ class DeadDrop {
         clearTimeout(timer);
         if (generation !== this._signalGeneration || this.ws !== socket) return;
         if (settled && this.roomCode) this._onSignalingLost();
-        else this._setStatus('disconnected', t('st.serverLost'));
+        else this._setStatus('disconnected', () => t('st.serverLost'));
         if (!settled) {
           settled = true;
           reject(new Error('WebSocket closed before welcome'));
@@ -1118,7 +1127,7 @@ class DeadDrop {
         this._renderSystem(t('sys.signalLost'));
       }
     } else {
-      this._setStatus('disconnected', t('st.reconnecting'));
+      this._setStatus('disconnected', () => t('st.reconnecting'));
     }
     this._scheduleRejoin(2000);
   }
@@ -1137,7 +1146,7 @@ class DeadDrop {
       } catch {
         this.ws = null;
         if (this.roomCode === room) {
-          this._setStatus('disconnected', t('st.reconnecting'));
+          this._setStatus('disconnected', () => t('st.reconnecting'));
           this._scheduleRejoin(next);
         }
         return;
@@ -1158,7 +1167,7 @@ class DeadDrop {
         this._announced.add(msg.peerId);
         if (!this.peers.has(msg.peerId) && this.peers.size >= MAX_REMOTE_PEERS) return;
         if (!this.peers.has(msg.peerId)) {
-          this._setStatus('connecting', t('st.peerFound'));
+          this._setStatus('connecting', () => t('st.peerFound'));
         }
         // Deterministic initiator per pair: the lower peerId creates the offer.
         if (this.peerId < msg.peerId) {
@@ -1188,7 +1197,7 @@ class DeadDrop {
         // not a join in progress — say so, and offer the invitation, since
         // whoever entered a code first is the one who has to share it.
         if (this.peers.size === 0 && this._announced.size === 0) {
-          this._setStatus('waiting', t('st.waiting'));
+          this._setStatus('waiting', () => t('st.waiting'));
           if (!this.el.messages.querySelector('.share-link') && this.roomCode) {
             this._renderShareLink(this.roomCode);
           }
@@ -1208,7 +1217,7 @@ class DeadDrop {
           this._landingError(reason);
           break;
         }
-        this._setStatus('disconnected', t('st.error').replace('{e}', serverMessage(msg.error, 'st.unknownError')));
+        this._setStatus('disconnected', () => t('st.error').replace('{e}', serverMessage(msg.error, 'st.unknownError')));
         break;
 
       case 'offer': {
@@ -1308,18 +1317,19 @@ class DeadDrop {
     this.encrypted = verified.length > 0;
     if (verified.length > 0) {
       const extra = this.peers.size > verified.length ? ' ⏳' : '';
-      this._setStatus('encrypted',
-        (verified.length === 1
-          ? t('st.verified')
-          : t('st.verifiedN').replace('{n}', String(verified.length))) + extra);
+      const count = verified.length;
+      this._setStatus('encrypted', () => (count === 1
+        ? t('st.verified')
+        : t('st.verifiedN').replace('{n}', String(count))) + extra);
     } else if (enc.length > 0) {
-      this._setStatus('connecting', t('st.unverified'));
+      this._setStatus('connecting', () => t('st.unverified'));
     } else if (this.peers.size > 0) {
-      this._setStatus('connecting', t('st.exchanging'));
+      this._setStatus('connecting', () => t('st.exchanging'));
     } else {
       this.encrypted = false;
       // Alone with no server connection is not waiting: nobody can arrive.
-      this._setStatus(this.ws ? 'waiting' : 'disconnected', t(this.ws ? 'st.waiting' : 'st.reconnecting'));
+      const key = this.ws ? 'st.waiting' : 'st.reconnecting';
+      this._setStatus(this.ws ? 'waiting' : 'disconnected', () => t(key));
       this._hideTyping();
     }
     // Calls stay strictly 1:1 and require both human identity verification and
@@ -1399,12 +1409,12 @@ class DeadDrop {
           // Back from an interruption: the same session, nothing to redo.
           if (s.interrupted) { s.interrupted = false; this._renderSystem(t('sys.recovered').replace('{peer}', s.label)); }
           this._refreshRoomState();
-        } else if (!this.encrypted) this._setStatus('connected', t('st.exchanging'));
+        } else if (!this.encrypted) this._setStatus('connected', () => t('st.exchanging'));
         break;
       case 'interrupted':
         if (!s) return;
         s.interrupted = true;
-        this._setStatus('connecting', t('st.interrupted'));
+        this._setStatus('connecting', () => t('st.interrupted'));
         break;
       case 'encrypted':
         if (!s) return;
@@ -2602,8 +2612,17 @@ class DeadDrop {
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
   }
 
+  /** `text` is a function, so a language switch can draw the same status
+   *  again in the new language instead of leaving the old one up. */
   _setStatus(cls, text) {
+    this._statusText = text;
     this.el.status.className = `status ${cls}`;
+    this._drawStatus();
+  }
+
+  _drawStatus() {
+    if (!this._statusText) return;
+    const text = this._statusText();
     this.el.status.textContent = text;
     // A phone header ellipsizes the pill; the full text stays one hover away.
     this.el.status.title = text;
