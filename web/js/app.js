@@ -1252,6 +1252,7 @@ class DeadDrop {
     if (!s) return;
     clearTimeout(this.peers.get(peerId)?.routeTimer);
     this.peers.delete(peerId); // delete first — close() re-enters _onConnState
+    this._stopTyping(peerId);
     // Scanning the code of someone who has gone can only end in a verdict
     // about nobody, with the camera on in the meantime.
     if (this._qrPeerId === peerId && !this.el.qrVerify.classList.contains('hidden')) this._closeQrVerify();
@@ -1911,12 +1912,12 @@ class DeadDrop {
         break;
 
       case 'typing':
-        this._showTyping(s.label);
+        this._showTyping(peerId);
         break;
 
       case 'chat': {
         if (!this._validMessageID(msg.id) || !this._validEncryptedPayload(msg)) return;
-        this._hideTyping();
+        this._stopTyping(peerId);
         try {
           const text = await s.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
@@ -2704,6 +2705,7 @@ class DeadDrop {
     this.msgMgr?.destroyAll();
     this._unseen?.clear();
     this._clearTitle();
+    this._hideTyping();
     // Tear down every pairwise session; clear the map first so the close
     // callbacks find nothing to re-process.
     const sessions = [...this.peers.values()];
@@ -2922,18 +2924,44 @@ class DeadDrop {
     }
   }
 
-  _showTyping(label) {
+  /**
+   * Who is typing, per peer. One shared flag meant a message from anyone hid
+   * the indicator while someone else was still typing, and someone who left
+   * mid-sentence stayed "typing" until the timer ran out.
+   */
+  _showTyping(peerId) {
+    const typing = (this._typing ||= new Map());
+    clearTimeout(typing.get(peerId));
+    typing.set(peerId, setTimeout(() => this._stopTyping(peerId), 3000));
+    this._renderTyping();
+  }
+
+  _stopTyping(peerId) {
+    if (!this._typing?.has(peerId)) return;
+    clearTimeout(this._typing.get(peerId));
+    this._typing.delete(peerId);
+    this._renderTyping();
+  }
+
+  _renderTyping() {
+    const ids = [...(this._typing?.keys() || [])].filter((id) => this.peers.has(id));
+    if (ids.length === 0) {
+      this.el.typingIndicator.classList.add('hidden');
+      return;
+    }
     const text = this.el.typingIndicator.querySelector('[data-i18n="typing"]');
     if (text) {
-      text.textContent = this.peers.size > 1 && label ? `${label} — ${t('typing')}` : t('typing');
+      const labels = ids.map((id) => this.peers.get(id).label).filter(Boolean);
+      if (this.peers.size < 2 || labels.length === 0) text.textContent = t('typing');
+      else if (labels.length === 1) text.textContent = t('typing.one').replace('{name}', labels[0]);
+      else text.textContent = t('typing.many').replace('{names}', labels.join(', '));
     }
     this.el.typingIndicator.classList.remove('hidden');
-    clearTimeout(this._typingHideTimer);
-    this._typingHideTimer = setTimeout(() => this.el.typingIndicator.classList.add('hidden'), 3000);
   }
 
   _hideTyping() {
-    clearTimeout(this._typingHideTimer);
+    for (const timer of this._typing?.values() || []) clearTimeout(timer);
+    this._typing?.clear();
     this.el.typingIndicator.classList.add('hidden');
   }
 

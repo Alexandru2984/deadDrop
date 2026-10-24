@@ -144,7 +144,25 @@ ok(await waitFor(async () => (await b.transcript()).includes(secret)),
 ok(await waitFor(async () => (await c.transcript()).includes(secret)),
   'C decrypts the same message over its own session');
 
-// A reply from a non-creator must reach the other two the same way.
+// Typing is per person. One shared flag meant a message from C hid the
+// indicator while B was still typing.
+const typeInto = (p) => p.eval(`(() => {
+  const input = document.querySelector('#msg-input');
+  input.value = 'x'; input.dispatchEvent(new Event('input'));
+  input.value = ''; return true;
+})()`);
+const typingOn = (p) => p.eval(`(() => {
+  const el = document.querySelector('#typing-indicator');
+  return el.classList.contains('hidden') ? '' : el.textContent.trim();
+})()`);
+await typeInto(b);
+await typeInto(c);
+const both = await waitFor(async () => {
+  const text = await typingOn(a);
+  return / are typing/.test(text) && text.includes(',') ? text : false;
+}, { timeout: 2500 });
+ok(both, `A sees both B and C typing (${both || await typingOn(a) || 'nothing'})`);
+
 const reply = 'reply from C ' + suffix;
 await c.eval(`
   document.querySelector('#msg-input').value = ${JSON.stringify(reply)};
@@ -152,6 +170,9 @@ await c.eval(`
 `);
 ok(await waitFor(async () => (await a.transcript()).includes(reply)),
   'A receives a reply from C');
+const stillTyping = await typingOn(a);
+ok(/ is typing/.test(stillTyping) && !stillTyping.includes(','),
+  `and after C's message, still sees B typing (${stillTyping || 'nothing'})`);
 ok(await waitFor(async () => (await b.transcript()).includes(reply)),
   'B receives it too, over the B–C session');
 
