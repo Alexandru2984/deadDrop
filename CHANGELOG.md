@@ -50,6 +50,9 @@ compare rather than take a hash on trust.
   under it — that someone is calling, not who.
 - **The typing indicator follows each person in a room**, so one member's
   message no longer hides another still typing.
+- **Waiting alone in a room survives the phone sleeping.** The server drops
+  a tab that stops answering after a minute; on waking it now joins the same
+  room again, instead of sitting in a room the server no longer had it in.
 - **A second tap on Create or Join is ignored** while the first is still
   waiting on the network, so a slow connection cannot end up showing one
   room's invitation while connected to another.
