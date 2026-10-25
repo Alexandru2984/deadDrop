@@ -784,3 +784,46 @@ func TestSessionTokensAreNotKeptInMemory(t *testing.T) {
 		t.Fatal("logout did not remove a hashed session")
 	}
 }
+
+func TestOneAccountCannotFillTheSessionTable(t *testing.T) {
+	sm := &sessions{m: make(map[string]*session)}
+	first, err := sm.create("alice", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoy, err := sm.create("alice", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := sm.create("bob", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last string
+	for i := 0; i < maxSessionsPerUser*3; i++ {
+		if last, err = sm.create("alice", false); err != nil {
+			t.Fatalf("sign-in %d refused: %v", i, err)
+		}
+	}
+	real := 0
+	for _, s := range sm.m {
+		if s.username == "alice" && !s.duress {
+			real++
+		}
+	}
+	if real != maxSessionsPerUser {
+		t.Fatalf("alice holds %d real sessions, want the cap of %d", real, maxSessionsPerUser)
+	}
+	if _, ok := sm.get(first); ok {
+		t.Fatal("the least recently used session survived past the cap")
+	}
+	if _, ok := sm.get(last); !ok {
+		t.Fatal("the newest session was evicted")
+	}
+	if _, ok := sm.get(decoy); !ok {
+		t.Fatal("real sign-ins pushed out a decoy session; the two are counted apart")
+	}
+	if _, ok := sm.get(bob); !ok {
+		t.Fatal("one account's sign-ins evicted another account's session")
+	}
+}

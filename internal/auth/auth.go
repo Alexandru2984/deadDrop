@@ -185,6 +185,8 @@ func tokenKey(token string) string {
 
 const (
 	maxSessions = 10_000
+	// Phones, laptops and a tab or two each: a person needs a handful at once.
+	maxSessionsPerUser = 20
 	// A session dies at whichever bound comes first. The absolute cap limits how
 	// long a stolen cookie is worth anything; the idle bound closes the far more
 	// common case of a browser left open and walked away from. Long-lived
@@ -217,11 +219,38 @@ func (sm *sessions) create(username string, duress bool) (string, error) {
 			continue
 		}
 		now := time.Now()
+		sm.evictOverUserCapLocked(username, duress)
 		entry := &session{username: username, duress: duress, expiresAt: now.Add(sessionAbsoluteTTL)}
 		entry.lastSeen.Store(now.UnixNano())
 		sm.m[tokenKey(tok)] = entry
 		sm.mu.Unlock()
 		return tok, nil
+	}
+}
+
+// evictOverUserCapLocked makes room for one more session of this account by
+// dropping its least recently used ones beyond maxSessionsPerUser. Without a
+// per-account bound one account could sign in again and again until the
+// global table was full, and nobody else could sign in at all. Real and decoy
+// sessions are counted apart, so a decoy login cannot push out real ones.
+func (sm *sessions) evictOverUserCapLocked(username string, duress bool) {
+	for {
+		count := 0
+		var oldestKey string
+		var oldestSeen int64
+		for key, s := range sm.m {
+			if s.username != username || s.duress != duress {
+				continue
+			}
+			count++
+			if seen := s.lastSeen.Load(); oldestKey == "" || seen < oldestSeen {
+				oldestKey, oldestSeen = key, seen
+			}
+		}
+		if count < maxSessionsPerUser {
+			return
+		}
+		delete(sm.m, oldestKey)
 	}
 }
 
