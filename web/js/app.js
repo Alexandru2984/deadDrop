@@ -35,6 +35,10 @@ class CallGone extends Error {}
 const MAX_RENDERED_NODES = 600;
 const MAX_REMOTE_PEERS = 5;
 const SIGNAL_WINDOW_MS = 10 * 1000;
+// How long a call rings before the caller gives up. The callee gives up a
+// little later, so the caller's hang-up normally arrives first.
+const CALL_RING_MS = 45 * 1000;
+const CALL_MISSED_MS = CALL_RING_MS + 5 * 1000;
 const MAX_SIGNAL_MESSAGES_PER_WINDOW = 240;
 const MAX_SIGNAL_BYTES_PER_WINDOW = 1024 * 1024;
 const ALLOWED_TTLS = new Set([0, 10, 30, 60, 300]);
@@ -2100,6 +2104,10 @@ class DeadDrop {
     this.callState = 'requesting';
     this._syncWakeLock();
     this._callVideo = video;
+    this._ringFor(CALL_RING_MS, 'requesting', () => {
+      this._endCall();
+      this._renderSystem(t('call.noAnswer'));
+    });
     await this._sendBestEffort(this._callConn(), { type: 'call-req', video });
     this._showCallStatus(`📞 ${t('call.calling')}`);
     this._toggleCallOverlay(true);
@@ -2154,7 +2162,7 @@ class DeadDrop {
     switch (msg.type) {
       case 'call-req':    this._onCallReq(peerId, msg); break;
       case 'call-accept': this._onCallAccept();     break;
-      case 'call-reject': this._onCallReject();     break;
+      case 'call-reject': this._onCallReject(msg);  break;
       case 'call-offer':  this._onCallOffer(msg);   break;
       case 'call-answer': this._onCallAnswer(msg);  break;
       case 'call-end':    this._onCallEnd();        break;
@@ -2185,6 +2193,28 @@ class DeadDrop {
       .replace('{peer}', session.label);
     this._showRinging(true);
     if (!this._onScreen()) this._markTitle();
+    this._ringFor(CALL_MISSED_MS, 'incoming', () => {
+      this._sendBestEffort(this._callConn(), { type: 'call-reject', reason: 'no-answer' });
+      this._missedCall();
+    });
+  }
+
+  /**
+   * Give up on a call nobody answered. It used to ring for as long as both
+   * tabs stayed open — on a phone left on a table, all night.
+   */
+  _ringFor(ms, state, giveUp) {
+    clearTimeout(this._ringLimit);
+    const gen = this._callGen;
+    this._ringLimit = setTimeout(() => {
+      if (this._callGen === gen && this.callState === state) giveUp();
+    }, ms);
+  }
+
+  _missedCall() {
+    const label = this.peers.get(this._callPeerId)?.label ?? '';
+    this._endCallCleanup();
+    this._renderSystem(t('call.missed').replace('{peer}', label));
   }
 
   /**
@@ -2271,9 +2301,9 @@ class DeadDrop {
     }
   }
 
-  _onCallReject() {
+  _onCallReject(msg) {
     this._endCallCleanup();
-    this._renderSystem(t('call.declined'));
+    this._renderSystem(t(msg.reason === 'no-answer' ? 'call.noAnswer' : 'call.declined'));
   }
 
   async _onCallOffer(msg) {
@@ -2306,6 +2336,7 @@ class DeadDrop {
   }
 
   _onCallEnd() {
+    if (this.callState === 'incoming') { this._missedCall(); return; }
     this._endCallCleanup();
     this._renderSystem(t('call.ended'));
   }
@@ -2328,6 +2359,7 @@ class DeadDrop {
     this._callGen = (this._callGen || 0) + 1;
     const hadCall = this._callInProgress();
     this.callState = 'idle';
+    clearTimeout(this._ringLimit);
     if (hadCall && this._idleDeadline) this._armIdleLock();
     this._syncWakeLock();
     clearInterval(this._callClock);

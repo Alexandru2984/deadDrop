@@ -332,6 +332,19 @@ const lateState = await bob.mediaState();
 ok(lateCall && !lateCall.live && lateState.local === null && !lateState.overlay,
   `media granted after the call ended is stopped, not adopted (${JSON.stringify({ ...lateCall, local: lateState.local })})`);
 
+// ── Nobody answers ──
+// A call used to ring for as long as both tabs stayed open.
+await sleep(1000);
+await alice.startCall();
+ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings for a call nobody answers');
+const gaveUp = await waitFor(async () => {
+  const [a, b] = [(await alice.notices()).join('\n'), (await bob.notices()).join('\n')];
+  return /No answer/.test(a) && /Missed call from/.test(b) ? true : false;
+}, { timeout: 70000 });
+ok(gaveUp, 'an unanswered call stops: the caller hears no answer, the other side a missed call');
+ok(!(await bob.ringing()) && !(await alice.mediaState()).overlay,
+  'and neither side is left ringing or on the call screen');
+
 const errors = [...alice.errors, ...bob.errors];
 ok(errors.length === 0, `no uncaught exceptions${errors.length ? ': ' + errors[0] : ''}`);
 
