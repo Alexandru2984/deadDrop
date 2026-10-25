@@ -490,6 +490,7 @@ export function applyI18n() {
   document.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
   document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });
   document.querySelectorAll('[data-i18n-href]').forEach((el) => { el.setAttribute('href', t(el.dataset.i18nHref)); });
+  document.querySelectorAll('[data-i18n-alt]').forEach((el) => { el.alt = t(el.dataset.i18nAlt); });
   // Accessible names for controls whose only visible content is an icon. Without
   // these a screen reader announces the emoji — "skull" for the panic button —
   // which is worse than silence because it sounds like information.

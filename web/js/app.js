@@ -982,6 +982,7 @@ class DeadDrop {
       img.className = 'share-qr';
       img.src = qr;
       img.alt = t('share.qrAlt');
+      img.dataset.i18nAlt = 'share.qrAlt';
       el.appendChild(img);
       this.el.messages.scrollTop = this.el.messages.scrollHeight;
     });

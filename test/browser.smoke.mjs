@@ -622,10 +622,12 @@ ok(shareRendered === 'ok', 'the share-link row renders through the DOM builder')
 // Switching language turns the invitation too. It was drawn once, in the
 // language of the moment, and stayed in it — a Romanian button in an English
 // screen after switching back.
+await waitFor(() => sessionEval(`!!document.querySelector('.share-link .share-qr')`), { timeout: 10000 });
 const shareLangs = await sessionEval(`(() => {
   const read = () => document.querySelector('.copy-link-btn').textContent
     + ' | ' + document.querySelector('.share-intro').textContent
-    + ' | ' + document.querySelector('#status').textContent;
+    + ' | ' + document.querySelector('#status').textContent
+    + ' | ' + (document.querySelector('.share-qr')?.alt ?? 'no QR');
   const flip = () => document.querySelector('#lang-btn').click();
   const first = read(); flip(); const second = read(); flip();
   return { first, second, back: read() };
