@@ -885,3 +885,38 @@ func TestChallengesPerSourceAreBounded(t *testing.T) {
 		t.Fatal("the newest challenge was dropped")
 	}
 }
+
+func TestManySourcesCannotGuessOneAccountInParallel(t *testing.T) {
+	l := newLockout()
+	// Guesses from many addresses, each staying under its own lockout.
+	for i := 0; i < accountFailBudget; i++ {
+		src := fmt.Sprintf("guesser-%d", i)
+		if ok, _ := l.admitChallenge("alice", src); !ok {
+			t.Fatalf("guess %d refused before the account budget was spent", i)
+		}
+		l.fail("alice", src)
+	}
+	if ok, _ := l.admitChallenge("alice", "guesser-new-1"); !ok {
+		t.Fatal("past the budget, the first sign-in in a gap must still be let through")
+	}
+	if ok, wait := l.admitChallenge("alice", "guesser-new-2"); ok || wait <= 0 {
+		t.Fatal("past the budget, a second unfamiliar source was not spaced out")
+	}
+	if ok, _ := l.admitChallenge("bob", "guesser-new-2"); !ok {
+		t.Fatal("one account's budget held up another account")
+	}
+}
+
+func TestAnAccountsOwnSourceIsNotSpacedOut(t *testing.T) {
+	l := newLockout()
+	l.reset("alice", "home") // a successful sign-in from home
+	for i := 0; i < accountFailBudget+5; i++ {
+		l.fail("alice", fmt.Sprintf("guesser-%d", i))
+	}
+	l.admitChallenge("alice", "guesser-x") // takes the slot
+	for i := 0; i < 3; i++ {
+		if ok, _ := l.admitChallenge("alice", "home"); !ok {
+			t.Fatal("the owner's recent source was held up by someone else's guessing")
+		}
+	}
+}

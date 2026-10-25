@@ -37,6 +37,12 @@ compare rather than take a hash on trust.
   eight, a full table sheds the oldest challenge of whichever source holds the
   most, and challenges last a minute rather than two. A real sign-in, answered
   in seconds, finds a slot; what gets pushed out is the flood.
+- **Guessing one account's password from many addresses no longer goes
+  faster than from one.** The lockout counted failures per account and
+  address, so each address had its own allowance. After 100 failures in an
+  hour from all sources together, an account now takes a new sign-in from an
+  unfamiliar address once every ten seconds. Addresses it signed in from in
+  the last day are never held up, so the guessing cannot lock out the owner.
 - **The idle lock keeps time while a phone sleeps.** Timers stop with the
   phone, so a five-minute lock was still waiting the next morning; it now
   checks the wall clock whenever the page comes back. It is also armed after

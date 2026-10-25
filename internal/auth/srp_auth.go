@@ -39,6 +39,15 @@ const (
 	maxLockoutEntries      = 100_000
 	lockoutThreshold       = 5
 	lockoutWindow          = 15 * time.Minute
+	// Failures one account may take from all sources together per window
+	// before new sign-ins for it are spaced out; the per-source lockout alone
+	// let many addresses guess in parallel.
+	accountFailBudget = 100
+	accountFailWindow = time.Hour
+	accountSlowGap    = 10 * time.Second
+	// A source that signed in to the account recently is not spaced out, so
+	// a flood of guesses cannot take every slot from the account's owner.
+	knownSourceTTL = 24 * time.Hour
 )
 
 /* ── store: SRP-aware methods ── */
@@ -364,9 +373,21 @@ type lockEntry struct {
 	lastSeen time.Time
 }
 
+// accountBudget counts one account's failures from every source together.
+type accountBudget struct {
+	fails       int
+	windowStart time.Time
+	nextAllowed time.Time
+}
+
 type lockout struct {
 	mu sync.Mutex
 	m  map[string]*lockEntry
+	// accounts and known are in memory only, like everything here, and keyed
+	// the same way: username, and an HMAC of the address that cannot be
+	// turned back into one.
+	accounts map[string]*accountBudget
+	known    map[string]time.Time // lockKey → when it stops counting as known
 	// A saturated table stops recording failures, which quietly removes the
 	// per-account throttle for everyone not already in it. At most one line a
 	// minute, and no key: the table is keyed by username and an HMAC of the
@@ -376,7 +397,7 @@ type lockout struct {
 }
 
 func newLockout() *lockout {
-	l := &lockout{m: make(map[string]*lockEntry)}
+	l := &lockout{m: make(map[string]*lockEntry), accounts: make(map[string]*accountBudget), known: make(map[string]time.Time)}
 	go l.reap()
 	return l
 }
@@ -406,9 +427,36 @@ func (l *lockout) allowed(username, ip string) (bool, time.Duration) {
 	return true, 0
 }
 
+// admitChallenge is allowed plus the account-wide budget, for the step that
+// starts a sign-in. Past its budget an account takes a new sign-in from an
+// unfamiliar source once every accountSlowGap: guessing from a thousand
+// addresses then goes as fast as from one, while a source the account
+// signed in from recently is never held up.
+func (l *lockout) admitChallenge(username, ip string) (bool, time.Duration) {
+	if ok, wait := l.allowed(username, ip); !ok {
+		return false, wait
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	now := time.Now()
+	b := l.accounts[username]
+	if b == nil || now.Sub(b.windowStart) > accountFailWindow || b.fails < accountFailBudget {
+		return true, 0
+	}
+	if until, ok := l.known[lockKey(username, ip)]; ok && now.Before(until) {
+		return true, 0
+	}
+	if now.Before(b.nextAllowed) {
+		return false, b.nextAllowed.Sub(now)
+	}
+	b.nextAllowed = now.Add(accountSlowGap)
+	return true, 0
+}
+
 func (l *lockout) fail(username, ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.noteAccountFailLocked(username)
 	key := lockKey(username, ip)
 	e := l.m[key]
 	if e == nil {
@@ -433,9 +481,33 @@ func (l *lockout) fail(username, ip string) {
 	}
 }
 
+func (l *lockout) noteAccountFailLocked(username string) {
+	now := time.Now()
+	b := l.accounts[username]
+	if b == nil {
+		if len(l.accounts) >= maxLockoutEntries {
+			l.removeStaleLocked(now)
+			if len(l.accounts) >= maxLockoutEntries {
+				l.noteSaturationLocked(now)
+				return
+			}
+		}
+		b = &accountBudget{windowStart: now}
+		l.accounts[username] = b
+	}
+	if now.Sub(b.windowStart) > accountFailWindow {
+		b.fails, b.windowStart = 0, now
+	}
+	b.fails++
+}
+
 func (l *lockout) reset(username, ip string) {
 	l.mu.Lock()
-	delete(l.m, lockKey(username, ip))
+	key := lockKey(username, ip)
+	delete(l.m, key)
+	if len(l.known) < maxLockoutEntries {
+		l.known[key] = time.Now().Add(knownSourceTTL)
+	}
 	l.mu.Unlock()
 }
 
@@ -453,6 +525,16 @@ func (l *lockout) removeStaleLocked(now time.Time) {
 	for key, entry := range l.m {
 		if entry.lastSeen.Before(cutoff) && now.After(entry.until) {
 			delete(l.m, key)
+		}
+	}
+	for username, b := range l.accounts {
+		if now.Sub(b.windowStart) > accountFailWindow && now.After(b.nextAllowed) {
+			delete(l.accounts, username)
+		}
+	}
+	for key, until := range l.known {
+		if now.After(until) {
+			delete(l.known, key)
 		}
 	}
 }
@@ -954,7 +1036,7 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "invalid parameter", http.StatusBadRequest)
 		return
 	}
-	if ok, wait := h.lockout.allowed(body.Username, middleware.ClientTag(r)); !ok {
+	if ok, wait := h.lockout.admitChallenge(body.Username, middleware.ClientTag(r)); !ok {
 		w.Header().Set("Retry-After", fmt.Sprintf("%d", int(wait.Seconds())))
 		jsonErr(w, "too many attempts — try again later", http.StatusTooManyRequests)
 		return
