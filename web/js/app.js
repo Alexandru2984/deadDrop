@@ -441,6 +441,7 @@ class DeadDrop {
     window.addEventListener('blur', () => this._showPrivacyScreen());
     window.addEventListener('focus', () => this._onPageBack());
     window.addEventListener('pageshow', () => this._onPageBack());
+    window.addEventListener('popstate', () => this._onBack());
     for (const type of ['keydown', 'pointerdown', 'touchstart', 'wheel']) {
       document.addEventListener(type, () => this._noteActivity(), { passive: true, capture: true });
     }
@@ -898,6 +899,36 @@ class DeadDrop {
         this.el.chatWrap.classList.remove('hidden');
         break;
     }
+    this._guardBack(name === 'chat');
+  }
+
+  /**
+   * A conversation lives only in this page, so the back button — or the edge
+   * swipe that a phone reads as one — ended it at a touch, with no way to get
+   * it back. In a room, back now closes what is open over the conversation,
+   * then asks for a second press before leaving.
+   */
+  _guardBack(on) {
+    const guarded = history.state?.dd === 'room';
+    if (on && !guarded) {
+      history.pushState({ dd: 'room' }, '');
+    } else if (!on && guarded) {
+      this._unguarding = true;
+      history.back();
+    }
+  }
+
+  _onBack() {
+    if (this._unguarding) { this._unguarding = false; return; }
+    if (this.el.chatWrap.classList.contains('hidden')) return;
+    const leave = this._backArmedUntil && Date.now() < this._backArmedUntil;
+    this._backArmedUntil = 0;
+    if (leave) { history.back(); return; }
+    history.pushState({ dd: 'room' }, '');
+    if (!this.el.qrVerify.classList.contains('hidden')) { this._closeQrVerify(); return; }
+    if (this._replyTo) { this._cancelReply(); return; }
+    this._backArmedUntil = Date.now() + 3000;
+    this._renderSystem(t('nav.backAgain'));
   }
 
   /* ── Room management ── */

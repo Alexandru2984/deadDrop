@@ -92,6 +92,10 @@ compare rather than take a hash on trust.
 
 ### Changed
 
+- **Back no longer ends a conversation at a touch.** A room lives only in
+  the page, and the back button — or a phone's edge swipe — left it, keys and
+  all. Back now closes what is open over the conversation, then asks for a
+  second press within three seconds.
 - **The screen stays on through a call or a file transfer.** A phone that
   dimmed and locked suspended the tab: video froze for the other side and a
   transfer stalled until it failed. The lock is let go as soon as nothing

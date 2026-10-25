@@ -724,6 +724,32 @@ await alice.eval(`
 ok(await waitFor(async () => (await bob.transcript()).includes(secret2)),
   'the reconnected pair exchanges messages');
 
+// ── Back ──
+// A conversation lives only in the page; back, or a phone's edge swipe, used
+// to end it at a touch. Now it closes what is open, then asks again.
+await bob.eval(`(() => {
+  const own = [...document.querySelectorAll('.msg.theirs')].at(-1);
+  own.querySelector('.msg-reply').click();
+  history.back();
+  return true;
+})()`);
+ok(await waitFor(() => bob.eval(`document.querySelector('#reply-bar').classList.contains('hidden')`)),
+  'back first closes a reply being written');
+ok(await bob.inChat(), 'and stays in the room');
+await bob.eval(`history.back(); true`);
+ok(await waitFor(async () => (await bob.notices()).some((l) => /back again/i.test(l))),
+  'back in the room asks for a second press before leaving');
+ok(await bob.inChat(), 'without leaving yet');
+await sleep(3500);
+await bob.eval(`history.back(); true`);
+await sleep(800);
+ok(await bob.inChat(), 'a second press long after the first only asks again');
+await bob.eval(`history.back(); true`);
+await sleep(300);
+await bob.eval(`history.back(); true`).catch(() => {});
+ok(await waitFor(async () => (await alice.notices()).some((l) => l.includes('👋')), { timeout: 20000 }),
+  'two presses in quick succession leave');
+
 ok(alice.errors.length === 0 && bob.errors.length === 0,
   `no uncaught exceptions in either peer${
     [...alice.errors, ...bob.errors].length ? ': ' + [...alice.errors, ...bob.errors][0] : ''}`);
