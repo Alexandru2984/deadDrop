@@ -176,6 +176,25 @@ ok(/ is typing/.test(stillTyping) && !stillTyping.includes(','),
 ok(await waitFor(async () => (await b.transcript()).includes(reply)),
   'B receives it too, over the B–C session');
 
+// Deleting a message for everyone reaches every member, each over their
+// own session with the sender.
+const withdrawn = 'withdrawn ' + suffix;
+await a.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(withdrawn)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await b.transcript()).includes(withdrawn)
+  && (await c.transcript()).includes(withdrawn)), 'a message to withdraw reaches B and C');
+await a.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg.mine')].find((n) => n.textContent.includes(${JSON.stringify(withdrawn)}));
+  bubble.querySelector('.msg-text').click();
+  bubble.querySelector('.msg-del').click();
+  return true;
+})()`);
+ok(await waitFor(async () => !(await b.transcript()).includes(withdrawn)
+  && !(await c.transcript()).includes(withdrawn), { timeout: 10000 }),
+  'deleting it for everyone takes it from both B and C');
+
 // Losing one member must not disturb the session between the other two.
 await c.eval(`window.close && window.close(); true`).catch(() => {});
 await cdp.send('Target.closeTarget', { targetId: c.targetId });
