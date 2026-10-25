@@ -26,6 +26,10 @@ compare rather than take a hash on trust.
   shared the sign-in rate limit; after a burst of sign-ins from the same
   address it was refused, the tab reloaded as if wiped, and the session
   stayed alive. Logout is no longer rate limited, on any listener.
+- **One account can no longer lock everyone out of signing in.** The session
+  table had only a global bound, and every sign-in adds a session; one account
+  signing in again and again could fill it. An account now holds at most 20
+  sessions, its least recently used dropped first, real and decoy apart.
 - **The idle lock keeps time while a phone sleeps.** Timers stop with the
   phone, so a five-minute lock was still waiting the next morning; it now
   checks the wall clock whenever the page comes back. It is also armed after
