@@ -286,6 +286,25 @@ const afterSleep = (p) => p.eval(`(() => {
 })()`);
 ok(await afterSleep(bob), 'a page back from sleep drops an expired message at once');
 
+// The reader's timer starts when the message can be seen. A thirty-second
+// default used to run out in a background tab before anyone read it.
+const awayText = 'timed while away ' + suffix;
+await bob.eval(`window.dispatchEvent(new Event('blur')); true`);
+await alice.eval(`(() => {
+  const ttl = document.querySelector('#ttl-select');
+  ttl.value = '10'; ttl.dispatchEvent(new Event('change'));
+  document.querySelector('#msg-input').value = ${JSON.stringify(awayText)};
+  document.querySelector('#send-btn').click();
+  ttl.value = '0'; ttl.dispatchEvent(new Event('change'));
+  return true;
+})()`);
+ok(await waitFor(async () => (await bob.transcript()).includes(awayText)), 'a timed message arrives behind the privacy screen');
+await sleep(11_000);
+ok((await bob.transcript()).includes(awayText), "and is still there for the reader after its ten seconds unseen");
+await bob.eval(`document.querySelector('#privacy-screen').click(); true`);
+ok(await waitFor(async () => !(await bob.transcript()).includes(awayText), { timeout: 15000 }),
+  'and goes ten seconds after it can be seen');
+
 // ── Files ──
 // filetransfer.js chunks, reassembles and re-checks the declared size against
 // both the ciphertext and the plaintext. None of that had ever run against a

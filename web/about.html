@@ -83,7 +83,7 @@
     <ul>
       <li>The server persists handles, password verifiers/KDF labels, optional duress verifiers, invites, and an anti-enumeration secret. It does not persist chat rooms, messages, files, or calls.</li>
       <li>TTL, burn-after-reading, and bilateral delete are cooperative browser behavior. A peer can screenshot, save, instrument, or modify their client; downloaded files and OS/browser forensic traces can survive.</li>
-      <li>A burn-after-reading message starts burning when it can be seen — the tab in front and the privacy screen lifted — with time to read that grows with its length, up to 30 seconds; a file gets 15. Timers keep wall-clock time, so a phone that slept drops what expired as soon as the page is back.</li>
+      <li>A burn-after-reading message starts burning when it can be seen — the tab in front and the privacy screen lifted — with time to read that grows with its length, up to 30 seconds; a file gets 15. A received message's timer also starts when it can be seen, or ten minutes after it arrived unseen, and removes only that copy. Timers keep wall-clock time, so a phone that slept drops what expired as soon as the page is back.</li>
       <li>The panic button clears this tab's in-memory state, deletes the saved identity and pinned contacts, closes connections, and ends the session on the server. The idle lock, when set, does the same after that long without a key or a touch. Neither can wipe another device, infrastructure logs, crash dumps, swap, extensions, or data already copied.</li>
     </ul>
 

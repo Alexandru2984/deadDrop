@@ -128,11 +128,15 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   receipt destroys the sender's copy of a message that was sent to burn, and
   nothing else — a peer cannot fabricate receipts for ordinary messages to erase
   the other side of a conversation while keeping its own. Between two people, a
-  peer whose copy expires still withdraws it from the sender; that is the
-  feature, it is announced on screen rather than silent, and a modified client
-  can use it to remove messages from your view. In a room of three or more it
-  does not apply at all: every other member would keep the message, so the only
-  person who lost it would be whoever wrote it.
+  peer that burns or deletes its copy still withdraws it from the sender; that
+  is the feature, it is announced on screen rather than silent, and a modified
+  client can use it to remove messages from your view. In a room of three or
+  more it does not apply at all: every other member would keep the message, so
+  the only person who lost it would be whoever wrote it.
+- A message timer removes only the copy it runs on. Each side runs the same
+  timer — the reader's from when the message can be seen, or ten minutes after
+  it arrived unseen, whichever is first — so the sender's clock does not take
+  the reader's copy before it is read.
 - The sender can delete their own message or file for everyone: their copy
   goes, and every verified peer is told to drop theirs, in a room of any size.
   It relies on the peers' clients cooperating like every removal here.

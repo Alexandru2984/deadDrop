@@ -2419,7 +2419,7 @@ class DeadDrop {
     this._pruneRenderedNodes();
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
 
-    this.msgMgr.add(key, el, ttl, burn, mine, null, { wireId: id, peerId });
+    this.msgMgr.add(key, el, ttl, burn, mine, null, { wireId: id, peerId, deferTtl: !mine && !this._onScreen() });
     // Two seconds was the same for a word as for a paragraph; this is about
     // the pace of careful reading, within limits.
     if (!mine) {
@@ -2446,6 +2446,7 @@ class DeadDrop {
       return;
     }
     if (!this.msgMgr.has(key)) return;
+    this.msgMgr.startTtl(key);
     this.msgMgr.markRead(key, readMs);
     if (receipt) {
       const s = this.peers.get(receipt.peerId);
@@ -2537,6 +2538,7 @@ class DeadDrop {
     this.msgMgr.add(key, el, ttl, burn, mine, blobUrl, {
       wireId: id,
       peerId,
+      deferTtl: !mine && !this._onScreen(),
       blobBytes: meta.fileSize,
     });
     // Long enough to open or save it, not just to see that it came.

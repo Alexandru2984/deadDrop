@@ -51,6 +51,11 @@ compare rather than take a hash on trust.
 - **Timed messages expire on time after sleep too**, instead of staying on
   screen until the paused timer caught up. So does the copied room link,
   which is taken back out of the clipboard a minute after copying.
+- **A received message's timer starts when it can be seen.** With the
+  thirty-second default, a message to someone in another tab ran out before
+  it was ever read — and the sender's copy expiring took the reader's with
+  it. The reader's timer now starts when the message is on screen, or ten
+  minutes after it arrived unseen, and each timer removes only its own copy.
 - **Burn after reading waits for a reader.** A message that arrived in a
   background tab, or behind the privacy screen, burned two seconds later in
   front of nobody, and its read receipt took the sender's copy at arrival.

@@ -124,6 +124,19 @@ ok(!timed.has('short') && timed.has('long') && timed.has('untimed'),
    'a sweep after its deadline destroys an expired message, and only that one');
 timed.destroyAll();
 
+console.log('a received timer waits until the message can be seen');
+const waiting = new MessageManager(() => {});
+waiting.add('unseen', null, 10, false, false, null, { deferTtl: true });
+waiting.sweep(Date.now() + 60_000);
+ok(waiting.has('unseen'), 'an unseen timed message outlives its timer while nobody can see it');
+waiting.startTtl('unseen');
+waiting.sweep(Date.now() + 11_000);
+ok(!waiting.has('unseen'), 'once seen, its timer runs from that moment');
+waiting.add('forgotten', null, 10, false, false, null, { deferTtl: true });
+waiting.sweep(Date.now() + 10 * 60_000 + 11_000);
+ok(!waiting.has('forgotten'), 'but a tab left unseen for ten minutes starts it anyway');
+waiting.destroyAll();
+
 console.log('burn after reading');
 const burns = new MessageManager(() => {});
 burns.add('in', null, 0, true, false);
