@@ -133,8 +133,19 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   can use it to remove messages from your view. In a room of three or more it
   does not apply at all: every other member would keep the message, so the only
   person who lost it would be whoever wrote it.
-- The panic action clears this tab's in-memory state, closes connections, and
-  logs out on a best-effort basis. It cannot wipe the peer, infrastructure logs,
+- The sender can delete their own message or file for everyone: their copy
+  goes, and every verified peer is told to drop theirs, in a room of any size.
+  It relies on the peers' clients cooperating like every removal here.
+- A burn-after-reading message starts burning only once it can be seen — the
+  tab in front and the privacy screen lifted — and the read receipt waits for
+  the same moment. Reading time grows with the text, two to thirty seconds;
+  a received file gets fifteen. Timed messages, the idle lock and the
+  clipboard clear keep wall-clock time, so a phone that slept catches up as
+  soon as the page is back.
+- The panic action, and the idle lock when set, clear this tab's in-memory
+  state, delete the saved identity and pinned contacts, close connections,
+  and end the session on the server — logout is never rate limited, so it
+  cannot be refused. They cannot wipe the peer, infrastructure logs,
   browser/OS forensic traces, or anything already copied.
 - “Relay-only” hides each endpoint's network address from the other peer when
   TURN works. The TURN/VPS operator still sees both endpoint IPs and timing.
@@ -142,6 +153,17 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   per-process secret that is never persisted, so those in-memory maps are not a
   standing list of who used the service. This is not a defence against an
   attacker who already holds full process memory.
+- Routes that need a session — rooms, TURN credentials, signalling — are
+  limited per account rather than per address, so people behind one carrier NAT
+  do not share an allowance. An account holds at most 20 sessions, real and
+  decoy counted apart.
+- Sign-in holds up against floods and distributed guessing without locking the
+  owner out. A source holds at most eight pending SRP challenges and a full
+  table sheds the busiest source's oldest one. Past 100 failures in an hour
+  from all sources, an account takes a sign-in from an unfamiliar source once
+  every ten seconds; a source it signed in from in the last day is exempt,
+  which means the server keeps, in memory for a day, the HMAC of the addresses
+  each account signed in from.
 - The Go application deliberately omits handles, room codes, peer IDs, and
   message content from its logs. nginx, systemd/journald, Cloudflare, coturn, the
   VPS host, and upstream networks may still record IP/request/traffic metadata.
