@@ -68,6 +68,10 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Reply to a message.** Tap a message, then ↩️; the reply shows which one
+  it answers, and tapping the quote goes back to it. Only which message
+  travels, never its words: each side quotes its own copy, and the quote is
+  wiped when that copy goes — by its timer, a burn or a delete for everyone.
 - **Incoming calls ring and vibrate.** A call arrived in silence, so one to a
   tab in the background went unanswered. The tone is generated in the page
   and quiet; *Ring and vibrate for calls* in the privacy options turns it off
