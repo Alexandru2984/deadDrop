@@ -581,6 +581,19 @@ const spoof = await waitFor(() => bob.eval(`(() => {
 ok(spoof && spoof.text === spoof.href && spoof.text.includes('xn--pple'),
   `a lookalike host is shown in punycode, not as the name it imitates (${spoof?.text})`);
 
+// A user name before an @ reads as the host and is not where the link goes.
+const userinfo = 'pay at https://bank.example@elsewhere.example/login ok';
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(userinfo)};
+  document.querySelector('#send-btn').click(); true
+`);
+const disguised = await waitFor(() => bob.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg-text')].find((n) => n.textContent === ${JSON.stringify(userinfo)});
+  return bubble && { links: bubble.querySelectorAll('a').length };
+})()`), { timeout: 10000 });
+ok(disguised && disguised.links === 0,
+  `a link disguised with a user name is left as plain text (${JSON.stringify(disguised)})`);
+
 // A voice note is named for what it is, not for when it was made: a
 // timestamped name handed the other side the sender's clock to the
 // millisecond.

@@ -65,6 +65,10 @@ compare rather than take a hash on trust.
   touches the screen while they talk, so a five-minute lock ended a call — and
   wiped the identity — five minutes in. A call now counts as someone being
   there, and the clock starts over when it ends.
+- **A link with a user name in it is no longer clickable.** In
+  `https://bank.example@elsewhere.example` everything before the @ is a user
+  name, there to be read as the host; the link goes to elsewhere.example. Such
+  addresses are now left as plain text.
 
 ### Added
 

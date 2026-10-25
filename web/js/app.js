@@ -138,6 +138,10 @@ function linkify(text) {
     try {
       const url = new URL(raw);
       if (url.protocol !== 'https:' && url.protocol !== 'http:') continue;
+      // "https://bank.example@elsewhere.example" goes to elsewhere.example;
+      // everything before the @ is a user name, there to be read as the host.
+      // Nobody sends a real link with credentials in it: left as text.
+      if (url.username || url.password) continue;
       href = url.href;
       // A host in another script can be drawn to look like a familiar one —
       // "аpple.com" with a Cyrillic а. Browsers show such hosts in their
