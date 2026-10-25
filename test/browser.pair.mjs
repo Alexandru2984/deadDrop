@@ -229,6 +229,30 @@ await sleep(4000);
 ok((await alice.transcript()).includes(keeper),
   'and is still on the sender side after the burn window');
 
+// ── Delete for everyone ──
+// The protocol could always withdraw a message; nothing let a person do it.
+const regret = 'take this back ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(regret)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(regret)), 'a message to take back arrives');
+const bubbleOf = `[...document.querySelectorAll('.msg')].find((n) => n.textContent.includes(${JSON.stringify(regret)}))`;
+ok(await bob.eval(`!${bubbleOf}.querySelector('.msg-del')`), "only the sender's copy offers deleting it");
+const shut = await alice.eval(`getComputedStyle(${bubbleOf}.querySelector('.msg-del')).pointerEvents`);
+ok(shut === 'none', `until the bubble is tapped the button cannot be hit (${shut})`);
+await alice.eval(`${bubbleOf}.querySelector('.msg-text').click(); true`);
+const open = await alice.eval(`(() => {
+  const btn = ${bubbleOf}.querySelector('.msg-del');
+  return { events: getComputedStyle(btn).pointerEvents, label: btn.getAttribute('aria-label') };
+})()`);
+ok(open.events === 'auto' && /delete/i.test(open.label), `a tap shows it, named for what it does (${open.label})`);
+await alice.eval(`${bubbleOf}.querySelector('.msg-del').click(); true`);
+ok(await waitFor(async () => !(await bob.transcript()).includes(regret), { timeout: 10000 }),
+  "deleting it takes it off the reader's screen");
+ok(await waitFor(async () => !(await alice.transcript()).includes(regret), { timeout: 5000 }),
+  "and off the sender's");
+
 // ── Timed messages ──
 // A timer is meant to take the message from both screens. Timers stop while a
 // phone sleeps, so a page coming back has to drop what ran out meanwhile at

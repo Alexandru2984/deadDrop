@@ -40,6 +40,14 @@ compare rather than take a hash on trust.
   Both now wait until the message can be seen, and the time to read it grows
   with its length; a received file gets fifteen seconds.
 
+### Added
+
+- **Delete for everyone.** Tap one of your messages or files, then 🗑️, and it
+  is taken off every verified peer's screen as well as yours. The protocol
+  could always do this — timers and burn-after-reading use it — but nothing
+  let a person withdraw something they had sent. As with every removal here,
+  it relies on the other side's client cooperating.
+
 ### Changed
 
 - **Rooms, TURN credentials and connections are limited per account**, not

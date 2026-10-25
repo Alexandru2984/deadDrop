@@ -696,6 +696,34 @@ select { cursor: pointer; width: auto; }
   border: 1px solid var(--border);
 }
 
+/* Delete for everyone: beside our own bubble, in the space its 75% width
+   leaves. Inert until shown, so an invisible button cannot be hit. */
+.msg-del {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+.msg.mine:hover .msg-del,
+.msg.mine.actions-open .msg-del,
+.msg-del:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.msg.burning .msg-del { display: none; }
+
 .msg.theirs {
   align-self: flex-start;
   background: var(--theirs);
@@ -1279,6 +1307,9 @@ select { cursor: pointer; width: auto; }
  * left alone — a 44px icon button there just looks clumsy.
  */
 @media (pointer: coarse) {
+  /* Hover is a desktop idea; on touch the tap that opened it shows it. */
+  .msg.mine:hover:not(.actions-open) .msg-del { opacity: 0; pointer-events: none; }
+  .msg-del { width: 44px; height: 44px; font-size: 18px; }
   .btn-icon {
     min-height: 44px;
     min-width: 44px;

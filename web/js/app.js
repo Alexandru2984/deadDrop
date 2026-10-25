@@ -2406,10 +2406,12 @@ class DeadDrop {
     el.className = `msg ${mine ? 'mine' : 'theirs'}`;
     if (burn) el.classList.add('burn');
 
+    const key = this._messageKey(mine ? null : peerId, id);
     appendPresent(el,
       this._senderTag(mine, sender),
       h('div', { class: 'msg-text' }, ...linkify(String(text))),
       this._metaRow(burn, ttl),
+      mine && this._deleteButton(el, key),
     );
     this._applySenderColor(el, sender);
 
@@ -2417,7 +2419,6 @@ class DeadDrop {
     this._pruneRenderedNodes();
     this.el.messages.scrollTop = this.el.messages.scrollHeight;
 
-    const key = this._messageKey(mine ? null : peerId, id);
     this.msgMgr.add(key, el, ttl, burn, mine, null, { wireId: id, peerId });
     // Two seconds was the same for a word as for a paragraph; this is about
     // the pace of careful reading, within limits.
@@ -2521,6 +2522,7 @@ class DeadDrop {
         }),
       ),
       this._metaRow(burn, ttl),
+      mine && this._deleteButton(el, key),
     );
     this._applySenderColor(el, sender);
 
@@ -2587,6 +2589,32 @@ class DeadDrop {
   _senderTag(mine, sender) {
     if (mine || !sender || this.peers.size < 2) return null;
     return h('div', { class: 'msg-sender', text: sender.label });
+  }
+
+  /**
+   * "Delete for everyone" on a message of ours. The protocol always had it —
+   * timers and burn-after-reading use it — but nothing let a person withdraw
+   * something they had sent. The button sits beside the bubble, shown on
+   * hover or keyboard focus, and on a touch screen once the bubble is tapped,
+   * so a stray tap on an empty corner cannot delete anything.
+   */
+  _deleteButton(bubble, key) {
+    const btn = h('button', {
+      class: 'msg-del', type: 'button', text: '🗑️',
+      'aria-label': t('aria.msgDelete'), title: t('aria.msgDelete'), 'data-i18n-aria': 'aria.msgDelete',
+    });
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Destroying it locally tells every verified peer to drop their copy.
+      this.msgMgr.destroy(key);
+    });
+    bubble.addEventListener('click', (e) => {
+      if (e.target.closest('a, button, audio, video, input')) return;
+      const open = !bubble.classList.contains('actions-open');
+      for (const other of this.el.messages.querySelectorAll('.msg.actions-open')) other.classList.remove('actions-open');
+      bubble.classList.toggle('actions-open', open);
+    });
+    return btn;
   }
 
   /** Burn badge and TTL countdown, or nothing when neither applies. */
