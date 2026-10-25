@@ -925,7 +925,8 @@ class DeadDrop {
     this._backArmedUntil = 0;
     if (leave) { history.back(); return; }
     history.pushState({ dd: 'room' }, '');
-    if (!this.el.qrVerify.classList.contains('hidden')) { this._closeQrVerify(); return; }
+    // The call screen goes back to the conversation; the call carries on.
+    if (this._dismissTopDialog()) return;
     if (this._replyTo) { this._cancelReply(); return; }
     this._backArmedUntil = Date.now() + 3000;
     this._renderSystem(t('nav.backAgain'));

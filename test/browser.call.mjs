@@ -242,6 +242,15 @@ await sleep(500);
 ok(await bob.eval(`window.__idleMark === 1 && !document.querySelector('#call-overlay').classList.contains('hidden')`),
   'the idle lock does not wipe the tab in the middle of a call');
 
+// Back on the call screen returns to the conversation; the call goes on.
+await alice.eval(`history.back(); true`);
+ok(await waitFor(() => alice.mediaState().then((m) => !m.overlay)), 'back from the call screen shows the conversation');
+ok(await alice.inChat(), 'without leaving the room');
+const stillOn = await alice.mediaState();
+ok(stillOn.local && stillOn.remote, 'and the call is still on');
+await alice.eval(`document.querySelector('#call-btn').click(); true`);
+ok(await waitFor(() => alice.mediaState().then((m) => m.overlay)), 'the call button brings the call screen back');
+
 // ── Mute is signaled over the encrypted channel, not inferred from silence ──
 await alice.eval(`document.querySelector('#toggle-cam').click(); true`);
 ok(await waitFor(() => bob.eval(
