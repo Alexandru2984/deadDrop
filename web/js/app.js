@@ -2437,7 +2437,11 @@ class DeadDrop {
    */
   _markSeen(key, readMs, receipt = null) {
     if (!this._onScreen()) {
-      (this._unseen ||= new Map()).set(key, { readMs, receipt });
+      const unseen = (this._unseen ||= new Map());
+      unseen.set(key, { readMs, receipt });
+      // The transcript keeps at most so many messages; a peer sending more
+      // while the tab is away must not grow this list without end.
+      while (unseen.size > MAX_RENDERED_NODES) unseen.delete(unseen.keys().next().value);
       this._markTitle();
       return;
     }
