@@ -30,6 +30,13 @@ compare rather than take a hash on trust.
   table had only a global bound, and every sign-in adds a session; one account
   signing in again and again could fill it. An account now holds at most 20
   sessions, its least recently used dropped first, real and decoy apart.
+- **A flood of sign-in challenges no longer turns everyone away.** The server
+  holds at most 4,096 pending challenges and refused every sign-in once they
+  were all taken, which anyone with enough addresses could arrange without an
+  account: an IPv6 /48 is 65,536 rate-limit sources. A source now holds at most
+  eight, a full table sheds the oldest challenge of whichever source holds the
+  most, and challenges last a minute rather than two. A real sign-in, answered
+  in seconds, finds a slot; what gets pushed out is the flood.
 - **The idle lock keeps time while a phone sleeps.** Timers stop with the
   phone, so a five-minute lock was still waiting the next morning; it now
   checks the wall clock whenever the page comes back. It is also armed after

@@ -350,15 +350,23 @@ func TestConcurrentSecretCreationPublishesOneCompleteValue(t *testing.T) {
 
 func TestChallengeAndSessionCapsReapExpiredEntries(t *testing.T) {
 	cs := &challengeStore{m: make(map[string]*pendingChallenge), secret: make([]byte, 32)}
-	for i := 0; i < maxChallenges; i++ {
-		cs.m[fmt.Sprintf("%064x", i)] = &pendingChallenge{expiry: time.Now().Add(time.Hour)}
+	toks := make([]string, maxChallenges)
+	for i := range toks {
+		tok, err := cs.put(&pendingChallenge{source: fmt.Sprint(i)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		toks[i] = tok
 	}
-	if _, err := cs.put(&pendingChallenge{}); err == nil {
-		t.Fatal("challenge store accepted an entry beyond its cap")
-	}
-	cs.m[fmt.Sprintf("%064x", 0)].expiry = time.Now().Add(-time.Second)
-	if _, err := cs.put(&pendingChallenge{}); err != nil {
+	cs.m[toks[1]].expiry = time.Now().Add(-time.Second)
+	if _, err := cs.put(&pendingChallenge{source: "new"}); err != nil {
 		t.Fatalf("challenge store did not reap an expired entry: %v", err)
+	}
+	if _, still := cs.m[toks[0]]; !still {
+		t.Fatal("a live challenge was dropped although an expired one made room")
+	}
+	if len(cs.m) > maxChallenges {
+		t.Fatalf("challenge store holds %d, beyond its cap of %d", len(cs.m), maxChallenges)
 	}
 
 	sm := &sessions{m: make(map[string]*session)}
@@ -825,5 +833,55 @@ func TestOneAccountCannotFillTheSessionTable(t *testing.T) {
 	}
 	if _, ok := sm.get(bob); !ok {
 		t.Fatal("one account's sign-ins evicted another account's session")
+	}
+}
+
+func TestChallengeFloodCannotLockOutASignIn(t *testing.T) {
+	cs := &challengeStore{m: make(map[string]*pendingChallenge), secret: make([]byte, 32)}
+	// A flood from many addresses, each at its own per-source bound.
+	for i := 0; len(cs.m) < maxChallenges; i++ {
+		if _, err := cs.put(&pendingChallenge{source: fmt.Sprintf("flood-%d", i/maxChallengesPerSource)}); err != nil {
+			t.Fatalf("flood challenge %d: %v", i, err)
+		}
+	}
+	tok, err := cs.put(&pendingChallenge{source: "real-user"})
+	if err != nil {
+		t.Fatalf("a sign-in was turned away by a full table: %v", err)
+	}
+	if len(cs.m) != maxChallenges {
+		t.Fatalf("table holds %d after making room, want %d", len(cs.m), maxChallenges)
+	}
+	// More flooding, short of draining the flood itself, must push out the
+	// flood and not the sign-in in progress.
+	for i := 0; i < maxChallenges/2; i++ {
+		if _, err := cs.put(&pendingChallenge{source: fmt.Sprintf("late-%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, ok := cs.take(tok); !ok {
+		t.Fatal("the flood pushed out a real sign-in's only challenge")
+	}
+}
+
+func TestChallengesPerSourceAreBounded(t *testing.T) {
+	cs := &challengeStore{m: make(map[string]*pendingChallenge), secret: make([]byte, 32)}
+	first, err := cs.put(&pendingChallenge{source: "one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var last string
+	for i := 0; i < maxChallengesPerSource*3; i++ {
+		if last, err = cs.put(&pendingChallenge{source: "one"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(cs.m) != maxChallengesPerSource {
+		t.Fatalf("one source holds %d challenges, want %d", len(cs.m), maxChallengesPerSource)
+	}
+	if _, ok := cs.m[first]; ok {
+		t.Fatal("the oldest challenge survived past the per-source bound")
+	}
+	if _, ok := cs.m[last]; !ok {
+		t.Fatal("the newest challenge was dropped")
 	}
 }
