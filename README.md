@@ -140,6 +140,9 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
 - The sender can delete their own message or file for everyone: their copy
   goes, and every verified peer is told to drop theirs, in a room of any size.
   It relies on the peers' clients cooperating like every removal here.
+- A reply names the message it answers and never repeats its words: each
+  side quotes its own copy, and the quote is wiped when that copy goes, so a
+  reply cannot keep a timed or burned message alive.
 - A burn-after-reading message starts burning only once it can be seen — the
   tab in front and the privacy screen lifted — and the read receipt waits for
   the same moment. Reading time grows with the text, two to thirty seconds;

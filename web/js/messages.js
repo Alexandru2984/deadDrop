@@ -22,6 +22,9 @@ export class MessageManager {
     // app drops elsewhere does not keep its entry alive.
     this.byElement = new WeakMap();
     this.onDestroyed = onDestroyed;
+    // Called for every removal, however it came about: what refers to a
+    // message (a reply quoting it) has to go when it does.
+    this.onRemoved = null;
     this.maxEntries = maxEntries;
     this.maxBlobBytes = maxBlobBytes;
     this.blobBytes = 0;
@@ -175,6 +178,7 @@ export class MessageManager {
 
     this.messages.delete(id);
     if (m.element) this.byElement.delete(m.element);
+    this.onRemoved?.(id, m.element);
     if (notify) this.onDestroyed(m.wireId, m.peerId);
   }
 

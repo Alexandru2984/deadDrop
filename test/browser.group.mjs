@@ -195,6 +195,32 @@ ok(await waitFor(async () => !(await b.transcript()).includes(withdrawn)
   && !(await c.transcript()).includes(withdrawn), { timeout: 10000 }),
   'deleting it for everyone takes it from both B and C');
 
+// A reply in a group names the original's author, so a third member finds
+// the right copy: B answers C, and A sees which of C's messages it was.
+const cSaid = 'carol said ' + suffix;
+await c.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(cSaid)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await a.transcript()).includes(cSaid)
+  && (await b.transcript()).includes(cSaid)), "C's message reaches A and B");
+await b.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg.theirs')].find((n) => n.querySelector('.msg-text')?.textContent.includes(${JSON.stringify(cSaid)}));
+  bubble.querySelector('.msg-reply').click();
+  document.querySelector('#msg-input').value = ${JSON.stringify('to carol ' + suffix)};
+  document.querySelector('#send-btn').click();
+  return true;
+})()`);
+const quoteSeen = (peer) => waitFor(() => peer.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg')].find((n) => n.querySelector('.msg-text')?.textContent.includes(${JSON.stringify('to carol ' + suffix)}));
+  const q = bubble?.querySelector('.msg-quote:not(.gone)');
+  return q ? q.textContent : false;
+})()`));
+const atA = await quoteSeen(a);
+ok(atA && atA.includes(cSaid), `A sees B's reply quote C's message (${atA || 'nothing'})`);
+const atC = await quoteSeen(c);
+ok(atC && atC.includes(cSaid) && atC.includes('You'), `and C sees it as an answer to their own (${atC || 'nothing'})`);
+
 // Losing one member must not disturb the session between the other two.
 await c.eval(`window.close && window.close(); true`).catch(() => {});
 await cdp.send('Target.closeTarget', { targetId: c.targetId });

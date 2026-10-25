@@ -287,6 +287,9 @@ class DeadDrop {
       scrubToggle: $('#scrub-toggle'),
       typingToggle: $('#typing-toggle'),
       ringToggle: $('#ring-toggle'),
+      replyBar: $('#reply-bar'),
+      replyBarText: $('#reply-bar-text'),
+      replyCancel: $('#reply-cancel'),
       idleSelect: $('#idle-select'),
       // Chat
       chatWrap:    $('#chat-wrap'),
@@ -408,6 +411,10 @@ class DeadDrop {
     });
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
+    this.el.replyCancel.addEventListener('click', () => {
+      this._cancelReply();
+      this.el.msgInput.focus();
+    });
     this.el.msgInput.addEventListener('keydown', (e) => {
       // Enter sends and Shift+Enter starts a new line — with a keyboard. On a
       // touch screen the return key writes a new line and Send sends, as in
@@ -496,6 +503,11 @@ class DeadDrop {
         this._sendBestEffort(s.conn, { type: 'delete', id: wireId });
       }
     });
+    // Message key → the quotes of it in replies; bubble → its own quote.
+    this._quotes = new Map();
+    this._quoteOf = new WeakMap();
+    this._replyTo = null;
+    this.msgMgr.onRemoved = (key, el) => this._forgetQuoted(key, el);
   }
 
   /* ── Auth ── */
@@ -1928,18 +1940,25 @@ class DeadDrop {
     const burn = this.el.burnToggle.checked;
     const ttl = this._normalizeTTL(this.el.ttlSelect.value);
     const id = crypto.randomUUID();
+    // Only which message, never its text: each side quotes its own copy, so a
+    // reply cannot carry words past the timer or the burn that removed them.
+    const reply = this._replyTo && this.msgMgr.has(this._replyTo.key) ? this._replyTo : null;
+    const quoting = reply ? { replyTo: reply.wireId, replyAuthor: reply.author } : {};
 
     // Pairwise E2E: encrypt separately for every peer with that pair's own keys.
     for (const s of this._verifiedSessions()) {
       try {
         const { ciphertext, iv, epoch } = await s.crypto.encrypt(text);
-        await s.conn.send({ type: 'chat', id, ciphertext, iv, epoch, ttl, burnAfterReading: burn });
+        await s.conn.send({
+          type: 'chat', id, ciphertext, iv, epoch, ttl, burnAfterReading: burn, ...quoting,
+        });
       } catch (err) {
         console.warn('Send failed for one peer:', err);
       }
     }
 
-    this._renderMsg(id, text, true, ttl, burn);
+    this._renderMsg(id, text, true, ttl, burn, null, null, reply?.key);
+    this._cancelReply();
     this.el.msgInput.value = '';
     this._fitComposer();
   }
@@ -1965,7 +1984,8 @@ class DeadDrop {
         try {
           const text = await s.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
-          this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading, s, peerId);
+          this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading, s, peerId,
+            this._quotedKey(msg));
         } catch (err) {
           console.error('Decryption failed:', err.message);
         }
@@ -2526,7 +2546,7 @@ class DeadDrop {
     return stream;
   }
 
-  _renderMsg(id, text, mine, ttl, burn, sender = null, peerId = null) {
+  _renderMsg(id, text, mine, ttl, burn, sender = null, peerId = null, quoteKey = null) {
     ttl = this._normalizeTTL(ttl);
     burn = burn === true;
     const el = document.createElement('div');
@@ -2536,9 +2556,10 @@ class DeadDrop {
     const key = this._messageKey(mine ? null : peerId, id);
     appendPresent(el,
       this._senderTag(mine, sender),
+      quoteKey && this._quoteEl(el, quoteKey),
       h('div', { class: 'msg-text' }, ...linkify(String(text))),
       this._metaRow(burn, ttl),
-      mine && this._deleteButton(el, key),
+      this._msgActions(el, key, mine),
     );
     this._applySenderColor(el, sender);
 
@@ -2654,7 +2675,7 @@ class DeadDrop {
         }),
       ),
       this._metaRow(burn, ttl),
-      mine && this._deleteButton(el, key),
+      this._msgActions(el, key, mine),
     );
     this._applySenderColor(el, sender);
 
@@ -2731,23 +2752,127 @@ class DeadDrop {
    * hover or keyboard focus, and on a touch screen once the bubble is tapped,
    * so a stray tap on an empty corner cannot delete anything.
    */
-  _deleteButton(bubble, key) {
-    const btn = h('button', {
-      class: 'msg-del', type: 'button', text: '🗑️',
-      'aria-label': t('aria.msgDelete'), title: t('aria.msgDelete'), 'data-i18n-aria': 'aria.msgDelete',
-    });
-    btn.addEventListener('click', (e) => {
+  /** Where the message a reply names lives here, if it is valid at all. */
+  _quotedKey(msg) {
+    if (msg.replyTo === undefined) return null;
+    if (!this._validMessageID(msg.replyTo) || !this._validPeerID(msg.replyAuthor)) return null;
+    return this._messageKey(msg.replyAuthor === this.peerId ? null : msg.replyAuthor, msg.replyTo);
+  }
+
+  /** A line of what a message says, for a quote: its text, or the file. */
+  _quoteSnippet(key) {
+    const entry = this.msgMgr.messages.get(key);
+    const el = entry?.element;
+    if (!el) return null;
+    const text = el.querySelector('.msg-text')?.textContent
+      ?? `📎 ${el.querySelector('.file-name')?.textContent ?? ''}`;
+    const who = entry.isMine ? t('reply.you') : this.peers.get(entry.peerId)?.label ?? '';
+    return { who, text: text.length > 100 ? `${text.slice(0, 100)}…` : text };
+  }
+
+  /**
+   * The quote at the top of a reply. It is drawn from this side's own copy of
+   * the message and is wiped with it — by its timer, a burn, or a delete for
+   * everyone — so quoting never keeps words alive longer than the original.
+   */
+  _quoteEl(bubble, key) {
+    const q = h('button', { class: 'msg-quote', type: 'button' });
+    const snippet = this._quoteSnippet(key);
+    if (!snippet) {
+      this._quoteGone(q);
+      return q;
+    }
+    q.append(h('span', { class: 'quote-who', text: snippet.who }),
+      h('span', { class: 'quote-text', text: snippet.text }));
+    q.addEventListener('click', (e) => {
       e.stopPropagation();
-      // Destroying it locally tells every verified peer to drop their copy.
-      this.msgMgr.destroy(key);
+      const orig = this.msgMgr.messages.get(key)?.element;
+      if (!orig) return;
+      orig.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      orig.classList.remove('flash');
+      void orig.offsetWidth; // restart the animation on a second tap
+      orig.classList.add('flash');
     });
+    if (!this._quotes.has(key)) this._quotes.set(key, new Set());
+    this._quotes.get(key).add(q);
+    this._quoteOf.set(bubble, { key, q });
+    return q;
+  }
+
+  _quoteGone(q) {
+    q.replaceChildren(t('reply.gone'));
+    q.classList.add('gone');
+    q.disabled = true;
+  }
+
+  /** A message is gone: so are its quotes, and a reply being written to it. */
+  _forgetQuoted(key, el) {
+    const own = el && this._quoteOf.get(el);
+    if (own) {
+      const set = this._quotes.get(own.key);
+      set?.delete(own.q);
+      if (set && !set.size) this._quotes.delete(own.key);
+    }
+    const quotes = this._quotes.get(key);
+    if (quotes) {
+      this._quotes.delete(key);
+      for (const q of quotes) this._quoteGone(q);
+    }
+    if (this._replyTo?.key === key) this._cancelReply();
+  }
+
+  _startReply(key) {
+    const entry = this.msgMgr.messages.get(key);
+    const snippet = this._quoteSnippet(key);
+    if (!entry || !snippet || !this.encrypted) return;
+    this._replyTo = { key, wireId: entry.wireId, author: entry.isMine ? this.peerId : entry.peerId };
+    // The bar takes height from the conversation; at the bottom, stay there.
+    const list = this.el.messages;
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    this.el.replyBarText.replaceChildren(
+      h('span', { class: 'quote-who', text: snippet.who }),
+      h('span', { class: 'quote-text', text: snippet.text }),
+    );
+    this.el.replyBar.classList.remove('hidden');
+    if (atBottom) list.scrollTop = list.scrollHeight;
+    this.el.msgInput.focus();
+  }
+
+  _cancelReply() {
+    this._replyTo = null;
+    this.el.replyBar.classList.add('hidden');
+    this.el.replyBarText.replaceChildren();
+  }
+
+  /** Reply to any message; delete for everyone, one's own. */
+  _msgActions(bubble, key, mine) {
+    const button = (cls, icon, label, onClick) => {
+      const btn = h('button', {
+        class: cls, type: 'button', text: icon,
+        'aria-label': t(label), title: t(label), 'data-i18n-aria': label,
+      });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        bubble.classList.remove('actions-open');
+        onClick();
+      });
+      return btn;
+    };
+    const actions = h('div', { class: 'msg-actions' },
+      button('msg-reply', '↩️', 'aria.msgReply', () => this._startReply(key)),
+      // Destroying it locally tells every verified peer to drop their copy.
+      mine && button('msg-del', '🗑️', 'aria.msgDelete', () => this.msgMgr.destroy(key)),
+    );
     bubble.addEventListener('click', (e) => {
       if (e.target.closest('a, button, audio, video, input')) return;
       const open = !bubble.classList.contains('actions-open');
       for (const other of this.el.messages.querySelectorAll('.msg.actions-open')) other.classList.remove('actions-open');
       bubble.classList.toggle('actions-open', open);
+      // On a phone the buttons open as a row under the message; the last
+      // message's row would otherwise open below the fold.
+      if (open) bubble.scrollIntoView({ block: 'nearest' });
     });
-    return btn;
+    return actions;
   }
 
   /** Burn badge and TTL countdown, or nothing when neither applies. */
@@ -2908,6 +3033,8 @@ class DeadDrop {
     this._stopCoverTraffic();
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
+    this._quotes?.clear();
+    if (this._replyTo) this._cancelReply();
     this._unseen?.clear();
     this._clearTitle();
     this._hideTyping();

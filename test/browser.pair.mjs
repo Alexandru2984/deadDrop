@@ -253,6 +253,63 @@ ok(await waitFor(async () => !(await bob.transcript()).includes(regret), { timeo
 ok(await waitFor(async () => !(await alice.transcript()).includes(regret), { timeout: 5000 }),
   "and off the sender's");
 
+// ── Replies ──
+// A reply names the message it answers; each side quotes its own copy, and
+// the quote goes with the original, so quoting never outlives a deletion.
+const quoted = 'quote me ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(quoted)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(quoted)), 'a message to answer arrives');
+const quotedOf = `[...document.querySelectorAll('.msg')].find((n) => n.querySelector('.msg-text')?.textContent.includes(${JSON.stringify(quoted)}))`;
+const bar = await bob.eval(`(() => {
+  ${quotedOf}.querySelector('.msg-text').click();
+  ${quotedOf}.querySelector('.msg-reply').click();
+  const bar = document.querySelector('#reply-bar');
+  return { shown: !bar.classList.contains('hidden'), text: bar.textContent, focus: document.activeElement?.id };
+})()`);
+ok(bar.shown && bar.text.includes(quoted) && bar.focus === 'msg-input',
+  `replying shows what is being answered above the composer (${JSON.stringify(bar)})`);
+const answer = 'my answer ' + suffix;
+await bob.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(answer)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await alice.transcript()).includes(answer)), 'the reply arrives');
+const answerOf = `[...document.querySelectorAll('.msg')].find((n) => n.querySelector('.msg-text')?.textContent.includes(${JSON.stringify(answer)}))`;
+const quoteAt = async (peer) => peer.eval(`(() => {
+  const q = ${answerOf}?.querySelector('.msg-quote');
+  return q ? { text: q.textContent, gone: q.classList.contains('gone') } : null;
+})()`);
+const [qa, qb] = [await quoteAt(alice), await quoteAt(bob)];
+ok(qa && qa.text.includes(quoted) && qa.text.includes('You') && !qa.gone,
+  `the reader sees which of their messages was answered (${JSON.stringify(qa)})`);
+ok(qb && qb.text.includes(quoted) && !qb.gone, `and so does the one who replied (${JSON.stringify(qb)})`);
+ok(await bob.eval(`document.querySelector('#reply-bar').classList.contains('hidden')`),
+  'the reply bar closes once the reply is sent');
+await alice.eval(`(() => {
+  ${quotedOf}.querySelector('.msg-text').click();
+  ${quotedOf}.querySelector('.msg-del').click();
+  return true;
+})()`);
+ok(await waitFor(async () => {
+  const [a, b] = [await quoteAt(alice), await quoteAt(bob)];
+  return a?.gone && b?.gone && !a.text.includes(quoted) && !b.text.includes(quoted);
+}, { timeout: 10000 }), 'deleting the original wipes its quote in the reply, on both sides');
+// A reply being written to a message that then goes is called off.
+const doomed = 'doomed ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(doomed)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(doomed)), 'another message arrives');
+const doomedOf = `[...document.querySelectorAll('.msg')].find((n) => n.querySelector('.msg-text')?.textContent.includes(${JSON.stringify(doomed)}))`;
+await bob.eval(`${doomedOf}.querySelector('.msg-reply').click(); true`);
+await alice.eval(`${doomedOf}.querySelector('.msg-del').click(); true`);
+ok(await waitFor(() => bob.eval(`document.querySelector('#reply-bar').classList.contains('hidden')`), { timeout: 10000 }),
+  'a reply in progress is called off when its message is deleted');
+
 // ── Timed messages ──
 // A timer is meant to take the message from both screens. Timers stop while a
 // phone sleeps, so a page coming back has to drop what ran out meanwhile at

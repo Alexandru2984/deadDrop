@@ -27,7 +27,7 @@
   <meta name="twitter:description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — securitate și confidențialitate","inLanguage":"ro","url":"https://dead.micutu.com/about.ro.html","description":"Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-qegJwTugGpSeEENUHiMcrjwJ98q9iI3Mc0fo4rrNnNk=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-fhyK5BPiCEOHuMUVPIwIMfUjcr5Zz7WPJy6O7DQa/nI=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -84,6 +84,7 @@
       <li>Serverul păstrează numele de utilizator, verificatorii de parolă / etichetele KDF, verificatorii opționali de constrângere, invitațiile și un secret împotriva enumerării. Nu păstrează camere de chat, mesaje, fișiere sau apeluri.</li>
       <li>TTL-ul, arderea după citire și ștergerea bilaterală sunt comportamente cooperative ale browserului. Un partener poate face captură de ecran, salva, instrumenta sau modifica clientul; fișierele descărcate și urmele forensice ale sistemului de operare / browserului pot supraviețui.</li>
       <li>Un mesaj cu ardere după citire începe să ardă abia când poate fi văzut — fila în față și ecranul de confidențialitate ridicat — cu timp de citire care crește cu lungimea lui, până la 30 de secunde; un fișier primește 15. Și timerul unui mesaj primit pornește când mesajul poate fi văzut, sau la zece minute după ce a sosit nevăzut, și șterge doar copia respectivă. Timerele țin ora reală, așa că un telefon care a dormit elimină ce a expirat imediat ce pagina revine.</li>
+      <li>Un răspuns numește mesajul la care răspunde și nu îi repetă cuvintele. Fiecare parte citează propria copie, iar citatul se șterge odată cu ea, așa că un răspuns nu poate ține în viață un mesaj temporizat sau ars.</li>
       <li>Butonul de panică șterge starea din memorie a acestui tab, identitatea salvată și contactele fixate, închide conexiunile și încheie sesiunea pe server. Blocarea la inactivitate, dacă e activă, face același lucru după atâta timp fără nicio tastă sau atingere. Niciuna nu poate șterge alt dispozitiv, logurile infrastructurii, crash dump-urile, swap-ul, extensiile sau datele deja copiate.</li>
     </ul>
 
