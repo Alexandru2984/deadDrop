@@ -61,6 +61,10 @@ compare rather than take a hash on trust.
   front of nobody, and its read receipt took the sender's copy at arrival.
   Both now wait until the message can be seen, and the time to read it grows
   with its length; a received file gets fifteen seconds.
+- **The idle lock no longer wipes the tab in the middle of a call.** Nobody
+  touches the screen while they talk, so a five-minute lock ended a call — and
+  wiped the identity — five minutes in. A call now counts as someone being
+  there, and the clock starts over when it ends.
 
 ### Added
 
@@ -72,6 +76,10 @@ compare rather than take a hash on trust.
 
 ### Changed
 
+- **The screen stays on through a call or a file transfer.** A phone that
+  dimmed and locked suspended the tab: video froze for the other side and a
+  transfer stalled until it failed. The lock is let go as soon as nothing
+  needs it.
 - **Rooms, TURN credentials and connections are limited per account**, not
   per address, so people behind one carrier NAT or office address no longer
   share — and cannot spend — each other's allowance.

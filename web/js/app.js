@@ -183,6 +183,7 @@ class DeadDrop {
     this.identity = null;
     this.msgMgr = null;
     this.fileMgr = new FileTransferManager();
+    this.fileMgr.onTimeout = () => this._syncWakeLock();
     this.encrypted = false; // true when ≥1 pairwise session is encrypted and SAS-verified
     this.iceConfig = { iceServers: [] };
     this._iceExpiresAt = 0;
@@ -1287,6 +1288,7 @@ class DeadDrop {
     // about nobody, with the camera on in the meantime.
     if (this._qrPeerId === peerId && !this.el.qrVerify.classList.contains('hidden')) this._closeQrVerify();
     this.fileMgr.abortScope(peerId);
+    this._syncWakeLock();
     if (this._callPeerId === peerId) this._endCallCleanup();
     try { s.conn.close(); } catch { /* already closed */ }
     s.crypto.destroy();
@@ -1787,6 +1789,8 @@ class DeadDrop {
       : null;
     if (sending) own.append(sending);
     const results = [];
+    this._sendingFiles = (this._sendingFiles || 0) + 1;
+    this._syncWakeLock();
     for (const [index, [peerId, s]] of targets.entries()) {
       const onProgress = sending && ((done, total) => {
         const pct = Math.min(100, Math.floor(((index + done / total) / targets.length) * 100));
@@ -1799,6 +1803,8 @@ class DeadDrop {
         results.push({ status: 'rejected', reason });
       }
     }
+    this._sendingFiles -= 1;
+    this._syncWakeLock();
     sending?.remove();
     if (results.some((r) => r.status === 'rejected')) {
       console.error('File send failed:', results.find((r) => r.status === 'rejected')?.reason);
@@ -1999,7 +2005,8 @@ class DeadDrop {
           result = this.fileMgr.handleMessage(msg, peerId);
         } catch (err) {
           console.warn('File transfer message rejected:', err);
-          break;
+        } finally {
+          this._syncWakeLock();
         }
         if (!result) break;
         switch (result.event) {
@@ -2088,6 +2095,7 @@ class DeadDrop {
 
   async _startCall(video) {
     this.callState = 'requesting';
+    this._syncWakeLock();
     this._callVideo = video;
     await this._sendBestEffort(this._callConn(), { type: 'call-req', video });
     this._showCallStatus(`📞 ${t('call.calling')}`);
@@ -2097,6 +2105,7 @@ class DeadDrop {
   async _acceptCall() {
     this._showRinging(false);
     this.callState = 'connecting';
+    this._syncWakeLock();
 
     try {
       this.localStream = await this._getMedia(this._callVideo);
@@ -2189,6 +2198,7 @@ class DeadDrop {
   async _onCallAccept() {
     if (this.callState !== 'requesting') return;
     this.callState = 'connecting';
+    this._syncWakeLock();
 
     try {
       this.localStream = await this._getMedia(this._callVideo);
@@ -2270,7 +2280,10 @@ class DeadDrop {
     // Media still being granted belongs to the call that asked for it; once
     // that call is over, whatever arrives is stopped instead of adopted.
     this._callGen = (this._callGen || 0) + 1;
+    const hadCall = this._callInProgress();
     this.callState = 'idle';
+    if (hadCall && this._idleDeadline) this._armIdleLock();
+    this._syncWakeLock();
     clearInterval(this._callClock);
     this._callClock = null;
     this._callConn()?.stopMedia();
@@ -2299,6 +2312,42 @@ class DeadDrop {
     this.remoteStream = stream;
     this.el.remoteVideo.srcObject = stream;
     this.el.remotePlaceholder.classList.add('hidden');
+  }
+
+  /** Media is being set up or flowing: someone is on the call. */
+  _callInProgress() {
+    return this.callState === 'connecting' || this.callState === 'active';
+  }
+
+  /**
+   * Keep the screen on through a call or a file transfer.
+   *
+   * A phone that dims and locks suspends the tab with it: video freezes for
+   * the other side, and a transfer stalls until it fails. The lock lapses by
+   * itself whenever the page is hidden, so it is asked for again when the
+   * page comes back, and let go as soon as nothing needs it.
+   */
+  _syncWakeLock() {
+    const want = this.callState !== 'idle' && this.callState !== 'incoming'
+      || this._sendingFiles > 0
+      || this.fileMgr.inbound.size > 0;
+    if (!want) {
+      const lock = this._wakeLock;
+      this._wakeLock = null;
+      lock?.release().catch(() => {});
+      return;
+    }
+    if (this._wakeLock || this._wakeLockAsking || document.hidden || !navigator.wakeLock) return;
+    this._wakeLockAsking = true;
+    navigator.wakeLock.request('screen').then((lock) => {
+      this._wakeLockAsking = false;
+      this._wakeLock = lock;
+      lock.addEventListener('release', () => {
+        if (this._wakeLock === lock) this._wakeLock = null;
+      });
+      // Whatever needed it may have finished while the browser was asked.
+      this._syncWakeLock();
+    }, () => { this._wakeLockAsking = false; });
   }
 
   _toggleCallOverlay(show) {
@@ -2789,6 +2838,7 @@ class DeadDrop {
     const sessions = [...this.peers.values()];
     this.peers.clear();
     this.fileMgr.destroyAll();
+    this._syncWakeLock();
     for (const s of sessions) {
       try { s.conn.close(); } catch { /* already closed */ }
       s.crypto.destroy();
@@ -3077,6 +3127,7 @@ class DeadDrop {
   _onPageBack() {
     if (this._idleOverdue()) return;
     if (!document.hidden) this._resumeSignaling();
+    this._syncWakeLock();
     if (this._clipDeadline && Date.now() >= this._clipDeadline) this._clearClipboard();
     this.msgMgr?.sweep();
     this._flushUnseen();
@@ -3109,7 +3160,7 @@ class DeadDrop {
     // deadline is wall-clock time, checked again whenever the page comes back.
     this._idleDeadline = Date.now() + ms;
     this._idleWarnTimer = setTimeout(() => {
-      if (this._idleOverdue()) return;
+      if (this._idleOverdue() || this._callInProgress()) return;
       this._idleWarned = true;
       if (!this.el.chatWrap.classList.contains('hidden')) this._renderSystem(t('idle.warning'));
     }, ms - 30_000);
@@ -3125,9 +3176,19 @@ class DeadDrop {
     this._idleDeadline = 0;
   }
 
-  /** Wipe if the idle deadline has passed; true when it did. */
+  /**
+   * Wipe if the idle deadline has passed; true when it did.
+   *
+   * A call is someone present, though nobody touches the screen through it:
+   * the lock wiped the tab half an hour into a conversation. The clock starts
+   * over instead, and again when the call ends.
+   */
   _idleOverdue() {
     if (!this._idleDeadline || !this.username || Date.now() < this._idleDeadline) return false;
+    if (this._callInProgress()) {
+      this._armIdleLock();
+      return false;
+    }
     this._disarmIdleLock();
     this._panicWipe();
     return true;

@@ -42,7 +42,7 @@ func SecurityHeaders(next http.Handler, scriptHashes ...string) http.Handler {
 				"display-capture=(), geolocation=(), payment=(), usb=(), serial=(), "+
 				"hid=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), "+
 				"idle-detection=(), local-fonts=(), compute-pressure=(), "+
-				"screen-wake-lock=(), "+
+				"screen-wake-lock=(self), "+
 				"otp-credentials=(), "+
 				"publickey-credentials-get=(), storage-access=()")
 		// attribution-reporting, browsing-topics and interest-cohort are

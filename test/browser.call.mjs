@@ -103,6 +103,30 @@ ok(JSON.stringify(bLocal) === JSON.stringify(aRemote),
 ok(JSON.stringify(aLocal) !== JSON.stringify(bLocal),
   'the two ends hold different certificates (nothing is being reused)');
 
+// The screen is kept on through a call: a phone that locks suspends the tab.
+// A stand-in records what the page asks for, as a headless browser has no
+// screen to keep on.
+const WAKE_STUB = `(() => {
+  window.__wake = { held: 0, asked: 0 };
+  Object.defineProperty(navigator, 'wakeLock', { configurable: true, value: {
+    request: async () => {
+      window.__wake.asked++; window.__wake.held++;
+      const lock = new EventTarget();
+      let released = false;
+      lock.release = async () => {
+        if (released) return;
+        released = true; window.__wake.held--;
+        lock.dispatchEvent(new Event('release'));
+      };
+      return lock;
+    },
+  } });
+  return true;
+})()`;
+await alice.eval(WAKE_STUB);
+await bob.eval(WAKE_STUB);
+ok(await alice.eval(`window.__wake.asked === 0`), 'the screen is left alone before a call');
+
 // ── Ring, accept, connect ──
 // B has left the tab: the privacy screen is up when the call comes in.
 await bob.eval(`window.dispatchEvent(new Event('blur')); true`);
@@ -182,6 +206,25 @@ const flowed = await waitFor(async () => {
 }, { timeout: 45000 });
 ok(flowed, `encrypted media flows both ways (${flowed?.[0]} / ${flowed?.[1]} bytes)`);
 
+const wakeInCall = [await alice.eval(`window.__wake.held`), await bob.eval(`window.__wake.held`)];
+ok(wakeInCall[0] === 1 && wakeInCall[1] === 1,
+  `both sides keep the screen on during the call (${wakeInCall.join('/')})`);
+
+// The idle lock is for someone who walked away; nobody touches the screen
+// through a call, and it used to wipe the tab half an hour into one.
+await bob.eval(`(() => {
+  const idle = document.querySelector('#idle-select');
+  idle.value = '5'; idle.dispatchEvent(new Event('change'));
+  window.__idleMark = 1;
+  const real = Date.now;
+  Date.now = () => real() + 6 * 60_000;
+  try { window.dispatchEvent(new Event('focus')); } finally { Date.now = real; }
+  return true;
+})()`);
+await sleep(500);
+ok(await bob.eval(`window.__idleMark === 1 && !document.querySelector('#call-overlay').classList.contains('hidden')`),
+  'the idle lock does not wipe the tab in the middle of a call');
+
 // ── Mute is signaled over the encrypted channel, not inferred from silence ──
 await alice.eval(`document.querySelector('#toggle-cam').click(); true`);
 ok(await waitFor(() => bob.eval(
@@ -196,6 +239,14 @@ const ended = await waitFor(async () => {
 }, { timeout: 30000 });
 ok(ended, 'hanging up clears both media elements on the far side');
 ok(ended && ended.overlay === false, 'the call overlay closes on the far side');
+const wakeAfter = [await alice.eval(`window.__wake.held`), await bob.eval(`window.__wake.held`)];
+ok(wakeAfter[0] === 0 && wakeAfter[1] === 0,
+  `and both let the screen sleep again (${wakeAfter.join('/')})`);
+await bob.eval(`(() => {
+  const idle = document.querySelector('#idle-select');
+  idle.value = '0'; idle.dispatchEvent(new Event('change'));
+  return true;
+})()`);
 
 ok(await waitFor(async () => {
   const s = await alice.mediaState();

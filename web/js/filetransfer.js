@@ -232,6 +232,7 @@ export class FileTransferManager {
     transfer.timer = setTimeout(() => {
       console.warn(`File transfer ${msg.id} timed out — cleaning up`);
       this._discardInbound(key);
+      this.onTimeout?.();
     }, INBOUND_TIMEOUT);
     this.inbound.set(key, transfer);
     return { event: 'start', id: msg.id, scope, totalChunks: msg.totalChunks };
