@@ -68,6 +68,10 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Incoming calls ring and vibrate.** A call arrived in silence, so one to a
+  tab in the background went unanswered. The tone is generated in the page
+  and quiet; *Ring and vibrate for calls* in the privacy options turns it off
+  for anyone whose phone must not make a sound.
 - **Delete for everyone.** Tap one of your messages or files, then 🗑️, and it
   is taken off every verified peer's screen as well as yours. The protocol
   could always do this — timers and burn-after-reading use it — but nothing

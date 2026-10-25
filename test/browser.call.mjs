@@ -125,6 +125,17 @@ const WAKE_STUB = `(() => {
 })()`;
 await alice.eval(WAKE_STUB);
 await bob.eval(WAKE_STUB);
+// A call rings and vibrates; recorded here, as headless has no speaker.
+await bob.eval(`(() => {
+  window.__ring = { buzz: [], tones: 0, open: 0 };
+  navigator.vibrate = (p) => { window.__ring.buzz.push(JSON.stringify(p)); return true; };
+  const Real = window.AudioContext;
+  window.AudioContext = class extends Real {
+    constructor(...a) { super(...a); window.__ring.tones++; window.__ring.open++; }
+    close() { window.__ring.open--; return super.close(); }
+  };
+  return true;
+})()`);
 ok(await alice.eval(`window.__wake.asked === 0`), 'the screen is left alone before a call');
 
 // ── Ring, accept, connect ──
@@ -132,6 +143,9 @@ ok(await alice.eval(`window.__wake.asked === 0`), 'the screen is left alone befo
 await bob.eval(`window.dispatchEvent(new Event('blur')); true`);
 await alice.startCall();
 ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings');
+const ringing = await bob.eval(`({ ...window.__ring })`);
+ok(ringing.tones === 1 && ringing.open === 1 && ringing.buzz.includes('[400,200,400]'),
+  `the ring is heard and felt, not only shown (${JSON.stringify(ringing)})`);
 // The ring used to sit under the privacy screen, out of sight.
 const behindScreen = await bob.eval(`(() => {
   const screen = document.querySelector('#privacy-screen');
@@ -156,6 +170,9 @@ ok(await bob.mediaState().then((s) => s.remote === null),
   'nothing is playing at B while the call is still only ringing');
 
 await bob.acceptCall();
+const answered = await bob.eval(`({ ...window.__ring, last: window.__ring.buzz.at(-1) })`);
+ok(answered.open === 0 && answered.last === '0',
+  `answering stops the tone and the vibration (${JSON.stringify(answered)})`);
 
 const bobMedia = await waitFor(async () => {
   const s = await bob.mediaState();
@@ -265,8 +282,18 @@ ok(await waitFor(async () => (await bob.transcript()).includes(after)),
   'the encrypted session keeps working after the call');
 
 // ── A declined call must leave no negotiated media behind ──
+// Ringing switched off: the call shows, and makes no sound or vibration.
+await bob.eval(`(() => {
+  const ring = document.querySelector('#ring-toggle');
+  ring.checked = false; ring.dispatchEvent(new Event('change'));
+  window.__ring = { buzz: [], tones: 0, open: 0 };
+  return true;
+})()`);
 await alice.startCall();
 ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings for a second call');
+const silent = await bob.eval(`({ ...window.__ring })`);
+ok(silent.tones === 0 && !silent.buzz.some((p) => p !== '0'),
+  `with ringing off, the call only shows on screen (${JSON.stringify(silent)})`);
 await bob.rejectCall();
 ok(await waitFor(() => alice.mediaState().then((s) => !s.overlay), { timeout: 20000 }),
   'the caller is told the call was declined');

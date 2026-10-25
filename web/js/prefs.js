@@ -17,6 +17,7 @@ const DEFAULTS = Object.freeze({
   coverTraffic: false,
   scrubMetadata: true,
   typingIndicator: true,
+  callRing: true,
   idleLockMinutes: 0,
   messageTtl: 30,
 });
@@ -26,6 +27,7 @@ const VALID = {
   coverTraffic: (v) => typeof v === 'boolean',
   scrubMetadata: (v) => typeof v === 'boolean',
   typingIndicator: (v) => typeof v === 'boolean',
+  callRing: (v) => typeof v === 'boolean',
   idleLockMinutes: (v) => [0, 5, 15, 30, 60].includes(v),
   messageTtl: (v) => [0, 10, 30, 60, 300].includes(v),
 };

@@ -282,6 +282,7 @@ class DeadDrop {
       coverToggle: $('#cover-toggle'),
       scrubToggle: $('#scrub-toggle'),
       typingToggle: $('#typing-toggle'),
+      ringToggle: $('#ring-toggle'),
       idleSelect: $('#idle-select'),
       // Chat
       chatWrap:    $('#chat-wrap'),
@@ -376,6 +377,7 @@ class DeadDrop {
     this.el.coverToggle.checked = this._coverEnabled;
     this.el.scrubToggle.checked = getPref('scrubMetadata');
     this.el.typingToggle.checked = getPref('typingIndicator');
+    this.el.ringToggle.checked = getPref('callRing');
     this.el.idleSelect.value = String(getPref('idleLockMinutes'));
     this.el.ttlSelect.value = String(getPref('messageTtl'));
     this.el.ttlSelect.addEventListener('change', (e) => {
@@ -384,6 +386,7 @@ class DeadDrop {
     this.el.idleSelect.toggleAttribute('data-off', this.el.idleSelect.value === '0');
     this.el.scrubToggle.addEventListener('change', (e) => setPref('scrubMetadata', e.target.checked));
     this.el.typingToggle.addEventListener('change', (e) => setPref('typingIndicator', e.target.checked));
+    this.el.ringToggle.addEventListener('change', (e) => setPref('callRing', e.target.checked));
     this.el.idleSelect.addEventListener('change', (e) => {
       const minutes = Number.parseInt(e.target.value, 10);
       setPref('idleLockMinutes', minutes);
@@ -2193,6 +2196,49 @@ class DeadDrop {
   _showRinging(on) {
     this.el.incomingCall.classList.toggle('hidden', !on);
     this.el.privacyRinging.classList.toggle('hidden', !on);
+    this._ring(on);
+  }
+
+  /**
+   * Ring and vibrate while a call waits to be answered.
+   *
+   * A call used to arrive in silence, so one to a tab in the background, or a
+   * phone on the table, went unanswered. The tone is made here rather than
+   * fetched, and is quiet. Someone who cannot have their phone make a sound
+   * turns it off in the privacy options; the call still shows on screen.
+   */
+  _ring(on) {
+    clearInterval(this._ringTimer);
+    this._ringTimer = null;
+    const ctx = this._ringCtx;
+    this._ringCtx = null;
+    ctx?.close().catch(() => {});
+    try { navigator.vibrate?.(0); } catch { /* not on this device */ }
+    if (!on || !this.el.ringToggle.checked) return;
+    let tone = null;
+    try {
+      tone = new AudioContext();
+      tone.resume().catch(() => {});
+    } catch { /* no audio output: vibrate only */ }
+    this._ringCtx = tone;
+    const burst = () => {
+      try { navigator.vibrate?.([400, 200, 400]); } catch { /* not on this device */ }
+      if (!tone || tone.state === 'closed') return;
+      const t0 = tone.currentTime;
+      for (const [freq, at] of [[880, 0], [660, 0.4]]) {
+        const osc = tone.createOscillator();
+        const gain = tone.createGain();
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, t0 + at);
+        gain.gain.linearRampToValueAtTime(0.08, t0 + at + 0.02);
+        gain.gain.linearRampToValueAtTime(0, t0 + at + 0.35);
+        osc.connect(gain).connect(tone.destination);
+        osc.start(t0 + at);
+        osc.stop(t0 + at + 0.36);
+      }
+    };
+    burst();
+    this._ringTimer = setInterval(burst, 3000);
   }
 
   async _onCallAccept() {
