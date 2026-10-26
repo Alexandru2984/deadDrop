@@ -27,7 +27,7 @@
   <meta name="twitter:description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — securitate și confidențialitate","inLanguage":"ro","url":"https://dead.micutu.com/about.ro.html","description":"Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-kPhmsi3WdjhcvDgHnoJYiY7xL/NBz44zrkwK3TH5UVo=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-B0ryFXSNpmQ8AwQhM0odbyI5EPg0H395CTyv3A+DPjY=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -85,6 +85,7 @@
       <li>TTL-ul, arderea după citire și ștergerea bilaterală sunt comportamente cooperative ale browserului. Un partener poate face captură de ecran, salva, instrumenta sau modifica clientul; fișierele descărcate și urmele forensice ale sistemului de operare / browserului pot supraviețui.</li>
       <li>Un mesaj cu ardere după citire începe să ardă abia când poate fi văzut — fila în față și ecranul de confidențialitate ridicat — cu timp de citire care crește cu lungimea lui, până la 30 de secunde; un fișier primește 15. Și timerul unui mesaj primit pornește când mesajul poate fi văzut, sau la zece minute după ce a sosit nevăzut, și șterge doar copia respectivă. Timerele țin ora reală, așa că un telefon care a dormit elimină ce a expirat imediat ce pagina revine.</li>
       <li>Un răspuns numește mesajul la care răspunde și nu îi repetă cuvintele. Fiecare parte citează propria copie, iar citatul se șterge odată cu ea, așa că un răspuns nu poate ține în viață un mesaj temporizat sau ars.</li>
+      <li>Un mesaj trimis primește un ✓ când clientul fiecărui destinatar spune că a ajuns. Asta îi spune expeditorului că mesajul a ajuns, niciodată că a fost citit; confirmări de citire există doar pentru arderea după citire, care are nevoie de ele.</li>
       <li>Butonul de panică șterge starea din memorie a acestui tab, identitatea salvată și contactele fixate, închide conexiunile și încheie sesiunea pe server. Blocarea la inactivitate, dacă e activă, face același lucru după atâta timp fără nicio tastă sau atingere. Niciuna nu poate șterge alt dispozitiv, logurile infrastructurii, crash dump-urile, swap-ul, extensiile sau datele deja copiate.</li>
     </ul>
 

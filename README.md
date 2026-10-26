@@ -143,6 +143,8 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
 - A reply names the message it answers and never repeats its words: each
   side quotes its own copy, and the quote is wiped when that copy goes, so a
   reply cannot keep a timed or burned message alive.
+- A sent message is ticked ✓ once every recipient's client says it arrived —
+  that it reached them, not that it was read.
 - A burn-after-reading message starts burning only once it can be seen — the
   tab in front and the privacy screen lifted — and the read receipt waits for
   the same moment. Reading time grows with the text, two to thirty seconds;

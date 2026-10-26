@@ -77,6 +77,10 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Delivered ✓.** A sent message or file is ticked once every recipient's
+  client says it arrived. Sending meant only that it had left the tab; on a
+  link that dropped a moment later it may have reached nobody. The tick says
+  nothing about reading.
 - **Reply to a message.** Tap a message, then ↩️; the reply shows which one
   it answers, and tapping the quote goes back to it. Only which message
   travels, never its words: each side quotes its own copy, and the quote is

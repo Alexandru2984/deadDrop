@@ -253,6 +253,20 @@ ok(await waitFor(async () => !(await bob.transcript()).includes(regret), { timeo
 ok(await waitFor(async () => !(await alice.transcript()).includes(regret), { timeout: 5000 }),
   "and off the sender's");
 
+// ── Delivered ──
+const ticked = 'did it arrive ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(ticked)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(ticked)), 'a message to confirm arrives');
+const tick = await waitFor(() => alice.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg.mine')].find((n) => n.querySelector('.msg-text')?.textContent === ${JSON.stringify(ticked)});
+  return bubble?.querySelector('.msg-tick')?.getAttribute('aria-label') || false;
+})()`), { timeout: 10000 });
+ok(tick === 'Delivered', `the sender sees it was delivered (${tick || 'no tick'})`);
+ok(await bob.eval(`!document.querySelector('.msg.theirs .msg-tick')`), 'and only on their own messages');
+
 // ── Replies ──
 // A reply names the message it answers; each side quotes its own copy, and
 // the quote goes with the original, so quoting never outlives a deletion.

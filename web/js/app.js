@@ -1350,6 +1350,7 @@ class DeadDrop {
     if (this._qrPeerId === peerId && !this.el.qrVerify.classList.contains('hidden')) this._closeQrVerify();
     this.fileMgr.abortScope(peerId);
     this._syncWakeLock();
+    for (const id of [...(this._delivery?.keys() || [])]) this._undeliverable(id, peerId);
     if (this._callPeerId === peerId) this._endCallCleanup();
     try { s.conn.close(); } catch { /* already closed */ }
     s.crypto.destroy();
@@ -1850,6 +1851,7 @@ class DeadDrop {
       : null;
     if (sending) own.append(sending);
     const results = [];
+    this._awaitDelivery(id, targets.map(([peerId]) => peerId));
     this._sendingFiles = (this._sendingFiles || 0) + 1;
     this._syncWakeLock();
     for (const [index, [peerId, s]] of targets.entries()) {
@@ -1862,6 +1864,7 @@ class DeadDrop {
         results.push({ status: 'fulfilled' });
       } catch (reason) {
         results.push({ status: 'rejected', reason });
+        this._undeliverable(id, peerId);
       }
     }
     this._sendingFiles -= 1;
@@ -1988,7 +1991,9 @@ class DeadDrop {
     const quoting = reply ? { replyTo: reply.wireId, replyAuthor: reply.author } : {};
 
     // Pairwise E2E: encrypt separately for every peer with that pair's own keys.
-    for (const s of this._verifiedSessions()) {
+    const targets = [...this.peers].filter(([, s]) => s.encrypted && s.verified && s.conn.userVerified);
+    this._awaitDelivery(id, targets.map(([peerId]) => peerId));
+    for (const [peerId, s] of targets) {
       try {
         const { ciphertext, iv, epoch } = await s.crypto.encrypt(text);
         await s.conn.send({
@@ -1996,6 +2001,7 @@ class DeadDrop {
         });
       } catch (err) {
         console.warn('Send failed for one peer:', err);
+        this._undeliverable(id, peerId);
       }
     }
 
@@ -2028,11 +2034,16 @@ class DeadDrop {
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
           this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading, s, peerId,
             this._quotedKey(msg));
+          this._sendBestEffort(s.conn, { type: 'got', id: msg.id });
         } catch (err) {
           console.error('Decryption failed:', err.message);
         }
         break;
       }
+      case 'got':
+        if (this._validMessageID(msg.id)) this._onDelivered(peerId, msg.id);
+        break;
+
       case 'read': {
         if (!this._validMessageID(msg.id)) return;
         const own = this._messageKey(null, msg.id);
@@ -2131,6 +2142,7 @@ class DeadDrop {
       this._renderFileComplete(
         result.id, blobUrl, meta, result.ttl, result.burnAfterReading, s, peerId,
       );
+      this._sendBestEffort(s.conn, { type: 'got', id: result.id });
     } catch (err) {
       console.error('File decryption failed:', err.message);
       this._renderSystem(t('err.fileDecrypt'));
@@ -2793,6 +2805,44 @@ class DeadDrop {
    * hover or keyboard focus, and on a touch screen once the bubble is tapped,
    * so a stray tap on an empty corner cannot delete anything.
    */
+  /**
+   * A tick on a sent message once every recipient's client has said it
+   * arrived and opened. Sending only meant it had left this tab: on a channel
+   * that dropped a moment later, it may never have reached anyone. Only the
+   * peers it was sent to can tick it, and arriving says nothing of reading.
+   */
+  _awaitDelivery(id, peerIds) {
+    if (!peerIds.length) return;
+    const pending = (this._delivery ||= new Map());
+    pending.set(id, { waiting: new Set(peerIds), got: 0 });
+    while (pending.size > MAX_RENDERED_NODES) pending.delete(pending.keys().next().value);
+  }
+
+  _onDelivered(peerId, id) {
+    const d = this._delivery?.get(id);
+    if (!d || !d.waiting.delete(peerId)) return;
+    d.got++;
+    if (!d.waiting.size) this._tickDelivered(id);
+  }
+
+  /** It will not reach this peer: failed to send, or they left first. */
+  _undeliverable(id, peerId) {
+    const d = this._delivery?.get(id);
+    if (!d || !d.waiting.delete(peerId) || d.waiting.size) return;
+    if (d.got) this._tickDelivered(id);
+    else this._delivery.delete(id);
+  }
+
+  _tickDelivered(id) {
+    this._delivery.delete(id);
+    const el = this.msgMgr.messages.get(this._messageKey(null, id))?.element;
+    if (!el || el.querySelector('.msg-tick')) return;
+    el.append(h('span', {
+      class: 'msg-tick', text: '✓',
+      title: t('msg.delivered'), 'aria-label': t('msg.delivered'), 'data-i18n-aria': 'msg.delivered',
+    }));
+  }
+
   /** Where the message a reply names lives here, if it is valid at all. */
   _quotedKey(msg) {
     if (msg.replyTo === undefined) return null;
@@ -3104,6 +3154,7 @@ class DeadDrop {
     this._endCallCleanup();
     this.msgMgr?.destroyAll();
     this._quotes?.clear();
+    this._delivery?.clear();
     if (this._replyTo) this._cancelReply();
     this._unseen?.clear();
     this._clearTitle();

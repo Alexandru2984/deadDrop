@@ -27,7 +27,7 @@
   <meta name="twitter:description" content="What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — security and privacy model","url":"https://dead.micutu.com/about.html","description":"What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-kPhmsi3WdjhcvDgHnoJYiY7xL/NBz44zrkwK3TH5UVo=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-B0ryFXSNpmQ8AwQhM0odbyI5EPg0H395CTyv3A+DPjY=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -85,6 +85,7 @@
       <li>TTL, burn-after-reading, and bilateral delete are cooperative browser behavior. A peer can screenshot, save, instrument, or modify their client; downloaded files and OS/browser forensic traces can survive.</li>
       <li>A burn-after-reading message starts burning when it can be seen — the tab in front and the privacy screen lifted — with time to read that grows with its length, up to 30 seconds; a file gets 15. A received message's timer also starts when it can be seen, or ten minutes after it arrived unseen, and removes only that copy. Timers keep wall-clock time, so a phone that slept drops what expired as soon as the page is back.</li>
       <li>A reply names the message it answers and never repeats its words. Each side quotes its own copy, and the quote is wiped when that copy is removed, so a reply cannot keep a timed or burned message alive.</li>
+      <li>A sent message gets a ✓ once every recipient's client says it arrived. That tells the sender the message reached them, never that it was read; read receipts exist only for burn-after-reading, which needs them.</li>
       <li>The panic button clears this tab's in-memory state, deletes the saved identity and pinned contacts, closes connections, and ends the session on the server. The idle lock, when set, does the same after that long without a key or a touch. Neither can wipe another device, infrastructure logs, crash dumps, swap, extensions, or data already copied.</li>
     </ul>
 

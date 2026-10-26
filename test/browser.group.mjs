@@ -195,6 +195,17 @@ ok(await waitFor(async () => !(await b.transcript()).includes(withdrawn)
   && !(await c.transcript()).includes(withdrawn), { timeout: 10000 }),
   'deleting it for everyone takes it from both B and C');
 
+// Delivered means delivered to everyone it was sent to.
+const allGot = 'to all ' + suffix;
+await a.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(allGot)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await b.transcript()).includes(allGot) && (await c.transcript()).includes(allGot)),
+  'a message reaches B and C');
+ok(await waitFor(() => a.eval(`!![...document.querySelectorAll('.msg.mine')].find((n) => n.querySelector('.msg-text')?.textContent === ${JSON.stringify(allGot)})?.querySelector('.msg-tick')`), { timeout: 10000 }),
+  'and A sees it delivered once both have it');
+
 // A reply in a group names the original's author, so a third member finds
 // the right copy: B answers C, and A sees which of C's messages it was.
 const cSaid = 'carol said ' + suffix;

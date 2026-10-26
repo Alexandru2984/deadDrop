@@ -749,6 +749,16 @@ select { cursor: pointer; width: auto; }
 }
 .msg.burning .msg-actions { display: none; }
 
+/* Delivered: every recipient's client has the message. */
+.msg-tick {
+  position: absolute;
+  right: 6px;
+  bottom: 2px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--accent);
+}
+
 /* The quote at the top of a reply, and the same in the bar above the
    composer while one is being written. */
 .msg-quote {
