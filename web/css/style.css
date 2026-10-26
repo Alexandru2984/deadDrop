@@ -1188,6 +1188,7 @@ select { cursor: pointer; width: auto; }
   color: var(--dim);
   padding: 4px 0;
 }
+.file-receiving .file-cancel { align-self: flex-end; }
 
 .progress-bar {
   height: 4px;

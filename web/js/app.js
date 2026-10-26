@@ -2083,6 +2083,13 @@ class DeadDrop {
         if (this._validMessageID(msg.id)) this._onDelivered(peerId, msg.id);
         break;
 
+      case 'file-refuse':
+        // Only ever about this peer's own copy of a file we are sending.
+        if (!this._validMessageID(msg.id) || !this.fileMgr.abortOutbound(msg.id, peerId)) break;
+        this._undeliverable(msg.id, peerId);
+        this._renderSystem(t('file.refused').replace('{peer}', s.label));
+        break;
+
       case 'read': {
         if (!this._validMessageID(msg.id)) return;
         const own = this._messageKey(null, msg.id);
@@ -2896,9 +2903,32 @@ class DeadDrop {
           'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0',
         }, h('div', { class: 'progress-fill' })),
         h('span', { class: 'progress-text', text: '0%' }),
+        this._refuseButton(id, peerId, el),
       ),
     );
     this._appendToLog(el);
+  }
+
+  /**
+   * Turn down a file while it arrives — 25 MB over mobile data, or something
+   * not wanted at all. What came of it is dropped here, and the sender is
+   * asked to stop sending the rest to this side; a client too old to know
+   * the request keeps sending, and the rest is dropped as it comes.
+   */
+  _refuseButton(id, peerId, row) {
+    const btn = h('button', {
+      class: 'file-cancel', type: 'button', text: '✕',
+      'aria-label': t('file.refuse'), title: t('file.refuse'), 'data-i18n-aria': 'file.refuse',
+    });
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.fileMgr.discardInbound(peerId, id);
+      this._syncWakeLock();
+      row.remove();
+      const s = this.peers.get(peerId);
+      if (s?.verified) this._sendBestEffort(s.conn, { type: 'file-refuse', id });
+    });
+    return btn;
   }
 
   _updateFileProgress(id, received, total, peerId) {

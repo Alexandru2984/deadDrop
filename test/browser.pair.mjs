@@ -310,6 +310,26 @@ ok((await bob.notices()).some((l) => /clipboard in a minute/.test(l)), 'saying s
 ok(await bob.eval(`![...document.querySelectorAll('.file-msg')].some((n) => n.querySelector('.msg-copy'))`),
   'files offer no copy');
 
+// ── Refusing a file on its way in ──
+await alice.eval(`(() => {
+  const input = document.querySelector('#file-input');
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array(20 * 1024 * 1024)], 'unwanted.bin', { type: 'application/octet-stream' }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()`);
+ok(await waitFor(() => bob.eval(`!!document.querySelector('.file-receiving .file-cancel')`), { timeout: 10000 }),
+  'a file on its way in can be refused');
+await bob.eval(`document.querySelector('.file-receiving .file-cancel').click(); true`);
+ok(await waitFor(async () => (await alice.notices()).some((l) => /refused the file/.test(l)), { timeout: 10000 }),
+  'the sender is told, and stops sending');
+ok(await waitFor(() => alice.eval(`!document.querySelector('.file-sending')`), { timeout: 10000 }),
+  "the sender's progress ends");
+await sleep(2000);
+ok(await bob.eval(`![...document.querySelectorAll('.file-name')].some((n) => n.textContent === 'unwanted.bin') && !document.querySelector('.file-receiving')`),
+  'and nothing of it is left at the receiver');
+
 // ── Delivered ──
 const ticked = 'did it arrive ' + suffix;
 await alice.eval(`

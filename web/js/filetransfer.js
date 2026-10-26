@@ -318,11 +318,17 @@ export class FileTransferManager {
     };
   }
 
-  /** Stop sending this file to anyone it is still going to. */
-  abortOutbound(id) {
+  /** Stop sending this file to anyone it is still going to — or, given a
+   *  scope, only to that peer. Reports whether anything was being sent. */
+  abortOutbound(id, scope = null) {
+    let found = false;
     for (const [key, transfer] of this.outbound) {
-      if (key.endsWith(`\0${id}`)) transfer.aborted = true;
+      if (scope === null ? key.endsWith(`\0${id}`) : key === this._key(scope, id)) {
+        transfer.aborted = true;
+        found = true;
+      }
     }
+    return found;
   }
 
   /** The sender withdrew a file still arriving: drop what came of it. */
