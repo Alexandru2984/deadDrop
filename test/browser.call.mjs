@@ -354,6 +354,52 @@ ok(gaveUp, 'an unanswered call stops: the caller hears no answer, the other side
 ok(!(await bob.ringing()) && !(await alice.mediaState()).overlay,
   'and neither side is left ringing or on the call screen');
 
+// ── Answering without the camera ──
+// Accept on a video call switched the callee's camera on; now there is a
+// voice-only answer beside it.
+await sleep(1000);
+await alice.startCall();
+ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings for a video call');
+ok(await bob.eval(`!document.querySelector('#accept-audio').classList.contains('hidden')`),
+  'a video call can be answered with voice only');
+await bob.eval(`document.querySelector('#accept-audio').click(); true`);
+const voiceOnly = await waitFor(async () => {
+  const [a, b] = [await alice.mediaState(), await bob.mediaState()];
+  return a.remote?.live > 0 && b.remote?.live > 0 ? { a, b } : false;
+}, { timeout: 45000 });
+ok(voiceOnly && voiceOnly.b.local.video === 0 && voiceOnly.a.remote.video === 0,
+  `answered with voice only, B's camera stays off and A gets no picture (${JSON.stringify(voiceOnly && { bLocal: voiceOnly.b.local, aRemote: voiceOnly.a.remote })})`);
+const bView = await bob.eval(`({
+  camDisabled: document.querySelector('#toggle-cam').disabled,
+  placeholder: !document.querySelector('#remote-placeholder').classList.contains('hidden'),
+})`);
+ok(bView.camDisabled && !bView.placeholder, `B has no camera to switch, and sees A (${JSON.stringify(bView)})`);
+const aView = await waitFor(() => alice.eval(`!document.querySelector('#remote-placeholder').classList.contains('hidden')`), { timeout: 5000 });
+ok(aView, 'A sees the placeholder, not a black frame');
+await alice.endCall();
+ok(await waitFor(() => bob.mediaState().then((m) => m.local === null && !m.overlay), { timeout: 20000 }),
+  'the voice-only call ends cleanly');
+
+// ── A voice call never asks for a camera ──
+await sleep(1000);
+await alice.startCall({ video: false });
+ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings for a voice call');
+const voiceRing = await bob.eval(`({
+  audioOnlyButton: !document.querySelector('#accept-audio').classList.contains('hidden'),
+  text: document.querySelector('#incoming-call-text').textContent,
+})`);
+ok(!voiceRing.audioOnlyButton && !/video/i.test(voiceRing.text),
+  `it rings as a voice call (${voiceRing.text})`);
+await bob.acceptCall();
+const voiceCall = await waitFor(async () => {
+  const [a, b] = [await alice.mediaState(), await bob.mediaState()];
+  return a.remote?.live > 0 && b.remote?.live > 0 ? { a, b } : false;
+}, { timeout: 45000 });
+ok(voiceCall && voiceCall.a.local.video === 0 && voiceCall.b.local.video === 0,
+  `neither side's camera is on (${JSON.stringify(voiceCall && [voiceCall.a.local, voiceCall.b.local])})`);
+await alice.endCall();
+await waitFor(() => bob.mediaState().then((m) => m.local === null), { timeout: 20000 });
+
 const errors = [...alice.errors, ...bob.errors];
 ok(errors.length === 0, `no uncaught exceptions${errors.length ? ': ' + errors[0] : ''}`);
 

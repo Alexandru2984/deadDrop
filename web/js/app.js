@@ -293,6 +293,10 @@ class DeadDrop {
       ringToggle: $('#ring-toggle'),
       replyBar: $('#reply-bar'),
       jumpNew: $('#jump-new'),
+      callMenu: $('#call-menu'),
+      callVoice: $('#call-voice'),
+      callVideo: $('#call-video'),
+      acceptAudio: $('#accept-audio'),
       replyBarText: $('#reply-bar-text'),
       replyCancel: $('#reply-cancel'),
       idleSelect: $('#idle-select'),
@@ -492,6 +496,13 @@ class DeadDrop {
     // Call controls
     this.el.callBtn.addEventListener('click', () => this._onCallBtnClick());
     this.el.acceptCall.addEventListener('click', () => this._acceptCall());
+    this.el.acceptAudio.addEventListener('click', () => this._acceptCall(false));
+    this.el.callVoice.addEventListener('click', () => this._placeCall(false));
+    this.el.callVideo.addEventListener('click', () => this._placeCall(true));
+    document.addEventListener('click', (e) => {
+      if (this.el.callMenu.classList.contains('hidden') || e.target.closest('#call-menu, #call-btn')) return;
+      this._showCallMenu(false);
+    });
     this.el.rejectCall.addEventListener('click', () => this._rejectCall());
     this.el.toggleMic.addEventListener('click', () => this._toggleMic());
     this.el.toggleCam.addEventListener('click', () => this._toggleCam());
@@ -2166,12 +2177,28 @@ class DeadDrop {
     }
     // Calls are strictly 1:1 — only when the room has exactly one encrypted peer
     // whose media path is bound to the verified SAS channel.
+    if (!this._canCall()) return;
+    this._showCallMenu(this.el.callMenu.classList.contains('hidden'));
+  }
+
+  _canCall() {
     const enc = this._verifiedSessions();
-    if (this.callState !== 'idle' || enc.length !== 1 || this.peers.size !== 1) return;
-    if (!enc[0].conn.mediaVerified) return;
+    return this.callState === 'idle' && enc.length === 1 && this.peers.size === 1
+      && enc[0].conn.mediaVerified;
+  }
+
+  _showCallMenu(on) {
+    this.el.callMenu.classList.toggle('hidden', !on);
+    this.el.callBtn.setAttribute('aria-expanded', String(on));
+    if (on) this.el.callVoice.focus();
+  }
+
+  _placeCall(video) {
+    this._showCallMenu(false);
+    if (!this._canCall()) return;
     this._callPeerId = [...this.peers.keys()][0];
     this._callRole = 'caller';
-    this._startCall(true);
+    this._startCall(video);
   }
 
   async _startCall(video) {
@@ -2187,13 +2214,18 @@ class DeadDrop {
     this._toggleCallOverlay(true);
   }
 
-  async _acceptCall() {
+  /**
+   * Answer, with the camera only if asked to. A video call used to switch
+   * the callee's camera on at Accept; now there is a voice-only answer
+   * beside it, and a voice call never asks for the camera at all.
+   */
+  async _acceptCall(video = true) {
     this._showRinging(false);
     this.callState = 'connecting';
     this._syncWakeLock();
 
     try {
-      this.localStream = await this._getMedia(this._callVideo);
+      this.localStream = await this._getMedia(this._callVideo && video);
     } catch (err) {
       if (err instanceof CallGone) return;
       console.error('getUserMedia failed:', err);
@@ -2204,6 +2236,7 @@ class DeadDrop {
     }
 
     this.el.localVideo.srcObject = this.localStream;
+    this._syncCamButton();
     this._toggleCallOverlay(true);
     this._showCallStatus(`🔄 ${t('call.connecting')}`);
     await this._sendBestEffort(this._callConn(), { type: 'call-accept' });
@@ -2298,6 +2331,7 @@ class DeadDrop {
    * hide the conversation from whoever else can see the display.
    */
   _showRinging(on) {
+    this.el.acceptAudio.classList.toggle('hidden', !(on && this._callVideo));
     this.el.incomingCall.classList.toggle('hidden', !on);
     this.el.privacyRinging.classList.toggle('hidden', !on);
     this._ring(on);
@@ -2362,6 +2396,7 @@ class DeadDrop {
     }
 
     this.el.localVideo.srcObject = this.localStream;
+    this._syncCamButton();
     this._showCallStatus(`🔄 ${t('call.connectingMedia')}`);
 
     try {
@@ -2456,6 +2491,7 @@ class DeadDrop {
     this._showRinging(false);
     this.el.remotePlaceholder.classList.remove('hidden');
     this._updateCallBtn(false);
+    this._showCallMenu(false);
     this._resetMuteButtons();
     this._refreshRoomState();
   }
@@ -2463,7 +2499,18 @@ class DeadDrop {
   _onRemoteTrack(stream) {
     this.remoteStream = stream;
     this.el.remoteVideo.srcObject = stream;
-    this.el.remotePlaceholder.classList.add('hidden');
+    // A voice call has no picture to show: keep the placeholder up.
+    this.el.remotePlaceholder.classList.toggle('hidden', stream.getVideoTracks().length > 0);
+  }
+
+  /** No camera in this call: the camera button has nothing to switch. */
+  _syncCamButton() {
+    const cam = this.localStream?.getVideoTracks()[0];
+    this.el.toggleCam.disabled = !cam;
+    if (!cam) {
+      this.el.toggleCam.classList.add('muted');
+      this.el.toggleCam.textContent = '🚫';
+    }
   }
 
   /** Media is being set up or flowing: someone is on the call. */
@@ -2571,6 +2618,7 @@ class DeadDrop {
   }
 
   _resetMuteButtons() {
+    this.el.toggleCam.disabled = false;
     this.el.toggleMic.classList.remove('muted');
     this.el.toggleMic.textContent = '🎤';
     this.el.toggleCam.classList.remove('muted');
@@ -3264,6 +3312,7 @@ class DeadDrop {
    */
   _dismissTopDialog() {
     const open = [
+      [this.el.callMenu, () => this._showCallMenu(false)],
       [this.el.qrVerify, () => this._closeQrVerify()],
       [this.el.callOverlay, () => this._toggleCallOverlay(false)],
       [this.el.accountPanel, () => this.el.accountPanel.classList.add('hidden')],

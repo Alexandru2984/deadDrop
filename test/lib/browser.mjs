@@ -496,8 +496,12 @@ export class Peer {
     `);
   }
 
-  startCall() {
-    return this.eval(`document.querySelector('#call-btn').click(); true`);
+  startCall({ video = true } = {}) {
+    return this.eval(`(() => {
+      document.querySelector('#call-btn').click();
+      document.querySelector(${JSON.stringify(video ? '#call-video' : '#call-voice')}).click();
+      return true;
+    })()`);
   }
 
   ringing() {

@@ -204,7 +204,7 @@ ok((await bob.notices()).some((n) => n.toLowerCase().includes('removed')),
 // testing B. browser.call.mjs carries a call all the way through on clean peers.
 await mallory.eval(`window.__ddApp._endCallCleanup(); true`);
 await sleep(500);
-await bob.eval(`document.querySelector('#call-btn').click(); true`);
+await bob.startCall();
 ok(await waitFor(() => mallory.ringing(), { timeout: 20000 }),
   'B can still place a call of its own');
 await bob.endCall();

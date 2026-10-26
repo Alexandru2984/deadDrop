@@ -61,6 +61,10 @@ compare rather than take a hash on trust.
   front of nobody, and its read receipt took the sender's copy at arrival.
   Both now wait until the message can be seen, and the time to read it grows
   with its length; a received file gets fifteen seconds.
+- **Answering a call no longer switches the camera on by itself.** Every
+  call was a video call, and Accept turned the callee's camera on. 📞 now
+  offers a voice call or a video call, and a video call can be answered with
+  voice only; a voice call never asks for the camera.
 - **A message that arrives while you read back is not burned out of view.**
   Every new line pulled someone who had scrolled up back to the end, and a
   burning or timed message at the end ran out where it could not be seen.

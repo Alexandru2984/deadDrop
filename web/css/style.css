@@ -452,6 +452,7 @@ select { cursor: pointer; width: auto; }
 .privacy-ringing { color: var(--accent); font-size: 15px; font-weight: 600; }
 
 .chat-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1214,7 +1215,25 @@ select { cursor: pointer; width: auto; }
 
 .incoming-call-text { font-size: 14px; }
 
-.incoming-call-btns { display: flex; gap: 8px; }
+.incoming-call-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Voice or video: chosen before the call, so the camera is never switched
+   on by default. */
+.call-menu {
+  position: absolute;
+  top: 100%;
+  right: 8px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+}
+.call-menu .btn { min-height: 44px; text-align: left; }
 
 .btn-danger {
   border-color: var(--danger);
