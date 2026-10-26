@@ -251,6 +251,22 @@ ok(stillOn.local && stillOn.remote, 'and the call is still on');
 await alice.eval(`document.querySelector('#call-btn').click(); true`);
 ok(await waitFor(() => alice.mediaState().then((m) => m.overlay)), 'the call button brings the call screen back');
 
+// Switching camera replaces the picture without renegotiating the call.
+const camBefore = await alice.eval(`(() => {
+  const v = document.querySelector('#local-video').srcObject.getVideoTracks();
+  return { id: v[0]?.id, n: v.length, offered: !document.querySelector('#flip-cam').classList.contains('hidden') };
+})()`);
+await alice.eval(`document.querySelector('#flip-cam').click(); true`);
+const camAfter = await waitFor(() => alice.eval(`(() => {
+  const v = document.querySelector('#local-video').srcObject.getVideoTracks();
+  return v.length === 1 && v[0].id !== ${JSON.stringify(camBefore.id)} && v[0].readyState === 'live'
+    ? { n: v.length } : false;
+})()`), { timeout: 10000 });
+ok(camBefore.n === 1 && camAfter, `switching camera swaps in a new live picture (${JSON.stringify({ camBefore, camAfter })})`);
+const flowedAfter = await bob.inboundMedia();
+await sleep(1500);
+ok((await bob.inboundMedia()) > flowedAfter, 'and B keeps receiving after the switch');
+
 // ── Mute is signaled over the encrypted channel, not inferred from silence ──
 await alice.eval(`document.querySelector('#toggle-cam').click(); true`);
 ok(await waitFor(() => bob.eval(

@@ -343,6 +343,7 @@ class DeadDrop {
       remotePlaceholder: $('#remote-placeholder'),
       toggleMic:     $('#toggle-mic'),
       toggleCam:     $('#toggle-cam'),
+      flipCam:       $('#flip-cam'),
       backToChat:    $('#back-to-chat'),
       endCall:       $('#end-call'),
     };
@@ -506,6 +507,7 @@ class DeadDrop {
     this.el.rejectCall.addEventListener('click', () => this._rejectCall());
     this.el.toggleMic.addEventListener('click', () => this._toggleMic());
     this.el.toggleCam.addEventListener('click', () => this._toggleCam());
+    this.el.flipCam.addEventListener('click', () => this._flipCam());
     this.el.backToChat.addEventListener('click', () => this._toggleCallOverlay(false));
     this.el.endCall.addEventListener('click', () => this._endCall());
 
@@ -2507,9 +2509,52 @@ class DeadDrop {
   _syncCamButton() {
     const cam = this.localStream?.getVideoTracks()[0];
     this.el.toggleCam.disabled = !cam;
+    this.el.flipCam.classList.add('hidden');
     if (!cam) {
       this.el.toggleCam.classList.add('muted');
       this.el.toggleCam.textContent = '🚫';
+      return;
+    }
+    this._facing = cam.getSettings?.().facingMode || 'user';
+    // Offered only where there is another camera to switch to.
+    const call = this._callGen;
+    navigator.mediaDevices.enumerateDevices?.().then((devices) => {
+      if (call !== this._callGen) return;
+      const cameras = devices.filter((d) => d.kind === 'videoinput').length;
+      this.el.flipCam.classList.toggle('hidden', cameras < 2);
+    }).catch(() => {});
+  }
+
+  /**
+   * Front camera to back and back again, mid-call. The new picture replaces
+   * the old on the same sender, so nothing is renegotiated; the old camera is
+   * released as soon as the new one is live, and a camera that was switched
+   * off stays off.
+   */
+  async _flipCam() {
+    const old = this.localStream?.getVideoTracks()[0];
+    if (!old || this._flipping) return;
+    this._flipping = true;
+    const call = this._callGen;
+    const facing = this._facing === 'environment' ? 'user' : 'environment';
+    let fresh = null;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: facing } } });
+      fresh = stream.getVideoTracks()[0];
+      if (call !== this._callGen || !this.localStream) throw new CallGone();
+      fresh.enabled = old.enabled;
+      await this._callConn().replaceVideoTrack(fresh);
+      this.localStream.removeTrack(old);
+      this.localStream.addTrack(fresh);
+      old.stop();
+      this._facing = fresh.getSettings?.().facingMode || facing;
+      this.el.localVideo.classList.toggle('rear', this._facing === 'environment');
+      fresh = null;
+    } catch (err) {
+      if (!(err instanceof CallGone)) console.warn('Camera switch failed:', err);
+    } finally {
+      fresh?.stop();
+      this._flipping = false;
     }
   }
 
@@ -2619,6 +2664,8 @@ class DeadDrop {
 
   _resetMuteButtons() {
     this.el.toggleCam.disabled = false;
+    this.el.flipCam.classList.add('hidden');
+    this.el.localVideo.classList.remove('rear');
     this.el.toggleMic.classList.remove('muted');
     this.el.toggleMic.textContent = '🎤';
     this.el.toggleCam.classList.remove('muted');

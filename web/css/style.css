@@ -1289,7 +1289,11 @@ select { cursor: pointer; width: auto; }
   border: 2px solid var(--border);
   background: #111;
   z-index: 10;
+  /* A mirror, as every camera app shows the front camera; the back camera
+     is shown as it is. */
+  transform: scaleX(-1);
 }
+#local-video.rear { transform: none; }
 
 .video-placeholder {
   position: absolute;

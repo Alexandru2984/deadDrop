@@ -81,6 +81,9 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Switch camera during a call** (🔄, on devices with more than one): the
+  front camera to the back and back again, without interrupting the call. The
+  self-view of the front camera is mirrored, as in every camera app.
 - **Delivered ✓.** A sent message or file is ticked once every recipient's
   client says it arrived. Sending meant only that it had left the tab; on a
   link that dropped a moment later it may have reached nobody. The tick says

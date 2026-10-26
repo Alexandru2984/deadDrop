@@ -219,6 +219,14 @@ export class PeerConnection {
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
   }
 
+  /** Send another camera's picture in place of the current one, without
+   *  renegotiating: the far side sees the switch and nothing else. */
+  async replaceVideoTrack(track) {
+    const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video');
+    if (!sender) throw new Error('no video being sent');
+    await sender.replaceTrack(track);
+  }
+
   /** Stop local media and remove tracks from the connection. */
   stopMedia() {
     if (this.localStream) {
