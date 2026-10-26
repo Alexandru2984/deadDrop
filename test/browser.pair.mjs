@@ -584,6 +584,44 @@ const scrubbed = await alice.eval(`
 ok(scrubbed?.before && scrubbed.after === false && scrubbed.type === 'image/jpeg' && scrubbed.name === 'cat.jpg',
   'a photo leaves without its EXIF block, still a JPEG under its own name');
 
+// A movie is scrubbed in place, and must still play afterwards. Recorded here
+// as MP4 where the browser can; a build without an MP4 encoder skips this.
+const movieCheck = await alice.eval(`(async () => {
+  const type = ['video/mp4;codecs=avc1', 'video/mp4'].find((t) => window.MediaRecorder?.isTypeSupported(t));
+  if (!type) return { skipped: true };
+  const canvas = document.createElement('canvas');
+  canvas.width = 64; canvas.height = 48;
+  const ctx = canvas.getContext('2d');
+  const stream = canvas.captureStream(15);
+  const rec = new MediaRecorder(stream, { mimeType: type });
+  const chunks = [];
+  rec.ondataavailable = (e) => chunks.push(e.data);
+  let frame = 0;
+  const draw = setInterval(() => { ctx.fillStyle = frame++ % 2 ? '#0f0' : '#f00'; ctx.fillRect(0, 0, 64, 48); }, 50);
+  rec.start();
+  await new Promise((r) => setTimeout(r, 1200));
+  await new Promise((r) => { rec.onstop = r; rec.stop(); });
+  clearInterval(draw);
+  for (const track of stream.getTracks()) track.stop();
+  const { scrubMovie } = await import('/js/scrub.js');
+  const original = new File(chunks, 'VID_20261027_101010.mp4', { type: 'video/mp4' });
+  const out = await scrubMovie(original);
+  const video = document.createElement('video');
+  video.muted = true;
+  const url = URL.createObjectURL(out);
+  const played = await new Promise((resolve) => {
+    video.onloadeddata = () => resolve(true);
+    video.onerror = () => resolve(false);
+    setTimeout(() => resolve(false), 8000);
+    video.src = url;
+  });
+  URL.revokeObjectURL(url);
+  return { size: [original.size, out.size], played, name: out.name, w: video.videoWidth };
+})()`);
+if (movieCheck?.skipped) console.log('  - movie scrub playback: no MP4 encoder in this browser, skipped');
+else ok(movieCheck?.played && movieCheck.w === 64 && movieCheck.size[0] === movieCheck.size[1] && movieCheck.name === 'video.mp4',
+  `a scrubbed movie keeps its size and still plays (${JSON.stringify(movieCheck)})`);
+
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.
 const nastyName = '<img src=x onerror=alert(1)>.txt';

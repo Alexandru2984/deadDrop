@@ -61,6 +61,12 @@ compare rather than take a hash on trust.
   front of nobody, and its read receipt took the sender's copy at arrival.
   Both now wait until the message can be seen, and the time to read it grows
   with its length; a received file gets fifteen seconds.
+- **Videos no longer tell where they were shot.** Metadata stripping covered
+  photos only; a phone video went out with its GPS position (©xyz, Apple's
+  location key, XMP), the device and the capture time. MP4, MOV and M4A files
+  now have those boxes blanked and the header times zeroed in place, so not
+  a byte of the media moves and the file plays as before. A camera-generated
+  name becomes `video.mp4`.
 - **Answering a call no longer switches the camera on by itself.** Every
   call was a video call, and Accept turned the callee's camera on. 📞 now
   offers a voice call or a video call, and a video call can be answered with

@@ -279,7 +279,7 @@ go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -exclude-generated \
   -nosec-require-rules -nosec-require-justification ./...
 go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --no-banner --redact .
 for t in crypto lifecycle mlkem srp fingerprint config manifest callsignal \
-         ice-grace seo property; do node "test/$t.selftest.mjs"; done
+         ice-grace scrub seo property; do node "test/$t.selftest.mjs"; done
 node scripts/gen-integrity.mjs --check
 ```
 

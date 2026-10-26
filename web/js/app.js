@@ -22,7 +22,7 @@ import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig, passwordProblem, passphrase } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
-import { isScrubbable, scrubImage } from './scrub.js';
+import { isScrubbable, scrubFile } from './scrub.js';
 import { getPref, setPref } from './prefs.js';
 
 const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
@@ -1832,11 +1832,19 @@ class DeadDrop {
 
   /* ── File transfer ── */
 
-  async sendFile(file) {
+  /** `recorded`: made here, by the voice recorder, with nothing to strip. */
+  async sendFile(file, { recorded = false } = {}) {
     if (!this.encrypted) return;
-    if (this.el.scrubToggle.checked && isScrubbable(file)) {
+    // Refused before it is read: a movie is scrubbed in memory, and a
+    // two-gigabyte one would be read whole only to be turned away after.
+    // A picture can come out of re-encoding smaller, so it is judged after.
+    if (file.size > MAX_FILE_SIZE && !String(file.type).startsWith('image/')) {
+      this._renderSystem(`${t('err.fileTooLarge')} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+      return;
+    }
+    if (this.el.scrubToggle.checked && !recorded && isScrubbable(file)) {
       try {
-        file = await scrubImage(file);
+        file = await scrubFile(file);
       } catch (err) {
         console.warn('metadata removal failed:', err?.message);
         this._renderSystem(t('err.scrubFailed'));
@@ -2008,7 +2016,7 @@ class DeadDrop {
     // A fixed name: a timestamp here told the other side the exact
     // millisecond of the sender's clock. The type says it is audio; the
     // receiver labels it as a voice message.
-    this.sendFile(new File([blob], `voice.${ext}`, { type }));
+    this.sendFile(new File([blob], `voice.${ext}`, { type }), { recorded: true });
   }
 
   /* ── Messaging ── */
