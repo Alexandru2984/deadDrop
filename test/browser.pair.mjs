@@ -724,6 +724,39 @@ await alice.eval(`
 ok(await waitFor(async () => (await bob.transcript()).includes(secret2)),
   'the reconnected pair exchanges messages');
 
+// ── Reading back ──
+// Someone scrolled up to read was pulled to the end by every new line, and a
+// message burning down there burned out of view.
+await alice.eval(`(() => {
+  const ttl = document.querySelector('#ttl-select');
+  ttl.value = '0'; ttl.dispatchEvent(new Event('change'));
+  return true;
+})()`);
+for (let i = 0; i < 30; i++) {
+  await alice.eval(`
+    document.querySelector('#msg-input').value = ${JSON.stringify('filler ' + i + ' ' + suffix)};
+    document.querySelector('#send-btn').click(); true
+  `);
+}
+ok(await waitFor(async () => (await bob.transcript()).includes('filler 29 ' + suffix)), 'a long conversation arrives');
+await bob.eval(`document.querySelector('#messages').scrollTop = 0; true`);
+await sleep(300);
+const offView = 'out of view ' + suffix;
+await alice.sendBurning(offView);
+ok(await waitFor(async () => (await bob.transcript()).includes(offView)), 'a burning message arrives while B reads back');
+const held = await bob.eval(`({
+  top: document.querySelector('#messages').scrollTop,
+  pill: !document.querySelector('#jump-new').classList.contains('hidden'),
+})`);
+ok(held.top < 50 && held.pill, `B stays where they were reading, with a button to the new message (${JSON.stringify(held)})`);
+await sleep(5000);
+ok((await bob.transcript()).includes(offView), 'and it does not burn out of view');
+await bob.eval(`document.querySelector('#jump-new').click(); true`);
+ok(await waitFor(() => bob.eval(`document.querySelector('#jump-new').classList.contains('hidden')`)),
+  'the button goes once the end is reached');
+ok(await waitFor(async () => !(await bob.transcript()).includes(offView), { timeout: 15000 }),
+  'and the message burns once it has been seen');
+
 // ── Back ──
 // A conversation lives only in the page; back, or a phone's edge swipe, used
 // to end it at a touch. Now it closes what is open, then asks again.

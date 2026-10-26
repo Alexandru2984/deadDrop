@@ -292,6 +292,7 @@ class DeadDrop {
       typingToggle: $('#typing-toggle'),
       ringToggle: $('#ring-toggle'),
       replyBar: $('#reply-bar'),
+      jumpNew: $('#jump-new'),
       replyBarText: $('#reply-bar-text'),
       replyCancel: $('#reply-cancel'),
       idleSelect: $('#idle-select'),
@@ -415,6 +416,11 @@ class DeadDrop {
     });
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
+    this.el.messages.addEventListener('scroll', () => this._onLogScroll(), { passive: true });
+    this.el.jumpNew.addEventListener('click', () => {
+      this.el.messages.scrollTop = this.el.messages.scrollHeight;
+      this._onLogScroll();
+    });
     this.el.replyCancel.addEventListener('click', () => {
       this._cancelReply();
       this.el.msgInput.focus();
@@ -2248,7 +2254,7 @@ class DeadDrop {
     this.el.incomingText.textContent = t(msg.video ? 'call.incomingVideo' : 'call.incomingFrom')
       .replace('{peer}', session.label);
     this._showRinging(true);
-    if (!this._onScreen()) this._markTitle();
+    if (!this._pageOnScreen()) this._markTitle();
     this._ringFor(CALL_MISSED_MS, 'incoming', () => {
       this._sendBestEffort(this._callConn(), { type: 'call-reject', reason: 'no-answer' });
       this._missedCall();
@@ -2599,9 +2605,7 @@ class DeadDrop {
     );
     this._applySenderColor(el, sender);
 
-    this.el.messages.appendChild(el);
-    this._pruneRenderedNodes();
-    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+    this._appendToLog(el, mine);
 
     this.msgMgr.add(key, el, ttl, burn, mine, null, { wireId: id, peerId, deferTtl: !mine && !this._onScreen() });
     // Two seconds was the same for a word as for a paragraph; this is about
@@ -2626,7 +2630,7 @@ class DeadDrop {
       // The transcript keeps at most so many messages; a peer sending more
       // while the tab is away must not grow this list without end.
       while (unseen.size > MAX_RENDERED_NODES) unseen.delete(unseen.keys().next().value);
-      this._markTitle();
+      if (!this._pageOnScreen()) this._markTitle();
       return;
     }
     if (!this.msgMgr.has(key)) return;
@@ -2639,6 +2643,10 @@ class DeadDrop {
   }
 
   _onScreen() {
+    return this._pageOnScreen() && !this._scrolledAway;
+  }
+
+  _pageOnScreen() {
     return !document.hidden && this.el.privacyScreen.classList.contains('hidden');
   }
 
@@ -2660,8 +2668,9 @@ class DeadDrop {
   }
 
   _flushUnseen() {
-    if (!this._onScreen()) return;
+    if (!this._pageOnScreen()) return;
     this._clearTitle();
+    if (this._scrolledAway) return;
     if (!this._unseen) return;
     const due = [...this._unseen];
     this._unseen.clear();
@@ -2715,9 +2724,7 @@ class DeadDrop {
     );
     this._applySenderColor(el, sender);
 
-    this.el.messages.appendChild(el);
-    this._pruneRenderedNodes();
-    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+    this._appendToLog(el, mine);
 
     this.msgMgr.add(key, el, ttl, burn, mine, blobUrl, {
       wireId: id,
@@ -2747,9 +2754,7 @@ class DeadDrop {
         h('span', { class: 'progress-text', text: '0%' }),
       ),
     );
-    this.el.messages.appendChild(el);
-    this._pruneRenderedNodes();
-    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+    this._appendToLog(el);
   }
 
   _updateFileProgress(id, received, total, peerId) {
@@ -2930,9 +2935,38 @@ class DeadDrop {
     const el = document.createElement('div');
     el.className = 'msg system';
     el.textContent = text;
-    this.el.messages.appendChild(el);
+    this._appendToLog(el);
+  }
+
+  /**
+   * Add to the conversation without pulling someone who scrolled up to read
+   * back down to the end at every new line. What they send themselves does
+   * follow; anything else waits behind a "new messages" button, and a message
+   * that arrives out of view is not yet seen — its timer and burn wait.
+   */
+  _appendToLog(el, follow = false) {
+    const list = this.el.messages;
+    const atEnd = this._atLogEnd();
+    list.appendChild(el);
     this._pruneRenderedNodes();
-    this.el.messages.scrollTop = this.el.messages.scrollHeight;
+    if (follow || atEnd) {
+      list.scrollTop = list.scrollHeight;
+      return;
+    }
+    this._scrolledAway = true;
+    this.el.jumpNew.classList.remove('hidden');
+  }
+
+  _atLogEnd() {
+    const list = this.el.messages;
+    return list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  }
+
+  _onLogScroll() {
+    if (!this._scrolledAway || !this._atLogEnd()) return;
+    this._scrolledAway = false;
+    this.el.jumpNew.classList.add('hidden');
+    this._flushUnseen();
   }
 
   /** `text` is a function, so a language switch can draw the same status
@@ -3099,6 +3133,8 @@ class DeadDrop {
     this.iceConfig = { iceServers: [] };
     this._iceExpiresAt = 0;
     this.el.messages.replaceChildren();
+    this._scrolledAway = false;
+    this.el.jumpNew.classList.add('hidden');
     this.encrypted = false;
     for (const control of [this.el.msgInput, this.el.sendBtn, this.el.attachBtn, this.el.recordBtn]) {
       control.disabled = true;

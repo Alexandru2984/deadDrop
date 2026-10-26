@@ -671,6 +671,25 @@ select { cursor: pointer; width: auto; }
 }
 
 .messages::-webkit-scrollbar { width: 6px; }
+
+/* Laid over the bottom of the conversation, which has scrolled away from
+   the end, by pulling it up into the space above it. */
+.jump-new {
+  align-self: center;
+  position: relative;
+  z-index: 2;
+  margin: -48px 0 8px;
+  padding: 8px 16px;
+  min-height: 40px;
+  border: 1px solid var(--accent);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
 .messages::-webkit-scrollbar-track { background: transparent; }
 .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 

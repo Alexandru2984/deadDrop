@@ -61,6 +61,11 @@ compare rather than take a hash on trust.
   front of nobody, and its read receipt took the sender's copy at arrival.
   Both now wait until the message can be seen, and the time to read it grows
   with its length; a received file gets fifteen seconds.
+- **A message that arrives while you read back is not burned out of view.**
+  Every new line pulled someone who had scrolled up back to the end, and a
+  burning or timed message at the end ran out where it could not be seen.
+  The conversation now stays where it is, with a *New messages* button; what
+  arrives meanwhile counts as seen once the end is in view.
 - **The idle lock no longer wipes the tab in the middle of a call.** Nobody
   touches the screen while they talk, so a five-minute lock ended a call — and
   wiped the identity — five minutes in. A call now counts as someone being
