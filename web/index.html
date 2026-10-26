@@ -243,13 +243,13 @@
         </div>
       </div>
       <div class="header-right">
-        <button id="call-btn" class="btn-icon call-btn" aria-haspopup="menu" aria-expanded="false" title="Start call" aria-label="…" data-i18n-aria="aria.call">📞</button>
+        <button id="call-btn" class="btn-icon call-btn" aria-controls="call-menu" aria-expanded="false" title="Start call" aria-label="…" data-i18n-aria="aria.call">📞</button>
         <button id="panic-btn" class="btn-icon panic-btn" title="Panic — clear this tab and log out (or press Esc three times)" data-i18n-title="title.panic" aria-label="…" data-i18n-aria="aria.panic">💣</button>
         <div id="status" class="status waiting" role="status">⏳ Initializing…</div>
       </div>
-      <div id="call-menu" class="call-menu hidden" role="menu" aria-label="…" data-i18n-aria="aria.call">
-        <button id="call-voice" class="btn btn-sm" type="button" role="menuitem" data-i18n="call.voice">🎙️ Voice call</button>
-        <button id="call-video" class="btn btn-sm" type="button" role="menuitem" data-i18n="call.video">📹 Video call</button>
+      <div id="call-menu" class="call-menu hidden" role="group" aria-label="…" data-i18n-aria="aria.call">
+        <button id="call-voice" class="btn btn-sm" type="button" data-i18n="call.voice">🎙️ Voice call</button>
+        <button id="call-video" class="btn btn-sm" type="button" data-i18n="call.video">📹 Video call</button>
       </div>
     </header>
 
