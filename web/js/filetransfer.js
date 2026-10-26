@@ -318,6 +318,21 @@ export class FileTransferManager {
     };
   }
 
+  /** Stop sending this file to anyone it is still going to. */
+  abortOutbound(id) {
+    for (const [key, transfer] of this.outbound) {
+      if (key.endsWith(`\0${id}`)) transfer.aborted = true;
+    }
+  }
+
+  /** The sender withdrew a file still arriving: drop what came of it. */
+  discardInbound(scope, id) {
+    const key = this._key(scope, id);
+    if (!this.inbound.has(key)) return false;
+    this._discardInbound(key);
+    return true;
+  }
+
   _discardInbound(key) {
     const transfer = this.inbound.get(key);
     if (!transfer) return;

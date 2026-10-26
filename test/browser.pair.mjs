@@ -253,6 +253,31 @@ ok(await waitFor(async () => !(await bob.transcript()).includes(regret), { timeo
 ok(await waitFor(async () => !(await alice.transcript()).includes(regret), { timeout: 5000 }),
   "and off the sender's");
 
+// ── Calling off a file on its way ──
+await alice.eval(`(() => {
+  const input = document.querySelector('#file-input');
+  const dt = new DataTransfer();
+  dt.items.add(new File([new Uint8Array(20 * 1024 * 1024)], 'oops.bin', { type: 'application/octet-stream' }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()`);
+ok(await waitFor(() => alice.eval(`!!document.querySelector('.file-cancel')`), { timeout: 10000 }),
+  'a file being sent can be stopped');
+const sawProgress = await waitFor(() => bob.eval(`!!document.querySelector('.progress-fill')`), { timeout: 10000 }).catch(() => false);
+await alice.eval(`document.querySelector('.file-cancel').click(); true`);
+ok(await waitFor(() => alice.eval(`![...document.querySelectorAll('.file-name')].some((n) => n.textContent === 'oops.bin')`), { timeout: 5000 }),
+  "stopping it takes it off the sender's screen");
+await sleep(3000);
+const afterCancel = await bob.eval(`({
+  file: [...document.querySelectorAll('.file-name')].some((n) => n.textContent === 'oops.bin'),
+  progress: !!document.querySelector('.progress-fill'),
+})`);
+ok(!afterCancel.file && !afterCancel.progress,
+  `and the receiver drops what had arrived (${JSON.stringify(afterCancel)})`);
+ok(sawProgress && (await bob.notices()).some((l) => /stopped sending a file/.test(l)),
+  'and is told the sender stopped it');
+
 // ── Delivered ──
 const ticked = 'did it arrive ' + suffix;
 await alice.eval(`

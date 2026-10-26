@@ -1859,8 +1859,23 @@ class DeadDrop {
     // while to leave; closing the tab before then loses it. Say how far it got.
     const targets = [...this.peers].filter(([, s]) => s.verified && s.conn.userVerified);
     const own = document.getElementById(this._domMessageId(this._messageKey(null, id)));
+    // On a slow link 25 MB takes minutes; one sent by mistake can be stopped.
+    // Cancelling withdraws it as a delete for everyone does, which also tells
+    // each peer to drop the part that already arrived.
+    let cancelled = false;
+    const progress = h('span', { text: t('file.sending').replace('{pct}', '0') });
+    const cancel = h('button', {
+      class: 'file-cancel', type: 'button', text: '✕',
+      'aria-label': t('file.cancel'), title: t('file.cancel'), 'data-i18n-aria': 'file.cancel',
+    });
+    cancel.addEventListener('click', (e) => {
+      e.stopPropagation();
+      cancelled = true;
+      this.fileMgr.abortOutbound(id);
+      this.msgMgr.destroy(this._messageKey(null, id));
+    });
     const sending = own && targets.length
-      ? h('div', { class: 'file-sending', text: t('file.sending').replace('{pct}', '0') })
+      ? h('div', { class: 'file-sending' }, progress, cancel)
       : null;
     if (sending) own.append(sending);
     const results = [];
@@ -1868,9 +1883,10 @@ class DeadDrop {
     this._sendingFiles = (this._sendingFiles || 0) + 1;
     this._syncWakeLock();
     for (const [index, [peerId, s]] of targets.entries()) {
+      if (cancelled) break;
       const onProgress = sending && ((done, total) => {
         const pct = Math.min(100, Math.floor(((index + done / total) / targets.length) * 100));
-        sending.textContent = t('file.sending').replace('{pct}', String(pct));
+        progress.textContent = t('file.sending').replace('{pct}', String(pct));
       });
       try {
         await this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn, onProgress, peerId);
@@ -2072,6 +2088,13 @@ class DeadDrop {
       }
       case 'delete': {
         if (!this._validMessageID(msg.id)) return;
+        // A file still arriving that its sender called off.
+        if (this.fileMgr.discardInbound(peerId, msg.id)) {
+          document.getElementById(this._domMessageId(this._messageKey(peerId, msg.id)))?.remove();
+          this._syncWakeLock();
+          this._renderSystem(t('file.withdrawn').replace('{peer}', s.label));
+          break;
+        }
         const own = this._messageKey(null, msg.id);
         if (!this.msgMgr.has(own)) {
           // A peer withdrawing something it sent us: theirs to withdraw.

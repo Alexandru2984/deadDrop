@@ -81,6 +81,9 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Stop a file on its way.** ✕ beside the progress of a file being sent
+  stops it and withdraws it as a delete for everyone does; each peer drops
+  the part that had already arrived and is told the sender stopped it.
 - **Switch camera during a call** (🔄, on devices with more than one): the
   front camera to the back and back again, without interrupting the call. The
   self-view of the front camera is mirrored, as in every camera app.

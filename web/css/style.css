@@ -989,7 +989,24 @@ select { cursor: pointer; width: auto; }
 }
 
 /* Under the sender's own copy of a file until it has left. */
-.file-sending { font-size: 11px; color: var(--dim); margin-top: 4px; }
+.file-sending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 4px;
+}
+.file-cancel {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  flex: none;
+}
 
 /* A message keeps the line breaks it was written with. */
 .msg-text { white-space: pre-wrap; }
@@ -1429,6 +1446,7 @@ select { cursor: pointer; width: auto; }
   }
   .msg.theirs.actions-open .msg-actions { justify-content: flex-start; }
   .msg-actions button { width: 44px; height: 44px; font-size: 18px; }
+  .file-cancel { width: 44px; height: 44px; }
   .btn-icon {
     min-height: 44px;
     min-width: 44px;
