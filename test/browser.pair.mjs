@@ -311,6 +311,30 @@ ok(await waitFor(async () => {
   const [a, b] = [await quoteAt(alice), await quoteAt(bob)];
   return a?.gone && b?.gone && !a.text.includes(quoted) && !b.text.includes(quoted);
 }, { timeout: 10000 }), 'deleting the original wipes its quote in the reply, on both sides');
+// On a touch screen, swiping a message to the right answers it.
+const swipeText = 'swipe me ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(swipeText)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(swipeText)), 'a message to swipe arrives');
+const box = await bob.eval(`(() => {
+  const r = [...document.querySelectorAll('.msg.theirs')].find((n) => n.querySelector('.msg-text')?.textContent === ${JSON.stringify(swipeText)}).getBoundingClientRect();
+  return { x: r.left + 30, y: r.top + r.height / 2 };
+})()`);
+const touch = (type, x) => bob.cdp.send('Input.dispatchTouchEvent', {
+  type, touchPoints: type === 'touchEnd' ? [] : [{ x, y: box.y }],
+}, bob.sessionId);
+await touch('touchStart', box.x);
+for (let step = 1; step <= 8; step++) await touch('touchMove', box.x + step * 10);
+await touch('touchEnd', box.x + 80);
+const swiped = await waitFor(() => bob.eval(`(() => {
+  const bar = document.querySelector('#reply-bar');
+  return !bar.classList.contains('hidden') && bar.textContent.includes(${JSON.stringify(swipeText)});
+})()`), { timeout: 5000 });
+ok(swiped, 'swiping a message to the right starts a reply to it');
+await bob.eval(`document.querySelector('#reply-cancel').click(); true`);
+
 // A reply being written to a message that then goes is called off.
 const doomed = 'doomed ' + suffix;
 await alice.eval(`

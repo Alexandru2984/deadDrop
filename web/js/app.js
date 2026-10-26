@@ -2912,6 +2912,44 @@ class DeadDrop {
     if (this._replyTo?.key === key) this._cancelReply();
   }
 
+  /**
+   * Swipe a message to the right to answer it, as phone messengers do. The
+   * listeners are passive, so a scroll is never held up waiting on them; a
+   * mostly vertical drag is a scroll and lets go. A touch starting at the
+   * very edge belongs to the system's back gesture.
+   */
+  _swipeToReply(bubble, key) {
+    let x0 = null;
+    let y0 = 0;
+    let dx = 0;
+    const reset = () => {
+      x0 = null;
+      dx = 0;
+      bubble.style.transform = '';
+    };
+    bubble.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      if (e.touches.length !== 1 || touch.clientX < 24) { reset(); return; }
+      x0 = touch.clientX;
+      y0 = touch.clientY;
+      dx = 0;
+    }, { passive: true });
+    bubble.addEventListener('touchmove', (e) => {
+      if (x0 === null) return;
+      const mx = e.touches[0].clientX - x0;
+      const my = e.touches[0].clientY - y0;
+      if (Math.abs(my) > 12 && Math.abs(my) > Math.abs(mx)) { reset(); return; }
+      dx = Math.max(0, Math.min(72, mx));
+      bubble.style.transform = dx ? `translateX(${dx}px)` : '';
+    }, { passive: true });
+    bubble.addEventListener('touchend', () => {
+      const swiped = x0 !== null && dx >= 56;
+      reset();
+      if (swiped) this._startReply(key);
+    });
+    bubble.addEventListener('touchcancel', reset);
+  }
+
   _startReply(key) {
     const entry = this.msgMgr.messages.get(key);
     const snippet = this._quoteSnippet(key);
@@ -2954,6 +2992,7 @@ class DeadDrop {
       // Destroying it locally tells every verified peer to drop their copy.
       mine && button('msg-del', '🗑️', 'aria.msgDelete', () => this.msgMgr.destroy(key)),
     );
+    this._swipeToReply(bubble, key);
     bubble.addEventListener('click', (e) => {
       if (e.target.closest('a, button, audio, video, input')) return;
       const open = !bubble.classList.contains('actions-open');

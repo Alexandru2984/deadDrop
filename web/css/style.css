@@ -668,6 +668,8 @@ select { cursor: pointer; width: auto; }
   gap: 8px;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  /* A bubble swiped aside to reply must not make the log scroll sideways. */
+  overflow-x: hidden;
 }
 
 .messages::-webkit-scrollbar { width: 6px; }
@@ -702,6 +704,7 @@ select { cursor: pointer; width: auto; }
   position: relative;
   animation: fadeIn 0.2s ease-out;
   word-break: break-word;
+  transition: transform 0.15s ease-out;
 }
 
 @keyframes fadeIn {
