@@ -293,6 +293,9 @@ class DeadDrop {
       ringToggle: $('#ring-toggle'),
       replyBar: $('#reply-bar'),
       jumpNew: $('#jump-new'),
+      imageViewer: $('#image-viewer'),
+      imageViewerImg: $('#image-viewer-img'),
+      imageViewerClose: $('#image-viewer-close'),
       callMenu: $('#call-menu'),
       callVoice: $('#call-voice'),
       callVideo: $('#call-video'),
@@ -422,6 +425,8 @@ class DeadDrop {
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
     this.el.messages.addEventListener('scroll', () => this._onLogScroll(), { passive: true });
+    // Anywhere on the picture closes it: there is nothing else to do there.
+    this.el.imageViewer.addEventListener('click', () => this._closeImage());
     this.el.jumpNew.addEventListener('click', () => {
       this.el.messages.scrollTop = this.el.messages.scrollHeight;
       this._onLogScroll();
@@ -531,7 +536,12 @@ class DeadDrop {
     this._quotes = new Map();
     this._quoteOf = new WeakMap();
     this._replyTo = null;
-    this.msgMgr.onRemoved = (key, el) => this._forgetQuoted(key, el);
+    this.msgMgr.onRemoved = (key, el) => {
+      this._forgetQuoted(key, el);
+      // A picture shown full screen goes with its message: a timer or a burn
+      // must not leave it on screen in the viewer.
+      if (this._viewing === key) this._closeImage();
+    };
   }
 
   /* ── Auth ── */
@@ -2731,7 +2741,7 @@ class DeadDrop {
       quoteKey && this._quoteEl(el, quoteKey),
       h('div', { class: 'msg-text' }, ...linkify(String(text))),
       this._metaRow(burn, ttl),
-      this._msgActions(el, key, mine),
+      this._msgActions(el, key, mine, true),
     );
     this._applySenderColor(el, sender);
 
@@ -2824,6 +2834,10 @@ class DeadDrop {
     if (meta.fileType.startsWith('image/')) {
       preview = h('img', {
         src: blobUrl, alt: meta.fileName, class: 'file-preview-img', loading: 'lazy',
+      });
+      preview.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this._openImage(key, blobUrl, meta.fileName);
       });
     } else if (meta.fileType.startsWith('video/')) {
       preview = h('video', {
@@ -2961,6 +2975,40 @@ class DeadDrop {
     }));
   }
 
+  /**
+   * Copy what a message says, then take it back out of the clipboard a
+   * minute later, as with a room link: a clipboard manager or a synced
+   * clipboard would otherwise keep it long after the message was gone.
+   */
+  _copyMessage(key) {
+    const node = this.msgMgr.messages.get(key)?.element?.querySelector('.msg-text');
+    if (!node) return;
+    this._copySecret(node.textContent)
+      .then(() => this._renderSystem(t('msg.copied')))
+      .catch(() => this._copyFailed(node));
+  }
+
+  /** Show a picture full screen, until closed or until its message goes. */
+  _openImage(key, src, name) {
+    if (!this.msgMgr.has(key)) return;
+    this._viewing = key;
+    this.el.imageViewerImg.src = src;
+    this.el.imageViewerImg.alt = name;
+    this.el.imageViewer.classList.remove('hidden');
+    this._makeModal(this.el.imageViewer);
+    this._captureFocus(this.el.imageViewer);
+  }
+
+  _closeImage() {
+    if (this.el.imageViewer.classList.contains('hidden')) return;
+    this._viewing = null;
+    this.el.imageViewer.classList.add('hidden');
+    this.el.imageViewerImg.removeAttribute('src');
+    this.el.imageViewerImg.alt = '';
+    this._makeModal(null);
+    this._restoreFocus();
+  }
+
   /** Where the message a reply names lives here, if it is valid at all. */
   _quotedKey(msg) {
     if (msg.replyTo === undefined) return null;
@@ -3091,8 +3139,8 @@ class DeadDrop {
     this.el.replyBarText.replaceChildren();
   }
 
-  /** Reply to any message; delete for everyone, one's own. */
-  _msgActions(bubble, key, mine) {
+  /** Reply to any message; copy a text; delete for everyone, one's own. */
+  _msgActions(bubble, key, mine, copyable = false) {
     const button = (cls, icon, label, onClick) => {
       const btn = h('button', {
         class: cls, type: 'button', text: icon,
@@ -3107,6 +3155,7 @@ class DeadDrop {
     };
     const actions = h('div', { class: 'msg-actions' },
       button('msg-reply', '↩️', 'aria.msgReply', () => this._startReply(key)),
+      copyable && button('msg-copy', '📋', 'aria.msgCopy', () => this._copyMessage(key)),
       // Destroying it locally tells every verified peer to drop their copy.
       mine && button('msg-del', '🗑️', 'aria.msgDelete', () => this.msgMgr.destroy(key)),
     );
@@ -3309,6 +3358,7 @@ class DeadDrop {
     this._discardRecording({ quiet: true });
     this._stopCoverTraffic();
     this._endCallCleanup();
+    this._closeImage();
     this.msgMgr?.destroyAll();
     this._quotes?.clear();
     this._delivery?.clear();
@@ -3382,6 +3432,7 @@ class DeadDrop {
    */
   _dismissTopDialog() {
     const open = [
+      [this.el.imageViewer, () => this._closeImage()],
       [this.el.callMenu, () => this._showCallMenu(false)],
       [this.el.qrVerify, () => this._closeQrVerify()],
       [this.el.callOverlay, () => this._toggleCallOverlay(false)],
@@ -3623,6 +3674,9 @@ class DeadDrop {
    *  takes its snapshot as the app loses focus, which can be before the page
    *  is reported hidden, and on a desktop alt-tab leaves the window on show. */
   _showPrivacyScreen() {
+    // The privacy screen covers the conversation, and the picture closes:
+    // coming back should not open on it, and the screen must stay liftable.
+    this._closeImage();
     if (!this.el.chatWrap.classList.contains('hidden')) {
       this.el.privacyScreen.classList.remove('hidden');
     }

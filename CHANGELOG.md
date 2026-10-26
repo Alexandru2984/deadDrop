@@ -81,6 +81,13 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Pictures open full screen** at a tap. The view closes by itself when the
+  picture's timer runs out, when it burns or is deleted, and when the privacy
+  screen comes up — it never keeps showing what the conversation no longer
+  has.
+- **Copy a message** (📋). As with a room link, the text is taken back out of
+  the clipboard a minute later, so a clipboard manager or a synced clipboard
+  does not keep it after the message is gone.
 - **Stop a file on its way.** ✕ beside the progress of a file being sent
   stops it and withdraws it as a delete for everyone does; each peer drops
   the part that had already arrived and is told the sender stopped it.

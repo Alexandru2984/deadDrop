@@ -427,6 +427,36 @@ select { cursor: pointer; width: auto; }
 }
 
 /* ── Privacy screen (blur when tab backgrounded) ── */
+/* Under the privacy screen (150), which also closes it. */
+.image-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 140;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: rgba(0, 0, 0, 0.95);
+  cursor: zoom-out;
+}
+.image-viewer img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.image-viewer-close {
+  position: absolute;
+  top: calc(12px + env(safe-area-inset-top));
+  right: calc(12px + env(safe-area-inset-right));
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 18px;
+}
+
 .privacy-screen {
   position: absolute;
   inset: 0;

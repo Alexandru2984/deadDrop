@@ -278,6 +278,38 @@ ok(!afterCancel.file && !afterCancel.progress,
 ok(sawProgress && (await bob.notices()).some((l) => /stopped sending a file/.test(l)),
   'and is told the sender stopped it');
 
+// ── Copy ──
+// What is copied leaves the clipboard a minute later, as a room link does.
+const copyMe = 'copy me ' + suffix;
+await alice.eval(`
+  document.querySelector('#msg-input').value = ${JSON.stringify(copyMe)};
+  document.querySelector('#send-btn').click(); true
+`);
+ok(await waitFor(async () => (await bob.transcript()).includes(copyMe)), 'a message to copy arrives');
+const copied = await bob.eval(`(async () => {
+  const writes = [];
+  const real = navigator.clipboard.writeText;
+  navigator.clipboard.writeText = (v) => { writes.push(v); return Promise.resolve(); };
+  const now = Date.now;
+  try {
+    const bubble = [...document.querySelectorAll('.msg.theirs')].find((n) => n.querySelector('.msg-text')?.textContent === ${JSON.stringify(copyMe)});
+    bubble.querySelector('.msg-copy').click();
+    await new Promise((r) => setTimeout(r, 200));
+    Date.now = () => now() + 61_000;
+    window.dispatchEvent(new Event('focus'));
+    await new Promise((r) => setTimeout(r, 200));
+  } finally {
+    Date.now = now;
+    navigator.clipboard.writeText = real;
+  }
+  return writes;
+})()`);
+ok(JSON.stringify(copied) === JSON.stringify([copyMe, '']),
+  `copying a message puts its text on the clipboard, and takes it back off later (${JSON.stringify(copied)})`);
+ok((await bob.notices()).some((l) => /clipboard in a minute/.test(l)), 'saying so');
+ok(await bob.eval(`![...document.querySelectorAll('.file-msg')].some((n) => n.querySelector('.msg-copy'))`),
+  'files offer no copy');
+
 // ── Delivered ──
 const ticked = 'did it arrive ' + suffix;
 await alice.eval(`
@@ -476,6 +508,35 @@ const pngBytes = await alice.sendGeneratedImage(64, 48);
 ok(pngBytes > 0, 'peer A sends a generated PNG');
 ok(await waitFor(async () => (await bob.decodedImageSize()) === '64x48', { timeout: 40000 }),
   'the received image decodes at its original dimensions');
+
+// A picture opens full screen at a tap, and closes with Escape — or by
+// itself when its message goes, or when the privacy screen comes up.
+const viewerOpen = () => bob.eval(`!document.querySelector('#image-viewer').classList.contains('hidden')`);
+await bob.eval(`document.querySelector('.msg.theirs .file-preview-img').click(); true`);
+const viewing = await bob.eval(`({
+  open: !document.querySelector('#image-viewer').classList.contains('hidden'),
+  same: document.querySelector('#image-viewer-img').src === document.querySelector('.msg.theirs .file-preview-img').src,
+  behindInert: !!document.querySelector('#msg-input').closest('[inert]'),
+})`);
+ok(viewing.open && viewing.same && viewing.behindInert,
+  `a tap on a picture shows it full screen (${JSON.stringify(viewing)})`);
+await bob.eval(`window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); true`);
+ok(await waitFor(async () => !(await viewerOpen())), 'Escape closes it');
+await bob.eval(`document.querySelector('.msg.theirs .file-preview-img').click(); true`);
+await bob.eval(`window.dispatchEvent(new Event('blur')); true`);
+ok(await waitFor(async () => !(await viewerOpen())), 'the privacy screen closes it');
+await bob.eval(`document.querySelector('#privacy-screen').click(); true`);
+await bob.eval(`document.querySelector('.msg.theirs .file-preview-img').click(); true`);
+await alice.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg.mine.file-msg')].find((n) => n.querySelector('.file-preview-img'));
+  bubble.querySelector('.file-details').click();
+  bubble.querySelector('.msg-del').click();
+  return true;
+})()`);
+ok(await waitFor(async () => !(await viewerOpen()), { timeout: 10000 }),
+  'and it closes when the sender deletes the picture');
+ok(await bob.eval(`!document.querySelector('#image-viewer-img').getAttribute('src') && !document.querySelector('[inert]')`),
+  'leaving nothing of it behind, and nothing inert');
 
 // A phone photo carries its GPS position in an EXIF block. Build a JPEG with
 // one, run it through the same scrubber the composer uses, and look for it.
