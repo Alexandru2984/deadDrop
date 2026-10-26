@@ -104,6 +104,11 @@ Voice/video uses WebRTC DTLS-SRTP rather than the application AES envelope. The
 exact DTLS fingerprint set is exchanged over the encrypted session and a call is
 unlocked only after mutual safety-code verification. A mismatch closes the pair.
 
+A call is voice or video by the caller's choice, and a video call can be
+answered with voice only: the camera is never switched on just by accepting.
+An unanswered call stops ringing after 45 seconds. The ring is a tone made in
+the page, and can be turned off in the privacy options.
+
 ### Padding and cover packets
 
 Application envelopes are padded to fixed buckets, which hides exact plaintext
@@ -145,6 +150,11 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   reply cannot keep a timed or burned message alive.
 - A sent message is ticked ✓ once every recipient's client says it arrived —
   that it reached them, not that it was read.
+- A file can be stopped by its sender or refused by a receiver while it is
+  still on its way; each side drops what had arrived.
+- Copying a message takes it back out of the clipboard a minute later, as
+  copying a room link does. A picture shown full screen closes with its
+  message, and when the privacy screen comes up.
 - A burn-after-reading message starts burning only once it can be seen — the
   tab in front and the privacy screen lifted — and the read receipt waits for
   the same moment. Reading time grows with the text, two to thirty seconds;
