@@ -19,7 +19,8 @@
 
 import { scrubMovie, scrubbedName, isScrubbable, scrubFile, typeOf } from '../web/js/scrub.js';
 import { deflateRawSync } from 'node:zlib';
-import { zip } from './lib/zip.mjs';
+import { zip, crc32 } from './lib/zip.mjs';
+import { blankJpegMeta, stripPngMeta } from '../web/js/imagemeta.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -201,6 +202,133 @@ const tricky = zip([
 ]);
 const trickySeen = Buffer.from(await (await scrubFile(new File([tricky], 't.xlsx', { type: '' }))).arrayBuffer());
 ok(trickySeen.includes(deflateRawSync(Buffer.from('kept'))), 'a part named like an object property is copied, not mistaken');
+
+// ── Photos inside documents ──
+
+// A JPEG as a phone writes it: JFIF, EXIF with the orientation and a GPS
+// position, XMP naming the author, a colour profile, IPTC, Adobe's flag and a
+// comment — then the picture itself.
+const GPS_TEXT = '44.4268N 26.1025E';
+const seg = (marker, body) => {
+  const b = Buffer.from(body, 'latin1');
+  return Buffer.concat([Buffer.from([0xff, marker, (b.length + 2) >> 8, (b.length + 2) & 255]), b]);
+};
+const exifBody = (orientation) => {
+  // Big-endian TIFF, IFD0 with Orientation and a pointer-free ASCII tag.
+  const ifd = Buffer.alloc(2 + 2 * 12 + 4);
+  ifd.writeUInt16BE(2, 0);
+  ifd.writeUInt16BE(0x0112, 2); ifd.writeUInt16BE(3, 4); ifd.writeUInt32BE(1, 6); ifd.writeUInt16BE(orientation, 10);
+  ifd.writeUInt16BE(0x010f, 14); ifd.writeUInt16BE(2, 16); ifd.writeUInt32BE(GPS_TEXT.length + 1, 18); ifd.writeUInt32BE(8 + ifd.length, 22);
+  return 'Exif\0\0' + Buffer.concat([Buffer.from('MM\0\x2a\0\0\0\x08', 'latin1'), ifd, Buffer.from(GPS_TEXT + '\0')]).toString('latin1');
+};
+const SCAN = Buffer.from([0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0, 0x12, 0x34, 0x56, 0xff, 0xd9]);
+const ICC = 'ICC_PROFILE\0\x01\x01colour-profile-bytes';
+const jpeg = (orientation = 6) => Buffer.concat([
+  Buffer.from([0xff, 0xd8]),
+  seg(0xe0, 'JFIF\0\x01\x01\0\0\x01\0\x01\0\0'),
+  seg(0xe1, exifBody(orientation)),
+  seg(0xe1, `http://ns.adobe.com/xap/1.0/\0<x:xmpmeta><dc:creator>${AUTHOR}</dc:creator></x:xmpmeta>`),
+  seg(0xe2, ICC),
+  seg(0xed, `Photoshop 3.0\x008BIM IPTC by-line ${AUTHOR}`),
+  seg(0xee, 'Adobe\0\x64\0\0\0\0\x01'),
+  seg(0xfe, 'Shot on Alice-Phone'),
+  SCAN,
+]);
+const photo = jpeg();
+const cleaned = Buffer.from(photo);
+ok(blankJpegMeta(cleaned) && cleaned.length === photo.length, 'a JPEG is cleaned in place, keeping its length');
+const cleanedText = cleaned.toString('latin1');
+ok(!cleanedText.includes(GPS_TEXT) && !cleanedText.includes(AUTHOR) && !cleanedText.includes('Alice-Phone') && !cleanedText.includes('xmpmeta'),
+  'its EXIF position, XMP author, IPTC and comment are gone');
+ok(cleanedText.includes('JFIF') && cleanedText.includes(ICC) && cleanedText.includes('Adobe\0') && cleaned.subarray(-SCAN.length).equals(SCAN),
+  'what a decoder needs is kept: JFIF, the colour profile, Adobe’s flag, the picture');
+// The orientation survives in a minimal EXIF of its own, read independently.
+const exifAt = cleaned.indexOf('Exif\0\0MM', 0, 'latin1');
+ok(exifAt > 0 && cleaned.readUInt16BE(exifAt + 16) === 0x0112 && cleaned.readUInt16BE(exifAt + 24) === 6,
+  'and a portrait photo keeps its orientation, alone');
+const unrotated = Buffer.from(jpeg(1));
+blankJpegMeta(unrotated);
+ok(unrotated.indexOf('Exif', 0, 'latin1') < 0, 'an upright one keeps no EXIF at all');
+const inPdf = Buffer.from(photo);
+blankJpegMeta(inPdf, 0, inPdf.length, { keepOrientation: false });
+ok(inPdf.indexOf('Exif', 0, 'latin1') < 0, 'and inside a PDF, which ignores orientation, none either');
+ok(!blankJpegMeta(Buffer.from('not a jpeg at all')), 'something that is not a JPEG is left alone');
+const cut = Buffer.from(photo.subarray(0, 40));
+ok((() => { try { blankJpegMeta(cut); return true; } catch { return false; } })(), 'a truncated JPEG does not throw');
+
+const chunk = (type, data) => {
+  const body = Buffer.concat([Buffer.from(type, 'latin1'), Buffer.from(data, 'latin1')]);
+  const len = Buffer.alloc(4); len.writeUInt32BE(body.length - 4);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+};
+const IHDR = chunk('IHDR', '\0\0\0\x01\0\0\0\x01\x08\x02\0\0\0');
+const IDAT = chunk('IDAT', 'pixels');
+const IEND = chunk('IEND', '');
+const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), IHDR,
+  chunk('tEXt', `Author\0${AUTHOR}`), chunk('eXIf', exifBody(1)), chunk('iTXt', 'XML:com.adobe.xmp\0\0\0\0\0<x/>'),
+  chunk('tIME', '\x07\xea\x0a\x1b\x0e\x20\0'), IDAT, IEND]);
+const pngOut = Buffer.from(stripPngMeta(png));
+ok(!pngOut.includes(AUTHOR) && !pngOut.includes('eXIf') && !pngOut.includes('iTXt') && !pngOut.includes('tIME'),
+  'a PNG loses its text, EXIF and time chunks');
+ok(pngOut.equals(Buffer.concat([png.subarray(0, 8), IHDR, IDAT, IEND])), 'and keeps every other chunk byte for byte');
+ok(stripPngMeta(Buffer.concat([png.subarray(0, 8), IHDR, IDAT, IEND])) === null, 'a clean PNG is left as it is');
+
+// Pasted into a Word document, then into a PDF.
+const withPhoto = zip([
+  { name: '[Content_Types].xml', data: '<Types/>' },
+  { name: 'word/document.xml', data: BODY },
+  { name: 'word/media/image1.jpeg', data: photo },
+  { name: 'word/media/image2.png', data: png, deflate: false },
+]);
+const withPhotoOut = Buffer.from(await (await scrubFile(new File([withPhoto], 'Trip.docx', { type: '' }))).arrayBuffer());
+const dir2 = mkdtempSync(join(tmpdir(), 'dd-scrub-'));
+try {
+  writeFileSync(join(dir2, 'd.zip'), withPhotoOut);
+  const seen = JSON.parse(execFileSync('python3', ['-I', '-c', `
+import json, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+print(json.dumps({"bad": z.testzip(), "jpeg": z.read("word/media/image1.jpeg").hex(), "png": z.read("word/media/image2.png").hex()}))`,
+  join(dir2, 'd.zip')], { encoding: 'utf8' }));
+  const inDocJpeg = Buffer.from(seen.jpeg, 'hex');
+  ok(seen.bad === null && inDocJpeg.equals(cleaned), 'a photo inside a Word document is cleaned the same way');
+  ok(Buffer.from(seen.png, 'hex').equals(pngOut), 'and a PNG inside it too');
+} finally {
+  rmSync(dir2, { recursive: true, force: true });
+}
+const pdfWithPhoto = Buffer.concat([Buffer.from('%PDF-1.7\n1 0 obj\n<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /Filter /DCTDecode /Length ' + photo.length + ' >>\nstream\n', 'latin1'),
+  photo, Buffer.from('\nendstream\nendobj\n%%EOF\n', 'latin1')]);
+const pdfPhotoOut = Buffer.from(await (await scrubFile(new File([pdfWithPhoto], 'trip.pdf', { type: '' }))).arrayBuffer());
+ok(pdfPhotoOut.length === pdfWithPhoto.length && !pdfPhotoOut.includes(GPS_TEXT) && !pdfPhotoOut.includes(AUTHOR)
+  && pdfPhotoOut.includes(ICC, 0, 'latin1'), 'and a photo inside a PDF, in place');
+
+// ReportLab writes JPEGs out in ASCII85: cleaned through it, in place, with
+// line breaks and 'z' groups kept, and checked by Python's own decoder.
+const a85 = (buf) => {
+  let out = '';
+  for (let i = 0; i < buf.length; i += 4) {
+    const chunk = buf.subarray(i, i + 4);
+    const padded = Buffer.concat([chunk, Buffer.alloc(4 - chunk.length)]);
+    let v = padded.readUInt32BE(0);
+    if (v === 0 && chunk.length === 4) { out += 'z'; continue; }
+    const d = [];
+    for (let k = 0; k < 5; k++) { d.unshift(String.fromCharCode(33 + (v % 85))); v = Math.floor(v / 85); }
+    out += d.slice(0, chunk.length + 1).join('');
+  }
+  return out.replace(/(.{64})/g, '$1\n') + '~>';
+};
+const photoA85 = a85(photo);
+const pdfA85 = Buffer.from('%PDF-1.3\n3 0 obj\n<< /Subtype /Image /Filter [ /ASCII85Decode /DCTDecode ] /Length ' + photoA85.length +
+  ' >>\nstream\n' + photoA85 + '\nendstream\nendobj\n%%EOF\n', 'latin1');
+const pdfA85Out = Buffer.from(await (await scrubFile(new File([pdfA85], 'rl.pdf', { type: '' }))).arrayBuffer()).toString('latin1');
+const a85Data = pdfA85Out.slice(pdfA85Out.indexOf('stream\n') + 7, pdfA85Out.indexOf('~>'));
+const a85Decoded = Buffer.from(execFileSync('python3', ['-I', '-c',
+  'import base64, sys; sys.stdout.write(base64.a85decode(sys.stdin.read().encode(), ignorechars=b" \\n").hex())'],
+{ input: a85Data, encoding: 'utf8' }), 'hex');
+const cleanedFlat = Buffer.from(photo);
+blankJpegMeta(cleanedFlat, 0, cleanedFlat.length, { keepOrientation: false });
+ok(pdfA85Out.length === pdfA85.length && a85Decoded.equals(cleanedFlat) && a85Data.split('\n').every((l, i, all) => l.length === 64 || i === all.length - 1),
+  'a photo written in ASCII85 inside a PDF is cleaned through it, every line where it was');
 
 // ── PDF ──
 

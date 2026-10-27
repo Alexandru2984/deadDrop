@@ -106,6 +106,12 @@ compare rather than take a hash on trust.
   and linearization stay valid. An encrypted PDF, one whose properties sit in
   a compressed object stream, and a signed one — signed Office files too —
   are put to the person: cleaning would fail, or break the signature.
+- **Photos inside documents and PDFs** lose their GPS position, time, device,
+  XMP and comments. Word, PowerPoint and PDFs keep a pasted phone photo as
+  the original JPEG; its descriptive segments are blanked in place, without
+  re-encoding, keeping only the orientation so a portrait shot stays upright.
+  PNG text, EXIF and time chunks are dropped. JPEGs a PDF writes out in
+  ASCII85 are cleaned through it, every character where it was.
 - **Pictures open full screen** at a tap. The view closes by itself when the
   picture's timer runs out, when it burns or is deleted, and when the privacy
   screen comes up — it never keeps showing what the conversation no longer

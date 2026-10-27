@@ -13,11 +13,16 @@
  * edited PDF are cleaned too — an incremental save keeps the old dictionary
  * in the file.
  *
+ * A photo placed in the document is stored as the original JPEG, EXIF and
+ * all; its descriptive segments are blanked the same way (imagemeta.js).
+ *
  * Some PDFs cannot be cleaned this way: an encrypted one, one that keeps its
  * information dictionary inside a compressed object stream, and one that is
  * digitally signed, where any change breaks the signature. Those are put to
  * the person, never sent as if they were clean.
  */
+
+import { blankJpegMeta } from './imagemeta.js';
 
 const SPACE = 0x20;
 // Keys whose string value says who, with what, or when, wherever they occur:
@@ -66,12 +71,23 @@ export async function scrubPdf(file) {
     blankString(at, stringEnd(text, at));
   }
 
-  // Metadata streams: the document's XMP, and any a page or image carries.
+  // Metadata streams — the document's XMP, and any a page or image carries —
+  // and JPEG images.
   for (const match of text.matchAll(/\d+\s+\d+\s+obj\s*<</g)) {
     const dictStart = match.index + match[0].length - 2;
     const dictEnd = dictEndOf(text, dictStart);
     if (dictEnd < 0) continue;
     const dict = text.slice(dictStart, dictEnd);
+    // A JPEG image: a PDF draws it by its own matrix, so its EXIF
+    // orientation means nothing here and goes with the rest.
+    if (/\/Subtype\s*\/Image\b/.test(dict)) {
+      const plain = /\/Filter\s*(?:\/DCTDecode|\[\s*\/DCTDecode\s*\])(?![A-Za-z])/.test(dict);
+      const a85 = /\/Filter\s*\[\s*\/ASCII85Decode\s*\/DCTDecode\s*\]/.test(dict);
+      const data = (plain || a85) && streamData(text, dictEnd, dict);
+      if (data && plain) blankJpegMeta(bytes, data.start, data.end, { keepOrientation: false });
+      if (data && a85) blankA85Jpeg(bytes, text, data.start, data.end);
+      continue;
+    }
     if (!/\/Type\s*\/Metadata\b/.test(dict)) continue;
     const data = streamData(text, dictEnd, dict);
     if (!data) throw unreadable('metadata stream without data');
@@ -92,6 +108,56 @@ export async function scrubPdf(file) {
   }
 
   return new File([bytes], file.name, { type: 'application/pdf', lastModified: 0 });
+}
+
+/**
+ * The same for a JPEG written out in ASCII85, as ReportLab does. Every
+ * group of five characters stands for four bytes, so the picture is decoded,
+ * cleaned, and each changed group written back over its own characters —
+ * line breaks and all stay where they were, and so does every offset.
+ */
+function blankA85Jpeg(bytes, text, start, end) {
+  const groups = [];
+  let digits = [];
+  let at = start;
+  if (text.startsWith('<~', at)) at += 2;
+  for (; at < end; at++) {
+    const c = text.charCodeAt(at);
+    if (c === 0x7e) break; // ~> ends the data
+    if (c === 0x7a && !digits.length) { groups.push({ zero: true }); continue; }
+    if (c < 0x21 || c > 0x75) continue; // whitespace
+    digits.push(at);
+    if (digits.length === 5) { groups.push({ digits }); digits = []; }
+  }
+  if (digits.length === 1) return;
+  if (digits.length) groups.push({ digits });
+
+  const decoded = new Uint8Array(groups.length * 4);
+  let length = 0;
+  for (const g of groups) {
+    if (g.zero) { length += 4; continue; }
+    let value = 0;
+    for (let i = 0; i < 5; i++) value = value * 85 + (i < g.digits.length ? text.charCodeAt(g.digits[i]) - 33 : 84);
+    if (value > 0xffffffff) return;
+    const n = g.digits.length - 1;
+    for (let i = 0; i < n; i++) decoded[length + i] = (value >>> (24 - 8 * i)) & 0xff;
+    g.at = length;
+    length += n;
+  }
+  const picture = decoded.subarray(0, length);
+  const before = picture.slice();
+  if (!blankJpegMeta(picture, 0, length, { keepOrientation: false })) return;
+  for (const g of groups) {
+    if (g.zero) continue; // only ever blanked to zero, which it already is
+    const n = g.digits.length - 1;
+    if (picture.subarray(g.at, g.at + n).every((b, i) => b === before[g.at + i])) continue;
+    let value = 0;
+    for (let i = 0; i < 4; i++) value = value * 256 + (i < n ? picture[g.at + i] : 0);
+    for (let i = 4; i >= 0; i--) {
+      if (i < g.digits.length) bytes[g.digits[i]] = 33 + (value % 85);
+      value = Math.floor(value / 85);
+    }
+  }
 }
 
 /** Where each `num gen obj` body begins, in every revision. */

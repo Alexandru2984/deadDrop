@@ -8,7 +8,7 @@
 
 import { deflateRawSync } from 'node:zlib';
 
-function crc32(buf) {
+export function crc32(buf) {
   let c = ~0;
   for (const b of buf) { c ^= b; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; }
   return ~c >>> 0;

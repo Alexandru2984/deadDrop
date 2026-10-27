@@ -19,7 +19,13 @@
  * Only the standard places are cleaned (docProps/ for Office, meta.xml for
  * OpenDocument), which is where Word, Excel, PowerPoint, LibreOffice and
  * Google Docs all put them.
+ *
+ * Pictures inside are cleaned too: a phone photo pasted into a document is
+ * kept as the original JPEG, with where and when it was taken. See
+ * imagemeta.js.
  */
+
+import { blankJpegMeta, stripPngMeta } from './imagemeta.js';
 
 export const DOCUMENTS = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -71,6 +77,9 @@ const END64_LOCATOR = 0x07064b50;
 const DOS_DATE = (0 << 9) | (1 << 5) | 1;
 const DOS_TIME = 0;
 const MAX_META_BYTES = 1 << 20;
+// Where Word, Excel, PowerPoint and LibreOffice keep pictures, thumbnails
+// included.
+const PICTURE = /\.(jpe?g|png)$/i;
 
 /** Thrown for anything that is not a plain, readable document archive. */
 function unreadable(why) {
@@ -97,10 +106,15 @@ export async function scrubDocument(file, type) {
   for (const entry of entries) {
     let replacement = null;
     if (odf && entry.name === 'meta.xml') {
-      const version = /office:version="([0-9.]{1,8})"/.exec(await textOf(bytes, entry))?.[1];
-      replacement = odfMeta(version);
+      const text = new TextDecoder().decode(await contentOf(bytes, entry, MAX_META_BYTES));
+      replacement = odfMeta(/office:version="([0-9.]{1,8})"/.exec(text)?.[1]);
     } else if (!odf && OOXML_EMPTY.has(entry.name)) {
       replacement = OOXML_EMPTY.get(entry.name);
+    } else if (PICTURE.test(entry.name)) {
+      const picture = await contentOf(bytes, entry);
+      replacement = /\.png$/i.test(entry.name)
+        ? stripPngMeta(picture)
+        : blankJpegMeta(picture) ? picture : null;
     }
     let data;
     let method = entry.method;
@@ -109,7 +123,7 @@ export async function scrubDocument(file, type) {
     if (replacement === null) {
       data = bytes.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
     } else {
-      data = new TextEncoder().encode(replacement);
+      data = typeof replacement === 'string' ? new TextEncoder().encode(replacement) : replacement;
       method = 0;
       crc = crc32(data);
       size = data.length;
@@ -191,10 +205,16 @@ function readArchive(bytes) {
   return entries;
 }
 
-async function textOf(bytes, entry) {
+/**
+ * A part's uncompressed bytes, as a copy of its own. With `cap`, reading
+ * stops there; without, a part that inflates past the size the directory
+ * gave it is refused rather than let fill memory.
+ */
+async function contentOf(bytes, entry, cap = 0) {
   const raw = bytes.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
-  if (entry.method === 0) return new TextDecoder().decode(raw.subarray(0, MAX_META_BYTES));
-  if (entry.method !== 8 || typeof DecompressionStream !== 'function') throw unreadable('cannot read meta.xml');
+  if (entry.method === 0) return raw.slice(0, cap || raw.length);
+  if (entry.method !== 8 || typeof DecompressionStream !== 'function') throw unreadable(`cannot read ${entry.name}`);
+  const limit = cap || entry.size;
   const reader = new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
   const chunks = [];
   let total = 0;
@@ -203,15 +223,18 @@ async function textOf(bytes, entry) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.length;
-      if (total > MAX_META_BYTES) break;
+      if (total > limit) {
+        if (!cap) throw new Error('larger than declared');
+        break;
+      }
       chunks.push(value);
     }
   } catch {
-    throw unreadable('cannot read meta.xml');
+    throw unreadable(`cannot read ${entry.name}`);
   } finally {
     reader.cancel().catch(() => {});
   }
-  return new TextDecoder().decode(await new Blob(chunks).arrayBuffer());
+  return new Uint8Array(await new Blob(chunks).arrayBuffer()).slice(0, limit);
 }
 
 function localHeader({ versionNeeded, flags, method, crc, compressedSize, size, name }) {

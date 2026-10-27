@@ -160,7 +160,10 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   part's archive timestamp set to 1980; the content, including comments and
   tracked changes with their authors, is left as written. A PDF's information
   dictionary (in every revision) and XMP streams become spaces in place, so
-  the file keeps its length and every offset. A file that cannot be read —
+  the file keeps its length and every offset. Photos inside documents and
+  PDFs — kept as the original JPEG, GPS included — have their EXIF, XMP, IPTC
+  and comment segments blanked in place, keeping only the orientation; PNGs
+  inside lose their text, EXIF and time chunks. A file that cannot be read —
   encrypted, or a PDF that keeps its properties in a compressed object stream
   — or one that is digitally signed, which any change would break, is sent
   only if the person agrees. Other files go as chosen.

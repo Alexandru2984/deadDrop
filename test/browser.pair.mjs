@@ -651,6 +651,32 @@ if (movieCheck?.skipped) console.log('  - movie scrub playback: no MP4 encoder i
 else ok(movieCheck?.played && movieCheck.w === 64 && movieCheck.size[0] === movieCheck.size[1] && movieCheck.name === 'video.mp4',
   `a scrubbed movie keeps its size and still plays (${JSON.stringify(movieCheck)})`);
 
+// A photo inside a document is cleaned without re-encoding. The browser
+// still decodes it, and still turns a portrait shot upright.
+const pastedPhoto = await alice.eval(`(async () => {
+  const c = document.createElement('canvas'); c.width = 30; c.height = 20;
+  c.getContext('2d').fillRect(0, 0, 10, 10);
+  const jpeg = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/jpeg'))).arrayBuffer());
+  // EXIF: big-endian, IFD0 with Orientation 6 and a Make string.
+  const tiff = [0x4d, 0x4d, 0, 0x2a, 0, 0, 0, 8, 0, 2,
+    0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0,
+    0x01, 0x0f, 0, 2, 0, 0, 0, 12, 0, 0, 0, 38, 0, 0, 0, 0,
+    ...new TextEncoder().encode('AlicePhone1'), 0];
+  const app1 = [0xff, 0xe1, 0, tiff.length + 8, 0x45, 0x78, 0x69, 0x66, 0, 0, ...tiff];
+  const withExif = new Uint8Array([...jpeg.subarray(0, 2), ...app1, ...jpeg.subarray(2)]);
+  const { blankJpegMeta } = await import('/js/imagemeta.js');
+  const cleaned = withExif.slice();
+  blankJpegMeta(cleaned);
+  const bitmap = await createImageBitmap(new Blob([cleaned], { type: 'image/jpeg' }), { imageOrientation: 'from-image' });
+  return {
+    size: bitmap.width + 'x' + bitmap.height,
+    make: new TextDecoder('latin1').decode(cleaned).includes('AlicePhone'),
+    same: cleaned.length === withExif.length,
+  };
+})()`);
+ok(pastedPhoto.size === '20x30' && !pastedPhoto.make && pastedPhoto.same,
+  `a photo cleaned in place still decodes, upright, without its maker (${JSON.stringify(pastedPhoto)})`);
+
 // A photo a canvas reads but cannot write — HEIC, AVIF — leaves as a clean
 // JPEG. (A PNG under a HEIC label stands in here: what decodes it is the
 // browser's sniffing, and Chromium has no HEIC decoder to show this with.)
