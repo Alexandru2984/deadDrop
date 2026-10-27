@@ -668,14 +668,31 @@ const pastedPhoto = await alice.eval(`(async () => {
   const cleaned = withExif.slice();
   blankJpegMeta(cleaned);
   const bitmap = await createImageBitmap(new Blob([cleaned], { type: 'image/jpeg' }), { imageOrientation: 'from-image' });
+  // Sent on its own, the same photo is cleaned the same way: not re-encoded,
+  // so every pixel is the camera's.
+  const { scrubImage } = await import('/js/scrub.js');
+  const sent = new Uint8Array(await (await scrubImage(new File([withExif], 'portrait.jpg', { type: 'image/jpeg' }))).arrayBuffer());
+  const pixels = async (bytes) => {
+    const b = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }), { imageOrientation: 'from-image' });
+    const c2 = new OffscreenCanvas(b.width, b.height);
+    const ctx = c2.getContext('2d');
+    ctx.drawImage(b, 0, 0);
+    return { size: b.width + 'x' + b.height, data: Array.from(ctx.getImageData(0, 0, b.width, b.height).data).join() };
+  };
+  const [was, now] = [await pixels(withExif), await pixels(sent)];
   return {
     size: bitmap.width + 'x' + bitmap.height,
     make: new TextDecoder('latin1').decode(cleaned).includes('AlicePhone'),
     same: cleaned.length === withExif.length,
+    sentSize: now.size,
+    sentMake: new TextDecoder('latin1').decode(sent).includes('AlicePhone'),
+    lossless: was.data === now.data,
   };
 })()`);
 ok(pastedPhoto.size === '20x30' && !pastedPhoto.make && pastedPhoto.same,
   `a photo cleaned in place still decodes, upright, without its maker (${JSON.stringify(pastedPhoto)})`);
+ok(pastedPhoto.sentSize === '20x30' && !pastedPhoto.sentMake && pastedPhoto.lossless,
+  'a JPEG sent on its own loses its metadata without losing a pixel, and stays upright');
 
 // A photo a canvas reads but cannot write — HEIC, AVIF — leaves as a clean
 // JPEG. (A PNG under a HEIC label stands in here: what decodes it is the

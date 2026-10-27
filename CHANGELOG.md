@@ -155,6 +155,13 @@ compare rather than take a hash on trust.
 
 ### Changed
 
+- **JPEG photos are cleaned without re-encoding.** They went through a canvas
+  at 92% quality: detail was lost, the colour profile dropped — an iPhone's
+  Display P3 colours flattened to sRGB — and a panorama over 50 megapixels
+  was refused. EXIF, XMP and the rest are now blanked where they lie, the
+  orientation kept on its own, and a motion photo's video or Samsung's
+  capture times after the picture cut off. Every pixel is the camera's. A
+  JPEG too malformed to walk is still re-encoded.
 - **Back no longer ends a conversation at a touch.** A room lives only in
   the page, and the back button — or a phone's edge swipe — left it, keys and
   all. Back now closes what is open over the conversation, then asks for a

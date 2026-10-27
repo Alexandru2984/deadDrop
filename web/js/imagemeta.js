@@ -39,43 +39,13 @@ const SOS = 0xda;
 const EOI = 0xd9;
 
 /**
- * Blanks the metadata segments of the JPEG in bytes[start, end), in place.
- * Returns true when anything was blanked, false when there was nothing to do
- * or the bytes are not a JPEG this can walk.
+ * Walks the JPEG in bytes[start, end) segment by segment — through every
+ * scan of a progressive file, past stuffed bytes and restart markers —
+ * calling visit(marker, body, segEnd) for each segment with a length.
+ * Returns the index just past the end-of-image marker, or -1 when the walk
+ * could not reach it.
  */
-export function blankJpegMeta(bytes, start = 0, end = bytes.length, { keepOrientation = true } = {}) {
-  if (end - start < 4 || bytes[start] !== 0xff || bytes[start + 1] !== 0xd8) return false;
-  let changed = false;
-  let pos = start + 2;
-  while (pos + 4 <= end) {
-    if (bytes[pos] !== 0xff) return changed;
-    const marker = bytes[pos + 1];
-    if (marker === 0xff) { pos++; continue; } // fill byte
-    if (marker === SOS || marker === EOI) return changed;
-    // Standalone markers carry no length.
-    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { pos += 2; continue; }
-    const length = (bytes[pos + 2] << 8) | bytes[pos + 3];
-    const body = pos + 4;
-    const segEnd = pos + 2 + length;
-    if (length < 2 || segEnd > end) return changed;
-    if (isDescriptive(bytes, marker, body, segEnd)) {
-      const orientation = keepOrientation && marker === APP1 ? exifOrientation(bytes, body, segEnd) : 0;
-      bytes.fill(0, body, segEnd);
-      if (orientation > 1) writeOrientation(bytes, body, segEnd, orientation);
-      changed = true;
-    }
-    pos = segEnd;
-  }
-  return changed;
-}
-
-/**
- * Where the picture in bytes[start, end) ends: just past its EOI marker, or
- * -1 when it cannot be found. Phones put more after it — a motion photo's
- * video, with its own location; Samsung's block of capture times; the
- * depth and gain maps of a multi-picture file — which no decoder reads.
- */
-export function jpegEnd(bytes, start = 0, end = bytes.length) {
+function walkJpeg(bytes, start, end, visit) {
   if (end - start < 4 || bytes[start] !== 0xff || bytes[start + 1] !== 0xd8) return -1;
   let pos = start + 2;
   let scanning = false;
@@ -91,16 +61,59 @@ export function jpegEnd(bytes, start = 0, end = bytes.length) {
     }
     if (bytes[pos] !== 0xff) return -1;
     const marker = bytes[pos + 1];
-    if (marker === 0xff) { pos++; continue; }
+    if (marker === 0xff) { pos++; continue; } // fill byte
     if (marker === EOI) return pos + 2;
+    // Standalone markers carry no length.
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { pos += 2; continue; }
     if (pos + 4 > end) return -1;
     const segEnd = pos + 2 + ((bytes[pos + 2] << 8) | bytes[pos + 3]);
     if (segEnd > end || segEnd < pos + 4) return -1;
+    visit(marker, pos + 4, segEnd);
     pos = segEnd;
     if (marker === SOS) scanning = true;
   }
   return -1;
+}
+
+/**
+ * Blanks the metadata segments of the JPEG in bytes[start, end), in place —
+ * those between the scans of a progressive file too. Returns true when
+ * anything was blanked.
+ */
+export function blankJpegMeta(bytes, start = 0, end = bytes.length, { keepOrientation = true } = {}) {
+  let changed = false;
+  walkJpeg(bytes, start, end, (marker, body, segEnd) => {
+    if (!isDescriptive(bytes, marker, body, segEnd)) return;
+    const orientation = keepOrientation && marker === APP1 ? exifOrientation(bytes, body, segEnd) : 0;
+    bytes.fill(0, body, segEnd);
+    if (orientation > 1) writeOrientation(bytes, body, segEnd, orientation);
+    changed = true;
+  });
+  return changed;
+}
+
+/**
+ * Where the picture in bytes[start, end) ends: just past its EOI marker, or
+ * -1 when it cannot be found. Phones put more after it — a motion photo's
+ * video, with its own location; Samsung's block of capture times; the
+ * depth and gain maps of a multi-picture file — which no decoder reads.
+ */
+export function jpegEnd(bytes, start = 0, end = bytes.length) {
+  return walkJpeg(bytes, start, end, () => {});
+}
+
+/**
+ * A clean copy of a JPEG sent on its own: descriptive segments blanked, the
+ * orientation kept, and cut at the end of the picture. Lossless — the colour
+ * profile and every pixel stay as the camera wrote them. Null when the file
+ * cannot be walked to its end, so the caller re-encodes it instead.
+ */
+export function cleanJpeg(input) {
+  const bytes = input.slice();
+  const end = jpegEnd(bytes);
+  if (end < 0) return null;
+  blankJpegMeta(bytes, 0, end);
+  return bytes.subarray(0, end);
 }
 
 const EXIF_HEADER = [0x45, 0x78, 0x69, 0x66, 0, 0]; // "Exif\0\0"
