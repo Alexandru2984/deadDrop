@@ -468,6 +468,12 @@ await alice.eval(`(() => {
 const timedBubble = `[...document.querySelectorAll('.msg')].find((n) => n.textContent.includes(${JSON.stringify(timedText)}))`;
 const countdown = await bob.eval(`${timedBubble}?.querySelector('.countdown')?.textContent || ''`);
 ok(/^([1-9]|10)s$/.test(countdown), `and shows the time it has left (${countdown || 'nothing'})`);
+const arrived = await bob.eval(`(() => {
+  const time = ${timedBubble}?.querySelector('.msg-time');
+  return time && { text: time.textContent, age: Date.now() - Date.parse(time.dateTime) };
+})()`);
+ok(arrived && /\d{1,2}[:.]\d{2}/.test(arrived.text) && arrived.age >= 0 && arrived.age < 60_000,
+  `and when it reached this screen, by this device's clock (${arrived?.text || 'nothing'})`);
 const afterSleep = (p) => p.eval(`(() => {
   const real = Date.now;
   Date.now = () => real() + 11_000;

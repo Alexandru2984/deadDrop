@@ -168,6 +168,9 @@ compare rather than take a hash on trust.
   Each section now has its own status line.
 - **A voice recording can be discarded** — stopping it was the only way out,
   and stopping sent it. Safari's recordings are named `.m4a`, not `.webm`.
+- **Each message shows when it reached your screen**, by your own device's
+  clock and in its time format. No time travels with a message: a sender's
+  timestamp would tell the other side their clock and time zone.
 - **Several files can be picked or dropped at once** — up to ten, sent one
   after another so a phone's tab never holds ten files and their ciphertext
   together. Pasted screenshots go the same way, and leaving the room stops the

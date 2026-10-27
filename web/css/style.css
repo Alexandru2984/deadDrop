@@ -929,6 +929,10 @@ select { cursor: pointer; width: auto; }
   letter-spacing: 1px;
 }
 
+.msg-time {
+  font-variant-numeric: tabular-nums;
+}
+
 .countdown {
   color: #ffaa00;
   font-variant-numeric: tabular-nums;

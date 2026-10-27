@@ -3233,10 +3233,21 @@ class DeadDrop {
     return actions;
   }
 
-  /** Burn badge and TTL countdown, or nothing when neither applies. */
+  /**
+   * When the message reached this screen, then the burn badge and TTL
+   * countdown. The time is this device's clock and never travels: a sender's
+   * timestamp on the wire would tell the other side the sender's clock and
+   * time zone, and would be the sender's word anyway. It follows the device's
+   * own time format rather than the page language.
+   */
   _metaRow(burn, ttl) {
-    if (!burn && ttl <= 0) return null;
+    const now = new Date();
     return h('div', { class: 'msg-meta' },
+      h('time', {
+        class: 'msg-time',
+        datetime: now.toISOString(),
+        text: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      }),
       burn && h('span', { class: 'burn-badge', 'data-i18n': 'msg.burnBadge', text: t('msg.burnBadge') }),
       burn && ttl > 0 && ' ',
       ttl > 0 && h('span', { class: 'countdown', text: `${ttl}s` }),
