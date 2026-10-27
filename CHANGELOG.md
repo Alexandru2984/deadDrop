@@ -91,6 +91,14 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Office documents lose their author before they leave.** Word, Excel,
+  PowerPoint and OpenDocument files have their property parts emptied on the
+  sender's device — author, last editor, company, manager, template path,
+  created, saved and printed times, editing time, custom properties (where a
+  sensitivity label keeps a company's tenant ID) — and every part's archive
+  timestamp, extra fields and comments go too. Every other part is copied
+  byte for byte. A document that cannot be opened, such as a
+  password-protected one, is sent only if the person agrees.
 - **Pictures open full screen** at a tap. The view closes by itself when the
   picture's timer runs out, when it burns or is deleted, and when the privacy
   screen comes up — it never keeps showing what the conversation no longer

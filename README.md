@@ -152,6 +152,14 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   that it reached them, not that it was read.
 - A file can be stopped by its sender or refused by a receiver while it is
   still on its way; each side drops what had arrived.
+- Metadata stripping, on by default, runs on the sender's device before
+  encryption. Photos are re-encoded without EXIF; MP4/MOV/M4A files have their
+  location, device and time boxes blanked in place. Word, Excel, PowerPoint and
+  OpenDocument files have their property parts emptied — author, last editor,
+  company, template path, times, editing time, custom properties — and every
+  part's archive timestamp set to 1980; the content, including comments and
+  tracked changes with their authors, is left as written. PDFs and other files
+  go as chosen. A file that cannot be read is sent only if the person agrees.
 - Copying a message takes it back out of the clipboard a minute later, as
   copying a room link does. A picture shown full screen closes with its
   message, and when the privacy screen comes up.

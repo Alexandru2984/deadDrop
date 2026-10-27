@@ -17,7 +17,11 @@
  * blanked where they lie — zeroed and renamed `free`, which every player
  * skips — so no byte moves and every sample offset stays valid. Timed
  * metadata tracks that some action cameras record are left as they are.
+ *
+ * Office documents are handled in docscrub.js.
  */
+
+import { DOCUMENTS, DOCUMENT_EXTENSIONS, scrubDocument } from './docscrub.js';
 
 // Formats a canvas can write back without changing what kind of file it is.
 const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -26,15 +30,19 @@ const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
 // the browser cannot even read one, the caller is told so (`undecodable`)
 // rather than handed the original as if it were clean.
 const CONVERTED = new Set(['image/heic', 'image/heif', 'image/avif', 'image/tiff']);
-// Some systems hand over a HEIC photo with no type at all.
-const BY_EXTENSION = { heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', tif: 'image/tiff', tiff: 'image/tiff' };
+// Some systems hand over a HEIC photo, or a document, with no type at all, or
+// only as "some bytes".
+const BY_EXTENSION = {
+  heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', tif: 'image/tiff', tiff: 'image/tiff',
+  ...DOCUMENT_EXTENSIONS,
+};
 
 /** A file's type, or the one its extension names when it came without. */
 export function typeOf(file) {
   const type = String(file?.type || '').toLowerCase();
-  if (type) return type;
+  if (type && type !== 'application/octet-stream') return type;
   const ext = /\.([a-z0-9]+)$/i.exec(String(file?.name || ''))?.[1]?.toLowerCase();
-  return BY_EXTENSION[ext] || '';
+  return Object.hasOwn(BY_EXTENSION, ext ?? '') ? BY_EXTENSION[ext] : type;
 }
 // A decoded image costs four bytes a pixel. A small file can declare a huge
 // canvas; refuse rather than let a 25 MB PNG ask for gigabytes.
@@ -71,15 +79,18 @@ export function scrubbedName(name, type) {
   return String(name);
 }
 
-/** True when `file` is a picture or a movie this module rewrites before sending. */
+/** True when `file` is a picture, movie or document rewritten before sending. */
 export function isScrubbable(file) {
   const type = typeOf(file);
-  return SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type);
+  return SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type) || DOCUMENTS.has(type);
 }
 
-/** A metadata-free copy of `file`, whichever kind it is; see the two below. */
+/** A metadata-free copy of `file`, whichever kind it is. */
 export function scrubFile(file) {
-  return MOVIES.has(typeOf(file)) ? scrubMovie(file) : scrubImage(file);
+  const type = typeOf(file);
+  if (MOVIES.has(type)) return scrubMovie(file);
+  if (DOCUMENTS.has(type)) return scrubDocument(file, type);
+  return scrubImage(file);
 }
 
 // Boxes that hold nothing but description: where, when, which device.

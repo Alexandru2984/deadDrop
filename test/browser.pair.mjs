@@ -14,6 +14,8 @@
  */
 
 import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
+import { zip } from './lib/zip.mjs';
+import { scrubFile } from '../web/js/scrub.js';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITES = [process.env.DD_INVITE || '', process.env.DD_INVITE2 || ''];
@@ -682,6 +684,22 @@ await alice.eval(`window.confirm = () => true; true`);
 await pick(alice, `async () => new Blob(['not really a photo'])`, 'IMG_0002.heic', 'image/heic');
 ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'IMG_0002.heic'), { timeout: 20000 }),
   'and goes as it is when the person agrees');
+
+// An office document goes with its author and company emptied out. Under a
+// kilobyte the size is shown to the byte, so the receiver showing exactly
+// the size the scrubber gives here proves the cleaned copy is what left.
+const plan = zip([
+  { name: '[Content_Types].xml', data: '<Types/>' },
+  { name: 'word/document.xml', data: '<w:document>Meet at six.</w:document>' },
+  { name: 'docProps/core.xml', data: `<cp:coreProperties><dc:creator>Alice Example</dc:creator><dc:description>${'x'.repeat(900)}</dc:description></cp:coreProperties>`, deflate: false },
+]);
+const planClean = await scrubFile(new File([plan], 'Plan.docx', { type: '' }));
+await pick(alice, `async () => new Blob([Uint8Array.from(atob(${JSON.stringify(plan.toString('base64'))}), (c) => c.charCodeAt(0))])`,
+  'Plan.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+const planGot = await waitFor(async () => (await bob.receivedFiles()).find((f) => f.name === 'Plan.docx') || false,
+  { timeout: 20000 });
+ok(planGot && planClean.size < 1024 && plan.length > 1024 && planGot.size === `${planClean.size} B`,
+  `a Word document arrives under its own name with its properties emptied (${planGot?.size} of ${plan.length} B)`);
 
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.

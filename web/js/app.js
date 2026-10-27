@@ -1865,10 +1865,11 @@ class DeadDrop {
         file = await scrubFile(file);
       } catch (err) {
         console.warn('metadata removal failed:', err?.message);
-        // A HEIC or TIFF photo this browser cannot read: say what it means
-        // and let the person choose, rather than refuse outright or, as
-        // before, send it with its location as though it had been cleaned.
-        if (!err?.undecodable || !window.confirm(t('scrub.cannotRead'))) {
+        // A HEIC or TIFF photo this browser cannot read, or a document that
+        // is password-protected: say what it means and let the person
+        // choose, rather than refuse outright or, as before, send it with its
+        // location as though it had been cleaned.
+        if (!err?.undecodable || !window.confirm(t(err.prompt || 'scrub.cannotRead'))) {
           this._renderSystem(t('err.scrubFailed'));
           return;
         }
