@@ -21,6 +21,21 @@
 
 // Formats a canvas can write back without changing what kind of file it is.
 const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
+// Photos a canvas can read but not write: HEIC from iPhones and newer
+// Androids, AVIF, TIFF. They carry the same EXIF, and leave as JPEG. Where
+// the browser cannot even read one, the caller is told so (`undecodable`)
+// rather than handed the original as if it were clean.
+const CONVERTED = new Set(['image/heic', 'image/heif', 'image/avif', 'image/tiff']);
+// Some systems hand over a HEIC photo with no type at all.
+const BY_EXTENSION = { heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', tif: 'image/tiff', tiff: 'image/tiff' };
+
+/** A file's type, or the one its extension names when it came without. */
+export function typeOf(file) {
+  const type = String(file?.type || '').toLowerCase();
+  if (type) return type;
+  const ext = /\.([a-z0-9]+)$/i.exec(String(file?.name || ''))?.[1]?.toLowerCase();
+  return BY_EXTENSION[ext] || '';
+}
 // A decoded image costs four bytes a pixel. A small file can declare a huge
 // canvas; refuse rather than let a 25 MB PNG ask for gigabytes.
 const MAX_PIXELS = 50_000_000;
@@ -58,13 +73,13 @@ export function scrubbedName(name, type) {
 
 /** True when `file` is a picture or a movie this module rewrites before sending. */
 export function isScrubbable(file) {
-  const type = String(file?.type || '').toLowerCase();
-  return SCRUBBABLE.has(type) || MOVIES.has(type);
+  const type = typeOf(file);
+  return SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type);
 }
 
 /** A metadata-free copy of `file`, whichever kind it is; see the two below. */
 export function scrubFile(file) {
-  return MOVIES.has(String(file?.type || '').toLowerCase()) ? scrubMovie(file) : scrubImage(file);
+  return MOVIES.has(typeOf(file)) ? scrubMovie(file) : scrubImage(file);
 }
 
 // Boxes that hold nothing but description: where, when, which device.
@@ -130,32 +145,50 @@ function blankBoxes(bytes, start, end, depth) {
  * on to prevent.
  */
 export async function scrubImage(file) {
-  if (!isScrubbable(file)) return file;
-  const type = file.type.toLowerCase();
-  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const type = typeOf(file);
+  if (!SCRUBBABLE.has(type) && !CONVERTED.has(type)) return file;
+  const converting = CONVERTED.has(type);
+  const outType = converting ? 'image/jpeg' : type;
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch (err) {
+    if (!converting) throw err;
+    throw Object.assign(new Error('this browser cannot read the photo'), { undecodable: true });
+  }
   try {
     if (!bitmap.width || !bitmap.height || bitmap.width * bitmap.height > MAX_PIXELS) {
       throw new Error('image dimensions out of range');
     }
-    const blob = await encode(bitmap, type);
-    if (!blob || blob.type !== type) throw new Error('re-encoding failed');
-    return new File([blob], scrubbedName(file.name, type), { type, lastModified: 0 });
+    const blob = await encode(bitmap, outType, converting);
+    if (!blob || blob.type !== outType) throw new Error('re-encoding failed');
+    const name = converting ? String(file.name || '').replace(/\.[^.]*$/, '') + '.jpg' : file.name;
+    return new File([blob], scrubbedName(name, outType), { type: outType, lastModified: 0 });
   } finally {
     bitmap.close?.();
   }
 }
 
-async function encode(bitmap, type) {
+// A converted photo may have had transparency, which JPEG cannot keep: it
+// is laid on white rather than left to turn black.
+async function encode(bitmap, type, onWhite = false) {
   const quality = type === 'image/png' ? undefined : JPEG_QUALITY;
+  const draw = (ctx) => {
+    if (onWhite) {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+    }
+    ctx.drawImage(bitmap, 0, 0);
+  };
   if (typeof OffscreenCanvas === 'function') {
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    draw(canvas.getContext('2d'));
     return canvas.convertToBlob({ type, quality });
   }
   const canvas = document.createElement('canvas');
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
-  canvas.getContext('2d').drawImage(bitmap, 0, 0);
+  draw(canvas.getContext('2d'));
   try {
     return await new Promise((resolve) => canvas.toBlob(resolve, type, quality));
   } finally {

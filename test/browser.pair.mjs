@@ -622,6 +622,40 @@ if (movieCheck?.skipped) console.log('  - movie scrub playback: no MP4 encoder i
 else ok(movieCheck?.played && movieCheck.w === 64 && movieCheck.size[0] === movieCheck.size[1] && movieCheck.name === 'video.mp4',
   `a scrubbed movie keeps its size and still plays (${JSON.stringify(movieCheck)})`);
 
+// A photo a canvas reads but cannot write — HEIC, AVIF — leaves as a clean
+// JPEG. (A PNG under a HEIC label stands in here: what decodes it is the
+// browser's sniffing, and Chromium has no HEIC decoder to show this with.)
+const pick = (peer, make, name, type) => peer.eval(`(async () => {
+  const blob = await (${make})();
+  const input = document.querySelector('#file-input');
+  const dt = new DataTransfer();
+  dt.items.add(new File([blob], ${JSON.stringify(name)}, { type: ${JSON.stringify(type)} }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()`);
+const pngMaker = `async () => {
+  const c = document.createElement('canvas'); c.width = 30; c.height = 20;
+  c.getContext('2d').fillRect(0, 0, 10, 10);
+  return new Promise((r) => c.toBlob(r, 'image/png'));
+}`;
+await pick(alice, pngMaker, 'sunset.heic', 'image/heic');
+const converted = await waitFor(async () => (await bob.receivedFiles()).find((f) => f.name === 'sunset.jpg') || false,
+  { timeout: 20000 });
+ok(converted, `a HEIC photo leaves as a clean JPEG under its own name (${JSON.stringify(converted)})`);
+// One the browser cannot read is not sent as though it were clean: the
+// person is asked, and nothing goes unless they agree.
+await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
+await pick(alice, `async () => new Blob(['not really a photo'])`, 'IMG_0001.heic', 'image/heic');
+await sleep(1500);
+const askedNo = await alice.eval(`window.__asked.length`);
+ok(askedNo === 1 && !(await bob.receivedFiles()).some((f) => f.name === 'IMG_0001.heic'),
+  'an unreadable HEIC asks first, and is not sent when declined');
+await alice.eval(`window.confirm = () => true; true`);
+await pick(alice, `async () => new Blob(['not really a photo'])`, 'IMG_0002.heic', 'image/heic');
+ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'IMG_0002.heic'), { timeout: 20000 }),
+  'and goes as it is when the person agrees');
+
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.
 const nastyName = '<img src=x onerror=alert(1)>.txt';

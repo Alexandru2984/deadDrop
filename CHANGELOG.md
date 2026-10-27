@@ -67,6 +67,10 @@ compare rather than take a hash on trust.
   now have those boxes blanked and the header times zeroed in place, so not
   a byte of the media moves and the file plays as before. A camera-generated
   name becomes `video.mp4`.
+- **HEIC photos are no longer sent with their location.** Only JPEG, PNG and
+  WebP were cleaned; a HEIC photo from an iPhone or a newer Android — or an
+  AVIF or TIFF — went out untouched with stripping on. They now leave as a
+  clean JPEG, and one the browser cannot read is sent only after asking.
 - **Answering a call no longer switches the camera on by itself.** Every
   call was a video call, and Accept turned the callee's camera on. 📞 now
   offers a voice call or a video call, and a video call can be answered with

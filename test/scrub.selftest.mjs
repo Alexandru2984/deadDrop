@@ -11,7 +11,7 @@
  * rather than sent as it was.
  */
 
-import { scrubMovie, scrubbedName, isScrubbable } from '../web/js/scrub.js';
+import { scrubMovie, scrubbedName, isScrubbable, typeOf } from '../web/js/scrub.js';
 
 let failures = 0;
 const ok = (c, m) => { if (c) console.log('  ✓', m); else { console.error('  ✗', m); failures++; } };
@@ -85,6 +85,12 @@ const large = new Uint8Array([...box('ftyp', 'isom'),
 const largeOut = new TextDecoder('latin1').decode(new Uint8Array(await (await scrubMovie(
   new File([large], 'a.mp4', { type: 'video/mp4' }))).arrayBuffer()));
 ok(!largeOut.includes(GPS), 'boxes with a 64-bit size are walked as well');
+
+// A HEIC photo handed over with no type is still recognised by its name.
+const untyped = new File([new Uint8Array(4)], 'IMG_4021.HEIC', { type: '' });
+ok(typeOf(untyped) === 'image/heic' && isScrubbable(untyped),
+  'a photo that arrives without a type is judged by its extension');
+ok(!isScrubbable(new File(['x'], 'notes.txt', { type: 'text/plain' })), 'and a text file is left alone');
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);
