@@ -202,5 +202,84 @@ const tricky = zip([
 const trickySeen = Buffer.from(await (await scrubFile(new File([tricky], 't.xlsx', { type: '' }))).arrayBuffer());
 ok(trickySeen.includes(deflateRawSync(Buffer.from('kept'))), 'a part named like an object property is copied, not mistaken');
 
+// ── PDF ──
+
+// A PDF built object by object with a real cross-reference table, then saved
+// again incrementally, as an editor does: the first revision's information
+// dictionary stays in the file.
+function pdf(objects, { info = 5, update = null, extraTrailer = '' } = {}) {
+  let out = '%PDF-1.7\n%\xe2\xe3\xcf\xd3\n';
+  const offsets = {};
+  for (const [num, body] of objects) { offsets[num] = out.length; out += `${num} 0 obj\n${body}\nendobj\n`; }
+  const xref = (offs, prev) => {
+    const at = out.length;
+    out += 'xref\n';
+    for (const [num, off] of Object.entries(offs)) out += `${num} 1\n${String(off).padStart(10, '0')} 00000 n \n`;
+    out += `trailer\n<< /Size 20 /Root 1 0 R /Info ${info} 0 R ${extraTrailer}${prev == null ? '' : `/Prev ${prev}`} >>\nstartxref\n${at}\n%%EOF\n`;
+    return at;
+  };
+  const first = xref(offsets, null);
+  if (update) {
+    const offs = {};
+    for (const [num, body] of update) { offs[num] = out.length; out += `${num} 0 obj\n${body}\nendobj\n`; }
+    xref(offs, first);
+  }
+  return Buffer.from(out, 'latin1');
+}
+const XMP = `<?xpacket begin="\ufeff" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF><rdf:Description><dc:creator>${AUTHOR}</dc:creator><xmp:CreatorTool>Microsoft Word for Microsoft 365</xmp:CreatorTool></rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>`;
+const xmpPacked = deflateRawSync(Buffer.from(`<x:xmpmeta>${AUTHOR}</x:xmpmeta>`));
+const CONTENT = 'BT /F1 12 Tf 72 720 Td (The quarterly numbers are attached.) Tj ET';
+const hexAuthor = Buffer.from('\ufeff' + AUTHOR, 'utf16le').swap16().toString('hex').toUpperCase();
+const report = pdf([
+  [1, '<< /Type /Catalog /Pages 2 0 R /Metadata 6 0 R >>'],
+  [2, '<< /Type /Pages /Kids [3 0 R] /Count 1 >>'],
+  [3, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Metadata 7 0 R >>'],
+  [4, `<< /Length ${CONTENT.length} >>\nstream\n${CONTENT}\nendstream`],
+  [5, `<< /Title (Microsoft Word - Quarterly \\(draft\\) final3.docx) /Author <${hexAuthor}> /Creator (Microsoft Word for Microsoft 365) /Producer (Microsoft Word for Microsoft 365) /CreationDate (D:20261027143200+02'00') /ModDate (D:20261027150000+02'00') /Company (${COMPANY}) /Manager 9 0 R /Trapped /False >>`],
+  [6, `<< /Type /Metadata /Subtype /XML /Length ${Buffer.byteLength(XMP, 'latin1')} >>\nstream\n${XMP}\nendstream`],
+  [7, `<< /Type /Metadata /Subtype /XML /Filter /FlateDecode /Length ${xmpPacked.length} >>\nstream\n${xmpPacked.toString('latin1')}\nendstream`],
+  [9, '(Bob Manager)'],
+], { update: [[5, `<< /Author (${AUTHOR}) /Producer (Adobe Acrobat Pro 2026) /ModDate (D:20261028090000Z) >>`]] });
+
+const pdfIn = new File([report], 'report.pdf', { type: '' });
+ok(isScrubbable(pdfIn) && typeOf(pdfIn) === 'application/pdf', 'a PDF is recognised, even arriving without a type');
+const pdfOut = Buffer.from(await (await scrubFile(pdfIn)).arrayBuffer());
+const pdfText = pdfOut.toString('latin1');
+ok(pdfOut.length === report.length, 'the PDF keeps its exact length');
+ok(!pdfText.includes(AUTHOR) && !pdfText.includes(hexAuthor), 'the author is gone, as text and as UTF-16 hex, in both revisions');
+ok(!/Microsoft Word|Acrobat|D:2026|final3|Bob Manager/.test(pdfText) && !pdfText.includes(COMPANY),
+  'so are the programs, the dates, the title naming the source file, a value held as its own object, and custom keys');
+ok(!pdfText.includes('xpacket') && !pdfOut.includes(xmpPacked), 'both metadata streams are blanked, compressed or not');
+ok(!/\/Filter\s*\/FlateDecode/.test(pdfText), 'and the blanked compressed one no longer claims a filter');
+ok(pdfText.includes(CONTENT), 'the page content is untouched');
+let pdfDiff = 0;
+for (let i = 0; i < report.length; i++) if (report[i] !== pdfOut[i] && pdfOut[i] !== 0x20) pdfDiff++;
+ok(pdfDiff === 0, 'every changed byte became a space');
+const offsetsLand = (t) => {
+  const offs = [...t.matchAll(/^(\d{10}) 00000 n /gm)].map(([, off]) => Number(off));
+  return offs.length === 9 && offs.every((off) => /^\d+ 0 obj/.test(t.slice(off)));
+};
+ok(offsetsLand(report.toString('latin1')) && offsetsLand(pdfText), 'every cross-reference offset still lands on its object');
+ok(/\/Title \(\s+\)/.test(pdfText) && /\/Author <\s+>/.test(pdfText) && pdfText.includes('/Trapped /False'),
+  'strings become spaces inside their own delimiters; names are left');
+
+const pdfAsked = async (bytes) => {
+  try { await scrubFile(new File([bytes], 'x.pdf', { type: 'application/pdf' })); return 'sent'; } catch (e) { return e.undecodable && e.prompt; }
+};
+ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [5, '<< /Author (A) >>']], { extraTrailer: '/Encrypt 8 0 R ' })) === 'scrub.cannotReadDoc',
+  'an encrypted PDF is put to the person');
+ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [5, '<< /Author (A) >>'], [8, '<< /Type /Sig /ByteRange [0 10 20 30] /Contents <00> >>']])) === 'scrub.signedDoc',
+  'so is a signed one, which a change would break');
+ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [3, '<< /Type /ObjStm /N 1 /First 4 /Length 0 >>\nstream\n\nendstream']])) === 'scrub.cannotReadDoc',
+  'and one whose information dictionary is inside a compressed object stream');
+ok(await pdfAsked(Buffer.from('just text, not a PDF')) === 'scrub.cannotReadDoc', 'and something that is not a PDF at all');
+const bare = pdf([[1, '<< /Type /Catalog >>'], [5, '<< >>']]);
+ok(Buffer.from(await (await scrubFile(new File([bare], 'b.pdf', { type: 'application/pdf' }))).arrayBuffer()).equals(bare),
+  'a PDF with nothing to remove goes unchanged');
+
+// Office documents can be signed too, and the signature covers their properties.
+ok(await asked(zip([{ name: '[Content_Types].xml', data: '<Types/>' }, { name: '_xmlsignatures/sig1.xml', data: '<Signature/>' }])) === 'scrub.signedDoc',
+  'a signed Word document is put to the person rather than have its signature broken');
+
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);

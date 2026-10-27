@@ -86,6 +86,10 @@ export async function scrubDocument(file, type) {
   const names = new Set(entries.map((e) => e.name));
   const odf = entries[0]?.name === 'mimetype';
   if (!odf && !names.has('[Content_Types].xml')) throw unreadable('not an office document');
+  // A signature covers the property parts; emptying them would break it.
+  if ([...names].some((n) => n.startsWith('_xmlsignatures/') || n === 'META-INF/documentsignatures.xml')) {
+    throw Object.assign(new Error('signed'), { undecodable: true, prompt: 'scrub.signedDoc' });
+  }
 
   const out = [];
   const central = [];

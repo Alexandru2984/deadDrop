@@ -701,6 +701,17 @@ const planGot = await waitFor(async () => (await bob.receivedFiles()).find((f) =
 ok(planGot && planClean.size < 1024 && plan.length > 1024 && planGot.size === `${planClean.size} B`,
   `a Word document arrives under its own name with its properties emptied (${planGot?.size} of ${plan.length} B)`);
 
+// A signed PDF would have its signature broken by any change: the person is
+// asked, in their words, and nothing goes when they decline.
+await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
+await pick(alice, `async () => new Blob(['%PDF-1.7\\n1 0 obj << /Type /Sig /ByteRange [0 1 2 3] >> endobj\\n%%EOF\\n'])`,
+  'Signed contract.pdf', 'application/pdf');
+await sleep(1500);
+const signedAsk = await alice.eval(`window.__asked`);
+ok(signedAsk.length === 1 && /signed/i.test(signedAsk[0]) && !(await bob.receivedFiles()).some((f) => f.name === 'Signed contract.pdf'),
+  `a signed PDF asks before its signature is broken, and stays when declined (${signedAsk[0]})`);
+await alice.eval(`window.confirm = () => true; true`);
+
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.
 const nastyName = '<img src=x onerror=alert(1)>.txt';

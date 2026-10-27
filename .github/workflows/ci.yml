@@ -101,7 +101,7 @@ jobs:
         run: node test/callsignal.selftest.mjs
       - name: ICE interruption grace period
         run: node test/ice-grace.selftest.mjs
-      - name: Movie and document metadata removal
+      - name: Movie, document and PDF metadata removal
         run: node test/scrub.selftest.mjs
       # Randomised, with the seed derived from the run so successive pushes
       # explore different input rather than re-checking the same shapes.

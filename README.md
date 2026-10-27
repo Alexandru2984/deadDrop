@@ -158,8 +158,12 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   OpenDocument files have their property parts emptied — author, last editor,
   company, template path, times, editing time, custom properties — and every
   part's archive timestamp set to 1980; the content, including comments and
-  tracked changes with their authors, is left as written. PDFs and other files
-  go as chosen. A file that cannot be read is sent only if the person agrees.
+  tracked changes with their authors, is left as written. A PDF's information
+  dictionary (in every revision) and XMP streams become spaces in place, so
+  the file keeps its length and every offset. A file that cannot be read —
+  encrypted, or a PDF that keeps its properties in a compressed object stream
+  — or one that is digitally signed, which any change would break, is sent
+  only if the person agrees. Other files go as chosen.
 - Copying a message takes it back out of the clipboard a minute later, as
   copying a room link does. A picture shown full screen closes with its
   message, and when the privacy screen comes up.

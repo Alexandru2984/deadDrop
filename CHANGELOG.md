@@ -99,6 +99,13 @@ compare rather than take a hash on trust.
   timestamp, extra fields and comments go too. Every other part is copied
   byte for byte. A document that cannot be opened, such as a
   password-protected one, is sent only if the person agrees.
+- **PDFs too.** The information dictionary — author, creator and producer,
+  dates, a title like "Microsoft Word - CV_final3.docx", custom keys — and
+  every XMP metadata stream become spaces in place, in every revision an
+  incremental save left behind. No byte moves, so the cross-reference table
+  and linearization stay valid. An encrypted PDF, one whose properties sit in
+  a compressed object stream, and a signed one — signed Office files too —
+  are put to the person: cleaning would fail, or break the signature.
 - **Pictures open full screen** at a tap. The view closes by itself when the
   picture's timer runs out, when it burns or is deleted, and when the privacy
   screen comes up — it never keeps showing what the conversation no longer

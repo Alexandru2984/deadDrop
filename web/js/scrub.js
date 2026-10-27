@@ -18,10 +18,11 @@
  * skips — so no byte moves and every sample offset stays valid. Timed
  * metadata tracks that some action cameras record are left as they are.
  *
- * Office documents are handled in docscrub.js.
+ * Office documents are handled in docscrub.js, PDFs in pdfscrub.js.
  */
 
 import { DOCUMENTS, DOCUMENT_EXTENSIONS, scrubDocument } from './docscrub.js';
+import { scrubPdf } from './pdfscrub.js';
 
 // Formats a canvas can write back without changing what kind of file it is.
 const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -35,6 +36,7 @@ const CONVERTED = new Set(['image/heic', 'image/heif', 'image/avif', 'image/tiff
 const BY_EXTENSION = {
   heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', tif: 'image/tiff', tiff: 'image/tiff',
   ...DOCUMENT_EXTENSIONS,
+  pdf: 'application/pdf',
 };
 
 /** A file's type, or the one its extension names when it came without. */
@@ -82,7 +84,8 @@ export function scrubbedName(name, type) {
 /** True when `file` is a picture, movie or document rewritten before sending. */
 export function isScrubbable(file) {
   const type = typeOf(file);
-  return SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type) || DOCUMENTS.has(type);
+  return SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type)
+    || DOCUMENTS.has(type) || type === 'application/pdf';
 }
 
 /** A metadata-free copy of `file`, whichever kind it is. */
@@ -90,6 +93,7 @@ export function scrubFile(file) {
   const type = typeOf(file);
   if (MOVIES.has(type)) return scrubMovie(file);
   if (DOCUMENTS.has(type)) return scrubDocument(file, type);
+  if (type === 'application/pdf') return scrubPdf(file);
   return scrubImage(file);
 }
 
