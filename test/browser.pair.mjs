@@ -253,6 +253,27 @@ ok(await waitFor(async () => !(await bob.transcript()).includes(regret), { timeo
 ok(await waitFor(async () => !(await alice.transcript()).includes(regret), { timeout: 5000 }),
   "and off the sender's");
 
+// ── Several files at once ──
+// Picked together, they go one after another, in order; past the limit the
+// rest are left behind with a word, not dropped silently.
+await alice.eval(`(() => {
+  const input = document.querySelector('#file-input');
+  const dt = new DataTransfer();
+  for (let i = 1; i <= 11; i++) dt.items.add(new File(['part ' + i], 'batch-' + i + '.txt', { type: 'text/plain' }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+})()`);
+const batchNames = () => bob.eval(`[...document.querySelectorAll('.file-name')]
+  .map((n) => n.textContent).filter((n) => n.startsWith('batch-'))`);
+ok(await waitFor(async () => (await batchNames()).length === 10, { timeout: 20000 }),
+  'ten files picked together all arrive');
+await sleep(1500);
+const batch = await batchNames();
+ok(batch.length === 10 && batch.every((n, i) => n === `batch-${i + 1}.txt`),
+  `in the order they were picked, and no more (${batch.join(', ')})`);
+ok((await alice.notices()).some((n) => /first 10 files/.test(n)), 'the eleventh is held back with a word');
+
 // ── Calling off a file on its way ──
 await alice.eval(`(() => {
   const input = document.querySelector('#file-input');

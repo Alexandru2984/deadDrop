@@ -168,6 +168,10 @@ compare rather than take a hash on trust.
   Each section now has its own status line.
 - **A voice recording can be discarded** — stopping it was the only way out,
   and stopping sent it. Safari's recordings are named `.m4a`, not `.webm`.
+- **Several files can be picked or dropped at once** — up to ten, sent one
+  after another so a phone's tab never holds ten files and their ciphertext
+  together. Pasted screenshots go the same way, and leaving the room stops the
+  rest.
 - **Files show their progress to the sender too**, and as a percentage on both
   sides rather than a count of transfer chunks.
 - **A refused copy says so**, with the link or code selected for a manual copy,

@@ -29,6 +29,7 @@ const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PEER_ID_RE = /^[0-9a-f]{32}$/;
 const MAX_TEXT_LEN = 16 * 1024;
+const MAX_FILES_AT_ONCE = 10;
 
 /** Media arrived for a call that had already ended; nothing left to do. */
 class CallGone extends Error {}
@@ -467,9 +468,9 @@ class DeadDrop {
       if (this.encrypted) this.el.fileInput.click();
     });
     this.el.fileInput.addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (file) this.sendFile(file);
+      const files = [...e.target.files];
       e.target.value = '';
+      this._sendFiles(files);
     });
     this.el.recordBtn.addEventListener('click', () => this._toggleRecord());
     this.el.recCancelBtn.addEventListener('click', () => this._discardRecording());
@@ -484,8 +485,7 @@ class DeadDrop {
     });
     drop.addEventListener('drop', (e) => {
       drop.classList.remove('drag-over');
-      const file = e.dataTransfer.files[0];
-      if (file && this.encrypted) this.sendFile(file);
+      this._sendFiles([...e.dataTransfer.files]);
     });
     // A screenshot pasted into the message field is sent like an attachment —
     // through the same metadata stripping. Pasted text is left to the field.
@@ -495,8 +495,7 @@ class DeadDrop {
       // beside its text. Text there means the person copied text: paste it.
       if (!files.length || e.clipboardData.getData('text/plain')) return;
       e.preventDefault();
-      if (!this.encrypted) return;
-      for (const file of files.slice(0, 5)) this.sendFile(file);
+      this._sendFiles(files);
     });
 
     // Call controls
@@ -1833,6 +1832,25 @@ class DeadDrop {
   /* ── File transfer ── */
 
   /** `recorded`: made here, by the voice recorder, with nothing to strip. */
+  /**
+   * Several files picked, dropped or pasted at once go one after another:
+   * each transfer holds the whole file and its ciphertext in memory, and ten
+   * of them at once would be most of a phone's tab. A room left part way
+   * through stops the rest from going to whatever room comes next.
+   */
+  async _sendFiles(files) {
+    if (!files.length || !this.encrypted) return;
+    if (files.length > MAX_FILES_AT_ONCE) {
+      this._renderSystem(t('file.tooMany').replace('{n}', String(MAX_FILES_AT_ONCE)));
+      files = files.slice(0, MAX_FILES_AT_ONCE);
+    }
+    const room = this.roomCode;
+    for (const file of files) {
+      if (!this.encrypted || this.roomCode !== room) return;
+      await this.sendFile(file);
+    }
+  }
+
   async sendFile(file, { recorded = false } = {}) {
     if (!this.encrypted) return;
     // Refused before it is read: a movie is scrubbed in memory, and a
