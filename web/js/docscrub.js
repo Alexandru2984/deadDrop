@@ -25,7 +25,7 @@
  * imagemeta.js.
  */
 
-import { blankJpegMeta, stripPngMeta } from './imagemeta.js';
+import { blankJpegMeta, jpegEnd, stripPngMeta } from './imagemeta.js';
 
 export const DOCUMENTS = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -112,9 +112,14 @@ export async function scrubDocument(file, type) {
       replacement = OOXML_EMPTY.get(entry.name);
     } else if (PICTURE.test(entry.name)) {
       const picture = await contentOf(bytes, entry);
-      replacement = /\.png$/i.test(entry.name)
-        ? stripPngMeta(picture)
-        : blankJpegMeta(picture) ? picture : null;
+      if (/\.png$/i.test(entry.name)) {
+        replacement = stripPngMeta(picture);
+      } else {
+        const blanked = blankJpegMeta(picture);
+        const end = jpegEnd(picture);
+        if (end > 0 && end < picture.length) replacement = picture.subarray(0, end);
+        else if (blanked) replacement = picture;
+      }
     }
     let data;
     let method = entry.method;

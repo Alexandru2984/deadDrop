@@ -69,6 +69,40 @@ export function blankJpegMeta(bytes, start = 0, end = bytes.length, { keepOrient
   return changed;
 }
 
+/**
+ * Where the picture in bytes[start, end) ends: just past its EOI marker, or
+ * -1 when it cannot be found. Phones put more after it — a motion photo's
+ * video, with its own location; Samsung's block of capture times; the
+ * depth and gain maps of a multi-picture file — which no decoder reads.
+ */
+export function jpegEnd(bytes, start = 0, end = bytes.length) {
+  if (end - start < 4 || bytes[start] !== 0xff || bytes[start + 1] !== 0xd8) return -1;
+  let pos = start + 2;
+  let scanning = false;
+  while (pos + 1 < end) {
+    if (scanning) {
+      // Entropy-coded data: 0xFF is followed by a stuffed zero, a restart
+      // marker or another 0xFF; anything else is the next marker.
+      if (bytes[pos] !== 0xff) { pos++; continue; }
+      const next = bytes[pos + 1];
+      if (next === 0 || next === 0xff || (next >= 0xd0 && next <= 0xd7)) { pos += next === 0xff ? 1 : 2; continue; }
+      scanning = false;
+      continue;
+    }
+    if (bytes[pos] !== 0xff) return -1;
+    const marker = bytes[pos + 1];
+    if (marker === 0xff) { pos++; continue; }
+    if (marker === EOI) return pos + 2;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { pos += 2; continue; }
+    if (pos + 4 > end) return -1;
+    const segEnd = pos + 2 + ((bytes[pos + 2] << 8) | bytes[pos + 3]);
+    if (segEnd > end || segEnd < pos + 4) return -1;
+    pos = segEnd;
+    if (marker === SOS) scanning = true;
+  }
+  return -1;
+}
+
 const EXIF_HEADER = [0x45, 0x78, 0x69, 0x66, 0, 0]; // "Exif\0\0"
 
 /** The orientation tag of the EXIF block in [start, end), or 0. */

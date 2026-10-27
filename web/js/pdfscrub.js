@@ -22,7 +22,7 @@
  * the person, never sent as if they were clean.
  */
 
-import { blankJpegMeta } from './imagemeta.js';
+import { blankJpegMeta, jpegEnd } from './imagemeta.js';
 
 const SPACE = 0x20;
 // Keys whose string value says who, with what, or when, wherever they occur:
@@ -84,7 +84,12 @@ export async function scrubPdf(file) {
       const plain = /\/Filter\s*(?:\/DCTDecode|\[\s*\/DCTDecode\s*\])(?![A-Za-z])/.test(dict);
       const a85 = /\/Filter\s*\[\s*\/ASCII85Decode\s*\/DCTDecode\s*\]/.test(dict);
       const data = (plain || a85) && streamData(text, dictEnd, dict);
-      if (data && plain) blankJpegMeta(bytes, data.start, data.end, { keepOrientation: false });
+      if (data && plain) {
+        blankJpegMeta(bytes, data.start, data.end, { keepOrientation: false });
+        // Whatever a phone put after the picture, zeroed in place.
+        const end = jpegEnd(bytes, data.start, data.end);
+        if (end > 0) bytes.fill(0, end, data.end);
+      }
       if (data && a85) blankA85Jpeg(bytes, text, data.start, data.end);
       continue;
     }
@@ -146,7 +151,10 @@ function blankA85Jpeg(bytes, text, start, end) {
   }
   const picture = decoded.subarray(0, length);
   const before = picture.slice();
-  if (!blankJpegMeta(picture, 0, length, { keepOrientation: false })) return;
+  const blanked = blankJpegMeta(picture, 0, length, { keepOrientation: false });
+  const pictureEnd = jpegEnd(picture);
+  if (pictureEnd > 0 && pictureEnd < length) picture.fill(0, pictureEnd);
+  else if (!blanked) return;
   for (const g of groups) {
     if (g.zero) continue; // only ever blanked to zero, which it already is
     const n = g.digits.length - 1;

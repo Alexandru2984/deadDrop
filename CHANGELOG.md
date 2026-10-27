@@ -111,7 +111,9 @@ compare rather than take a hash on trust.
   the original JPEG; its descriptive segments are blanked in place, without
   re-encoding, keeping only the orientation so a portrait shot stays upright.
   PNG text, EXIF and time chunks are dropped. JPEGs a PDF writes out in
-  ASCII85 are cleaned through it, every character where it was.
+  ASCII85 are cleaned through it, every character where it was. What a phone
+  appends after the picture — a motion photo's video, Samsung's capture
+  times, depth maps — is cut off in a document and zeroed in a PDF.
 - **Pictures open full screen** at a tap. The view closes by itself when the
   picture's timer runs out, when it burns or is deleted, and when the privacy
   screen comes up — it never keeps showing what the conversation no longer

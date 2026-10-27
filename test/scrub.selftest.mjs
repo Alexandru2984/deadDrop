@@ -20,7 +20,7 @@
 import { scrubMovie, scrubbedName, isScrubbable, scrubFile, typeOf } from '../web/js/scrub.js';
 import { deflateRawSync } from 'node:zlib';
 import { zip, crc32 } from './lib/zip.mjs';
-import { blankJpegMeta, stripPngMeta } from '../web/js/imagemeta.js';
+import { blankJpegMeta, jpegEnd, stripPngMeta } from '../web/js/imagemeta.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -301,6 +301,30 @@ const pdfWithPhoto = Buffer.concat([Buffer.from('%PDF-1.7\n1 0 obj\n<< /Type /XO
 const pdfPhotoOut = Buffer.from(await (await scrubFile(new File([pdfWithPhoto], 'trip.pdf', { type: '' }))).arrayBuffer());
 ok(pdfPhotoOut.length === pdfWithPhoto.length && !pdfPhotoOut.includes(GPS_TEXT) && !pdfPhotoOut.includes(AUTHOR)
   && pdfPhotoOut.includes(ICC, 0, 'latin1'), 'and a photo inside a PDF, in place');
+
+// What a phone puts after the picture: a motion photo's video, Samsung's
+// capture times. The end is found through a progressive file's several scans,
+// stuffed bytes and restart markers.
+const progressive = Buffer.concat([
+  Buffer.from([0xff, 0xd8]), seg(0xe0, 'JFIF\0\x01\x01\0\0\x01\0\x01\0\0'),
+  Buffer.from([0xff, 0xda, 0, 8, 1, 1, 0, 0, 0x3f, 0, 0x11, 0xff, 0x00, 0x22, 0xff, 0xd0, 0x33]),
+  seg(0xc4, '\0huffman'),
+  Buffer.from([0xff, 0xda, 0, 8, 1, 1, 0, 1, 0x3f, 0, 0x44, 0xff, 0x00, 0xff, 0xd9]),
+]);
+ok(jpegEnd(progressive) === progressive.length, 'the end of a progressive JPEG is found past every scan');
+const MOTION = 'ftypmp42 ... ©xyz+44.4268+026.1025/ ... MotionPhoto_Data SEFT Image_UTC_Data1761576000000';
+const trailed = Buffer.concat([photo, Buffer.from(MOTION, 'latin1')]);
+const trailedDoc = Buffer.from(await (await scrubFile(new File([zip([
+  { name: '[Content_Types].xml', data: '<Types/>' },
+  { name: 'ppt/media/image1.jpg', data: trailed },
+])], 'Deck.pptx', { type: '' }))).arrayBuffer());
+ok(!trailedDoc.includes('MotionPhoto') && !trailedDoc.includes('44.4268') && trailedDoc.includes(cleaned),
+  'in a document, what follows the picture is cut off');
+const trailedPdf = Buffer.concat([Buffer.from('%PDF-1.7\n1 0 obj\n<< /Subtype /Image /Filter /DCTDecode /Length ' + trailed.length + ' >>\nstream\n', 'latin1'),
+  trailed, Buffer.from('\nendstream\nendobj\n%%EOF\n', 'latin1')]);
+const trailedPdfOut = Buffer.from(await (await scrubFile(new File([trailedPdf], 't.pdf', { type: '' }))).arrayBuffer());
+ok(trailedPdfOut.length === trailedPdf.length && !trailedPdfOut.includes('MotionPhoto') && !trailedPdfOut.includes('44.4268'),
+  'in a PDF it is zeroed, keeping the length');
 
 // ReportLab writes JPEGs out in ASCII85: cleaned through it, in place, with
 // line breaks and 'z' groups kept, and checked by Python's own decoder.
