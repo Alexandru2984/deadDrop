@@ -12,6 +12,9 @@
  * page, untouched, must boot normally — otherwise "refused" would only prove
  * the app was broken.
  *
+ * The public verifier gets the same treatment for the one rewrite it lets
+ * through: Cloudflare's managed block in front of robots.txt, and nothing else.
+ *
  *   DD_URL=http://127.0.0.1:8100 node test/browser.integrity.mjs
  */
 
@@ -65,6 +68,54 @@ try {
   ok(await victim.eval(`globalThis.__exfiltrate !== true`), 'the injected code never ran');
   ok(victim.logs.some((line) => /integrity/i.test(line)),
     `the browser names the integrity failure (${victim.logs.find((l) => /integrity/i.test(l)) || 'nothing logged'})`);
+
+  // The verifier: Cloudflare's managed robots.txt in front of ours passes and
+  // says so; the same block with our part changed is still a mismatch.
+  const MANAGED = '# As a condition of accessing this website, you agree to abide by the following\n' +
+    '# content signals:\n\n# BEGIN Cloudflare Managed content\n\n\nUser-agent: *\n' +
+    'Content-Signal: search=yes,ai-train=no\nAllow: /\n\nUser-agent: GPTBot\nDisallow: /\n\n' +
+    '# END Cloudflare Managed Content\n\n';
+  const verifyWith = async (name, rewrite) => {
+    const page = await Peer.open(cdp, name);
+    await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/robots.txt*', requestStage: 'Response' }] },
+      page.sessionId);
+    cdp.on(async (msg) => {
+      if (msg.sessionId !== page.sessionId || msg.method !== 'Fetch.requestPaused') return;
+      const { requestId } = msg.params;
+      const { body, base64Encoded } = await cdp.send('Fetch.getResponseBody', { requestId }, page.sessionId);
+      const source = base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body;
+      await cdp.send('Fetch.fulfillRequest', {
+        requestId,
+        responseCode: 200,
+        responseHeaders: [{ name: 'Content-Type', value: 'text/plain; charset=utf-8' }],
+        body: Buffer.from(rewrite(source)).toString('base64'),
+      }, page.sessionId);
+    });
+    await page.goto(`${URL_BASE}/verify.html`, { expectApp: false });
+    await waitFor(() => page.eval(`/verify-(ok|bad)/.test(document.getElementById('summary').className)`),
+      { timeout: 20000 });
+    return page.eval(`(() => {
+      const row = [...document.querySelectorAll('.verify-row')]
+        .find((r) => r.querySelector('.verify-path').textContent === 'robots.txt');
+      return {
+        summary: document.getElementById('summary').className,
+        row: row?.className,
+        detail: row?.querySelector('.verify-detail')?.textContent || '',
+      };
+    })()`);
+  };
+
+  const managed = await verifyWith('verify-cf', (ours) => MANAGED + ours);
+  ok(/verify-ok/.test(managed.row) && /Cloudflare/.test(managed.detail),
+    `the verifier accepts Cloudflare's block in front of robots.txt and names it (${managed.detail})`);
+  ok(/verify-ok/.test(managed.summary), 'and the whole check still passes');
+
+  const altered = await verifyWith('verify-cf-altered', (ours) => MANAGED + ours + 'Allow: /api/\n');
+  ok(/verify-bad/.test(altered.row) && /verify-bad/.test(altered.summary),
+    'the same block with our part changed is still a mismatch');
+
+  const unmarked = await verifyWith('verify-unmarked', (ours) => 'User-agent: *\nAllow: /\n\n' + ours);
+  ok(/verify-bad/.test(unmarked.row), 'an unmarked prefix is a mismatch');
 } finally {
   cleanup();
 }

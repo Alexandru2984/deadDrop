@@ -179,6 +179,15 @@ compare rather than take a hash on trust.
   TTL", the message field's hint stays on one line on small phones, and the
   language button is a full-size touch target.
 
+### Fixed
+
+- **`/verify.html` showed a mismatch on `robots.txt` to every visitor**, and
+  `deaddrop doctor` failed a deploy on it. Cloudflare's managed `robots.txt`
+  now puts its content-signal terms and AI-crawler rules in front of the
+  file. Both checks let through exactly that block, and only on `robots.txt`;
+  the rest must still match byte for byte, and the verifier says the block was
+  there. Any other change still fails.
+
 ### Development
 
 - govulncheck runs daily and in `deploy.sh`, not only on push. CI actions are

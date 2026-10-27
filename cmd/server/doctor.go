@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -249,26 +250,56 @@ func deliveryPaths() ([]string, error) {
 // compareDelivery is separated from the check so a test can watch it fail: a
 // security check that has only ever been seen passing is not a check.
 func compareDelivery(client *http.Client, origin, public string, paths []string) finding {
+	note := ""
 	for _, path := range paths {
-		local, err := fetchDigest(client, origin+path)
+		local, err := fetchBody(client, origin+path)
 		if err != nil {
 			return finding{name: "delivered bundle", err: fmt.Errorf("origin %s: %w", path, err)}
 		}
-		remote, err := fetchDigest(client, public+path)
+		remote, err := fetchBody(client, public+path)
 		if err != nil {
 			// Being unable to reach the public URL from the box itself is
 			// common and is not evidence of tampering.
 			return finding{name: "delivered bundle", warn: true,
 				err: fmt.Errorf("cannot reach %s%s from here: %v", public, path, err)}
 		}
-		if local != remote {
-			return finding{name: "delivered bundle", err: fmt.Errorf(
-				"%s differs between the origin and %s (%s vs %s) — something in front of "+
-					"this server is rewriting what browsers receive",
-				path, public, local[:16], remote[:16])}
+		if bytes.Equal(local, remote) {
+			continue
 		}
+		if path == "/robots.txt" {
+			if own, ok := withoutCloudflareRobots(remote); ok && bytes.Equal(own, local) {
+				note = "; robots.txt behind Cloudflare's managed block"
+				continue
+			}
+		}
+		return finding{name: "delivered bundle", err: fmt.Errorf(
+			"%s differs between the origin and %s (%s vs %s) — something in front of "+
+				"this server is rewriting what browsers receive",
+			path, public, digest(local)[:16], digest(remote)[:16])}
 	}
-	return finding{name: "delivered bundle", detail: fmt.Sprintf("%s serves exactly what this origin does (%d files)", public, len(paths))}
+	return finding{name: "delivered bundle", detail: fmt.Sprintf(
+		"%s serves exactly what this origin does (%d files%s)", public, len(paths), note)}
+}
+
+// withoutCloudflareRobots returns robots.txt as the origin wrote it, when the
+// only change on the way is the block Cloudflare's managed robots.txt puts in
+// front: its content-signal terms and AI-crawler rules, ending at its own END
+// marker, then this file untouched. robots.txt protects nothing in the
+// client; the check is there to catch a file being replaced, which this is
+// not. Anything else — a block elsewhere, or our part altered — still fails.
+func withoutCloudflareRobots(body []byte) ([]byte, bool) {
+	const begin = "# BEGIN Cloudflare Managed content\n"
+	const end = "# END Cloudflare Managed Content\n"
+	b := bytes.Index(body, []byte(begin))
+	e := bytes.Index(body, []byte(end))
+	if b < 0 || e < b {
+		return nil, false
+	}
+	return bytes.TrimLeft(body[e+len(end):], "\n"), true
+}
+
+func digest(body []byte) string {
+	return fmt.Sprintf("%x", sha256.Sum256(body))
 }
 
 // publicOrigin picks the first non-loopback, non-onion origin to compare against.
@@ -286,22 +317,18 @@ func publicOrigin() string {
 	return ""
 }
 
-func fetchDigest(client *http.Client, url string) (string, error) {
+func fetchBody(client *http.Client, url string) ([]byte, error) {
 	resp, err := client.Get(url)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	// Bounded: the bundle is small, and an edge that returns something enormous
 	// is a finding in itself rather than a reason to fill memory.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%x", sha256.Sum256(body)), nil
+	return io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 }
 
 // checkBackupFreshness looks at the archives themselves rather than at whether

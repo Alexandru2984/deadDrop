@@ -32,6 +32,7 @@ const TEXT = {
     checking: (n) => `Checking ${n} files…`,
     fetchFailed: (e) => 'fetch failed: ' + e,
     mismatch: 'HASH MISMATCH',
+    cloudflareRobots: "matches, behind Cloudflare's crawler rules",
     allMatch: (n) => `✓ All ${n} fresh responses match the served manifest.`,
     someBad: (bad, n) => `✗ ${bad} of ${n} files DO NOT match — do not trust this page.`,
     cmdMatch: '✓ MATCHES the open-source repo',
@@ -44,6 +45,7 @@ const TEXT = {
     checking: (n) => `Se verifică ${n} fișiere…`,
     fetchFailed: (e) => 'descărcare eșuată: ' + e,
     mismatch: 'HASH DIFERIT',
+    cloudflareRobots: 'se potrivește, după regulile Cloudflare pentru crawlere',
     allMatch: (n) => `✓ Toate cele ${n} răspunsuri proaspete se potrivesc cu manifestul servit.`,
     someBad: (bad, n) => `✗ ${bad} din ${n} fișiere NU se potrivesc — nu avea încredere în această pagină.`,
     cmdMatch: '✓ SE POTRIVEȘTE cu depozitul open-source',
@@ -57,6 +59,28 @@ const toHex = (buf) =>
 
 async function sha256Hex(buf) {
   return toHex(await crypto.subtle.digest('SHA-256', buf));
+}
+
+// Cloudflare's managed robots.txt puts its content-signal terms and
+// AI-crawler rules in front of this server's file. The same exemption the
+// server's own post-deploy check makes: only robots.txt, only that block, and
+// the rest must still hash to the manifest. robots.txt carries no code, so
+// this cannot hide a change to anything the app runs.
+const CF_BEGIN = '# BEGIN Cloudflare Managed content\n';
+const CF_END = '# END Cloudflare Managed Content\n';
+
+async function withoutCloudflareRobotsHash(buf) {
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(buf);
+  } catch {
+    return null;
+  }
+  const begin = text.indexOf(CF_BEGIN);
+  const end = text.indexOf(CF_END);
+  if (begin < 0 || end < begin) return null;
+  const ours = text.slice(end + CF_END.length).replace(/^\n+/, '');
+  return sha256Hex(new TextEncoder().encode(ours));
 }
 
 function row(path, state, detail) {
@@ -119,6 +143,7 @@ async function run() {
     const pending = row(path, 'pending');
     results.append(pending);
     let got;
+    let body;
     try {
       // The file server answers /index.html with a redirect to /, and a
       // redirect is refused here on purpose — so the page that carries every
@@ -126,7 +151,8 @@ async function run() {
       const url = path === 'index.html' ? '/' : '/' + path;
       const res = await fetch(url, { cache: 'no-store', redirect: 'error' });
       if (!res.ok) throw new Error(String(res.status));
-      got = await sha256Hex(await res.arrayBuffer());
+      body = await res.arrayBuffer();
+      got = await sha256Hex(body);
     } catch (e) {
       pending.replaceWith(row(path, 'bad', T.fetchFailed(e.message)));
       bad++;
@@ -134,6 +160,9 @@ async function run() {
     }
     if (got === hash) {
       pending.replaceWith(row(path, 'ok'));
+      ok++;
+    } else if (path === 'robots.txt' && (await withoutCloudflareRobotsHash(body)) === hash) {
+      pending.replaceWith(row(path, 'ok', T.cloudflareRobots));
       ok++;
     } else {
       pending.replaceWith(row(path, 'bad', T.mismatch));

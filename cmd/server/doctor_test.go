@@ -45,6 +45,52 @@ func TestCompareDeliveryDetectsARewrittenPage(t *testing.T) {
 	}
 }
 
+// Cloudflare's managed robots.txt puts its content-signal terms and AI-crawler
+// rules in front of the origin's file. That and only that is let through: the
+// origin's own part must still arrive unchanged, and a block anywhere else, or
+// any other file, still fails.
+func TestCompareDeliveryAcceptsOnlyCloudflaresRobotsBlock(t *testing.T) {
+	const ours = "# Dead Drop\nUser-agent: *\nDisallow: /api/\n"
+	const managed = "# As a condition of accessing this website, you agree to abide by the following\n" +
+		"# content signals:\n\n# BEGIN Cloudflare Managed content\n\n\nUser-agent: *\n" +
+		"Content-Signal: search=yes,ai-train=no\nAllow: /\n\nUser-agent: GPTBot\nDisallow: /\n\n" +
+		"# END Cloudflare Managed Content\n\n"
+	serve := func(body string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+	}
+	origin := serve(ours)
+	defer origin.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for _, tc := range []struct {
+		name, path, edge string
+		ok               bool
+	}{
+		{"managed block in front", "/robots.txt", managed + ours, true},
+		{"managed block, our part altered", "/robots.txt", managed + ours + "Allow: /api/\n", false},
+		{"managed block after ours", "/robots.txt", ours + managed, false},
+		{"unmarked prefix", "/robots.txt", "User-agent: *\nAllow: /\n\n" + ours, false},
+		{"markers out of order", "/robots.txt",
+			"# END Cloudflare Managed Content\n# BEGIN Cloudflare Managed content\n" + ours, false},
+		{"managed block on another file", "/", managed + ours, false},
+	} {
+		edge := serve(tc.edge)
+		got := compareDelivery(client, origin.URL, edge.URL, []string{tc.path})
+		edge.Close()
+		if tc.ok && got.err != nil {
+			t.Errorf("%s: rejected: %v", tc.name, got.err)
+		}
+		if tc.ok && !strings.Contains(got.detail, "Cloudflare") {
+			t.Errorf("%s: the pass does not say what it let through: %q", tc.name, got.detail)
+		}
+		if !tc.ok && (got.err == nil || got.warn) {
+			t.Errorf("%s: not reported as a failure (err=%v warn=%v)", tc.name, got.err, got.warn)
+		}
+	}
+}
+
 // Being unable to reach the public URL is ordinary — split-horizon DNS, an
 // egress firewall — and must not be reported as tampering.
 func TestCompareDeliveryWarnsWhenTheEdgeIsUnreachable(t *testing.T) {
