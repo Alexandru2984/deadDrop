@@ -15,8 +15,11 @@
  * is kept. A photo's orientation can be kept in a minimal EXIF of its own, so
  * a portrait shot pasted into a document does not turn on its side.
  *
- * PNG text, EXIF and time chunks are removed outright: PNG has no length to
- * keep, and these chunks are never needed to draw the picture.
+ * A PNG or WebP keeps only the chunks it takes to draw it — colour profile
+ * and animation frames included — and loses the rest outright: text, EXIF,
+ * XMP, times, makers' private chunks. Neither format has a length to keep.
+ * Re-encoding them through a canvas instead used to turn an animated sticker
+ * into its first frame.
  */
 
 const APP0 = 0xe0;
@@ -121,7 +124,12 @@ const EXIF_HEADER = [0x45, 0x78, 0x69, 0x66, 0, 0]; // "Exif\0\0"
 /** The orientation tag of the EXIF block in [start, end), or 0. */
 function exifOrientation(bytes, start, end) {
   if (end - start < 14 || EXIF_HEADER.some((b, i) => bytes[start + i] !== b)) return 0;
-  const tiff = start + 6;
+  return tiffOrientation(bytes, start + 6, end);
+}
+
+/** The orientation tag of the TIFF structure at `tiff`, or 0. */
+function tiffOrientation(bytes, tiff, end) {
+  if (end - tiff < 8) return 0;
   const little = bytes[tiff] === 0x49 && bytes[tiff + 1] === 0x49;
   if (!little && !(bytes[tiff] === 0x4d && bytes[tiff + 1] === 0x4d)) return 0;
   const u16 = (at) => (at + 2 > end ? -1 : little ? bytes[at] | (bytes[at + 1] << 8) : (bytes[at] << 8) | bytes[at + 1]);
@@ -155,31 +163,89 @@ function writeOrientation(bytes, start, end, orientation) {
 }
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const PNG_DROPPED = new Set(['eXIf', 'tEXt', 'iTXt', 'zTXt', 'tIME']);
+// What it takes to draw a PNG, colour-managed and animated. Everything else —
+// text, EXIF, XMP, times, a maker's private chunks, content credentials — is
+// description, and goes.
+const PNG_KEPT = new Set([
+  'IHDR', 'PLTE', 'IDAT', 'IEND', 'tRNS', 'cHRM', 'gAMA', 'iCCP', 'sBIT', 'sRGB',
+  'cICP', 'mDCV', 'cLLI', 'bKGD', 'pHYs', 'sPLT', 'hIST', 'acTL', 'fcTL', 'fdAT',
+]);
 
 /**
- * The PNG without its text, EXIF and time chunks, or null when there were
- * none or the bytes are not a PNG this can walk.
+ * A copy of the PNG with only the chunks it needs to be drawn, ending at
+ * IEND. Null when it is not a PNG this can walk to its end, or when it says
+ * it is turned on its side — then it is re-encoded, which applies that.
  */
-export function stripPngMeta(bytes) {
+export function cleanPng(bytes) {
   if (bytes.length < 8 || PNG_SIGNATURE.some((b, i) => bytes[i] !== b)) return null;
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const kept = [bytes.subarray(0, 8)];
-  let dropped = false;
   let pos = 8;
-  while (pos + 12 <= bytes.length) {
+  for (;;) {
+    if (pos + 12 > bytes.length) return null;
     const length = view.getUint32(pos);
     const chunkEnd = pos + 12 + length;
     if (chunkEnd > bytes.length) return null;
     const type = String.fromCharCode(...bytes.subarray(pos + 4, pos + 8));
-    if (PNG_DROPPED.has(type)) dropped = true;
-    else kept.push(bytes.subarray(pos, chunkEnd));
+    if (type === 'eXIf' && tiffOrientation(bytes, pos + 8, pos + 8 + length) > 1) return null;
+    if (PNG_KEPT.has(type)) kept.push(bytes.subarray(pos, chunkEnd));
     pos = chunkEnd;
     if (type === 'IEND') break;
   }
-  if (!dropped) return null;
-  const out = new Uint8Array(kept.reduce((n, part) => n + part.length, 0));
+  return concat(kept);
+}
+
+/** The PNG without its descriptive chunks, or null when it had none. */
+export function stripPngMeta(bytes) {
+  const out = cleanPng(bytes);
+  return out && out.length !== bytes.length ? out : null;
+}
+
+// What it takes to draw a WebP, still or animated.
+const WEBP_KEPT = new Set(['VP8 ', 'VP8L', 'VP8X', 'ALPH', 'ICCP', 'ANIM', 'ANMF']);
+const WEBP_EXIF = 0x08;
+const WEBP_XMP = 0x04;
+
+/**
+ * A copy of the WebP without its EXIF, XMP and unknown chunks, its header
+ * flags and size made to match. Null when it is not a WebP this can walk, or
+ * when its EXIF turns it on its side — then it is re-encoded.
+ */
+export function cleanWebp(bytes) {
+  const tag = (at) => String.fromCharCode(...bytes.subarray(at, at + 4));
+  if (bytes.length < 20 || tag(0) !== 'RIFF' || tag(8) !== 'WEBP') return null;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const riffEnd = 8 + view.getUint32(4, true);
+  if (riffEnd > bytes.length) return null;
+  const kept = [];
+  let pos = 12;
+  while (pos + 8 <= riffEnd) {
+    const length = view.getUint32(pos + 4, true);
+    const chunkEnd = pos + 8 + length + (length & 1);
+    if (chunkEnd > riffEnd) return null;
+    const type = tag(pos);
+    if (type === 'EXIF') {
+      const data = pos + 8;
+      const tiff = EXIF_HEADER.every((b, i) => bytes[data + i] === b) ? data + 6 : data;
+      if (tiffOrientation(bytes, tiff, data + length) > 1) return null;
+    }
+    if (WEBP_KEPT.has(type)) kept.push(bytes.slice(pos, chunkEnd));
+    pos = chunkEnd;
+  }
+  if (pos !== riffEnd || !kept.length) return null;
+  const vp8x = kept.find((c) => String.fromCharCode(...c.subarray(0, 4)) === 'VP8X');
+  if (vp8x) vp8x[8] &= ~(WEBP_EXIF | WEBP_XMP);
+  const body = concat(kept);
+  const out = new Uint8Array(12 + body.length);
+  out.set(bytes.subarray(0, 12));
+  new DataView(out.buffer).setUint32(4, 4 + body.length, true);
+  out.set(body, 12);
+  return out;
+}
+
+function concat(parts) {
+  const out = new Uint8Array(parts.reduce((n, part) => n + part.length, 0));
   let at = 0;
-  for (const part of kept) { out.set(part, at); at += part.length; }
+  for (const part of parts) { out.set(part, at); at += part.length; }
   return out;
 }

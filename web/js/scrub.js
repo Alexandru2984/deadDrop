@@ -7,12 +7,14 @@
  * other person intact, and a peer is exactly who should not get a home address
  * from a picture of a cat.
  *
- * A JPEG is cleaned without re-encoding (imagemeta.js): its descriptive
- * segments are blanked and anything after the picture cut off, so every pixel
- * and the colour profile stay as the camera wrote them, and a portrait photo
- * keeps a minimal EXIF holding only its orientation. Other pictures, and a
- * JPEG too odd to walk, are re-encoded through a canvas, which keeps the
- * pixels and nothing else; orientation is applied while decoding.
+ * JPEG, PNG and WebP are cleaned without re-encoding (imagemeta.js): a
+ * JPEG's descriptive segments are blanked and anything after the picture cut
+ * off, a PNG or WebP keeps only the chunks it takes to draw it. Every pixel,
+ * the colour profile and an animation's frames stay as they were, and a
+ * portrait photo keeps a minimal EXIF holding only its orientation. HEIC,
+ * AVIF and TIFF, and a file too odd to walk, are re-encoded through a
+ * canvas, which keeps the pixels and nothing else; orientation is applied
+ * while decoding.
  *
  * A video from a phone carries the same in its MPEG-4 or QuickTime boxes:
  * ©xyz under udta, com.apple.quicktime.location in meta, XMP in a uuid box,
@@ -26,7 +28,10 @@
 
 import { DOCUMENTS, DOCUMENT_EXTENSIONS, scrubDocument } from './docscrub.js';
 import { scrubPdf } from './pdfscrub.js';
-import { cleanJpeg } from './imagemeta.js';
+import { cleanJpeg, cleanPng, cleanWebp } from './imagemeta.js';
+
+// Cleaned where they lie, losslessly, before a canvas is tried.
+const LOSSLESS = { 'image/jpeg': cleanJpeg, 'image/png': cleanPng, 'image/webp': cleanWebp };
 
 // Formats a canvas can write back without changing what kind of file it is.
 const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -166,8 +171,8 @@ function blankBoxes(bytes, start, end, depth) {
 export async function scrubImage(file) {
   const type = typeOf(file);
   if (!SCRUBBABLE.has(type) && !CONVERTED.has(type)) return file;
-  if (type === 'image/jpeg') {
-    const clean = cleanJpeg(new Uint8Array(await file.arrayBuffer()));
+  if (Object.hasOwn(LOSSLESS, type)) {
+    const clean = LOSSLESS[type](new Uint8Array(await file.arrayBuffer()));
     if (clean) return new File([clean], scrubbedName(file.name, type), { type, lastModified: 0 });
   }
   const converting = CONVERTED.has(type);

@@ -20,7 +20,7 @@
 import { scrubMovie, scrubbedName, isScrubbable, scrubFile, typeOf } from '../web/js/scrub.js';
 import { deflateRawSync } from 'node:zlib';
 import { zip, crc32 } from './lib/zip.mjs';
-import { blankJpegMeta, jpegEnd, stripPngMeta } from '../web/js/imagemeta.js';
+import { blankJpegMeta, jpegEnd, stripPngMeta, cleanPng, cleanWebp } from '../web/js/imagemeta.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -273,6 +273,44 @@ ok(!pngOut.includes(AUTHOR) && !pngOut.includes('eXIf') && !pngOut.includes('iTX
   'a PNG loses its text, EXIF and time chunks');
 ok(pngOut.equals(Buffer.concat([png.subarray(0, 8), IHDR, IDAT, IEND])), 'and keeps every other chunk byte for byte');
 ok(stripPngMeta(Buffer.concat([png.subarray(0, 8), IHDR, IDAT, IEND])) === null, 'a clean PNG is left as it is');
+
+// Sent on its own, a PNG keeps only what it takes to draw it: an animated
+// one keeps its frames, a colour profile stays, a maker's private chunk and
+// anything after the end go. One turned on its side is left to the canvas.
+const ICCP = chunk('iCCP', 'Display P3\0\0profile');
+const apng = Buffer.concat([png.subarray(0, 8), IHDR, chunk('acTL', '\0\0\0\x02\0\0\0\0'), ICCP,
+  chunk('fcTL', 'frame-one-control-26b'), IDAT, chunk('prVt', `device ${AUTHOR}`), chunk('fcTL', 'frame-two-control-26b'),
+  chunk('fdAT', 'frame-two'), chunk('tEXt', `Author\0${AUTHOR}`), IEND, Buffer.from('appended after the end')]);
+const apngOut = Buffer.from(cleanPng(apng));
+ok(!apngOut.includes(AUTHOR) && !apngOut.includes('prVt') && !apngOut.includes('appended'),
+  "a PNG sent on its own loses text, a maker's private chunk and anything after its end");
+ok(['acTL', 'fcTL', 'fdAT', 'iCCP'].every((t) => apngOut.includes(t)) && apngOut.subarray(-IEND.length).equals(IEND),
+  'and keeps its animation frames and colour profile');
+const rotatedPng = Buffer.concat([png.subarray(0, 8), IHDR, chunk('eXIf', exifBody(6).slice(6)), IDAT, IEND]);
+ok(cleanPng(rotatedPng) === null, 'a PNG whose EXIF turns it is left to be re-encoded upright');
+
+const riffChunk = (type, data) => {
+  const b = Buffer.from(data, 'latin1');
+  const len = Buffer.alloc(4); len.writeUInt32LE(b.length);
+  return Buffer.concat([Buffer.from(type, 'latin1'), len, b, b.length & 1 ? Buffer.from([0]) : Buffer.alloc(0)]);
+};
+const riff = (...chunks) => {
+  const body = Buffer.concat([Buffer.from('WEBP'), ...chunks]);
+  const len = Buffer.alloc(4); len.writeUInt32LE(body.length);
+  return Buffer.concat([Buffer.from('RIFF'), len, body]);
+};
+const VP8X = riffChunk('VP8X', '\x3e\0\0\0\x09\0\0\x09\0\0'); // ICC, alpha, EXIF, XMP, animation
+const ANIM = riffChunk('ANIM', '\0\0\0\0\0\0');
+const ANMF = riffChunk('ANMF', 'frame data, odd'); // odd length: padded
+const webp = riff(VP8X, riffChunk('ICCP', 'profile'), ANIM, ANMF, ANMF,
+  riffChunk('EXIF', exifBody(1).slice(6)), riffChunk('XMP ', `<x:xmpmeta>${AUTHOR}</x:xmpmeta>`), riffChunk('ABCD', 'Alice-Phone private'));
+const webpOut = Buffer.from(cleanWebp(webp));
+ok(!webpOut.includes(AUTHOR) && !webpOut.includes('Alice-Phone') && !webpOut.includes('EXIF') && !webpOut.includes(GPS_TEXT),
+  'a WebP loses its EXIF, XMP and unknown chunks');
+ok(webpOut.readUInt32LE(4) === webpOut.length - 8 && webpOut[20] === 0x32 && webpOut.includes(ANMF) && webpOut.indexOf(ANMF) !== webpOut.lastIndexOf(ANMF),
+  'its header says so — size and flags — and its animation frames stay');
+ok(cleanWebp(riff(VP8X, riffChunk('EXIF', exifBody(8)))) === null, 'one whose EXIF turns it is left to be re-encoded');
+ok(cleanWebp(Buffer.from('RIFF\x10\0\0\0WEBPVP8 \xff\xff\0\0')) === null, 'a WebP that overruns itself is not walked');
 
 // Pasted into a Word document, then into a PDF.
 const withPhoto = zip([

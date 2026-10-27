@@ -694,6 +694,44 @@ ok(pastedPhoto.size === '20x30' && !pastedPhoto.make && pastedPhoto.same,
 ok(pastedPhoto.sentSize === '20x30' && !pastedPhoto.sentMake && pastedPhoto.lossless,
   'a JPEG sent on its own loses its metadata without losing a pixel, and stays upright');
 
+// A WebP is cleaned chunk by chunk, not re-encoded — re-encoding is what
+// used to turn an animated sticker into its first frame. Built here from a
+// real WebP, wrapped the way phones and editors write it, with EXIF and XMP.
+const webpCheck = await alice.eval(`(async () => {
+  const c = document.createElement('canvas'); c.width = 24; c.height = 16;
+  c.getContext('2d').fillRect(0, 0, 12, 8);
+  const plain = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/webp'))).arrayBuffer());
+  if (String.fromCharCode(...plain.subarray(0, 4), ...plain.subarray(8, 12)) !== 'RIFFWEBP') return { skipped: true };
+  const enc = new TextEncoder();
+  const chunk = (type, data) => {
+    const out = new Uint8Array(8 + data.length + (data.length & 1));
+    out.set(enc.encode(type)); new DataView(out.buffer).setUint32(4, data.length, true); out.set(data, 8);
+    return out;
+  };
+  // Whatever the encoder wrote — a plain VP8 or an extended file — gains an
+  // extended header saying it has EXIF and XMP, and the two chunks.
+  let chunks = plain.slice(12);
+  if (String.fromCharCode(...chunks.subarray(0, 4)) === 'VP8X') chunks[8] |= 0x0c;
+  else {
+    const vp8x = new Uint8Array(10); vp8x[0] = 0x0c; vp8x[4] = 23; vp8x[7] = 15;
+    chunks = new Uint8Array([...chunk('VP8X', vp8x), ...chunks]);
+  }
+  const parts = [enc.encode('WEBP'), chunks,
+    chunk('EXIF', enc.encode('MM\\0*AlicePhone-maker')), chunk('XMP ', enc.encode('<x:xmpmeta>Alice Example</x:xmpmeta>'))];
+  const body = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0; for (const p of parts) { body.set(p, at); at += p.length; }
+  const file = new Uint8Array(8 + body.length);
+  file.set(enc.encode('RIFF')); new DataView(file.buffer).setUint32(4, body.length, true); file.set(body, 8);
+  const { scrubImage } = await import('/js/scrub.js');
+  const out = new Uint8Array(await (await scrubImage(new File([file], 'sticker.webp', { type: 'image/webp' }))).arrayBuffer());
+  const bitmap = await createImageBitmap(new Blob([out], { type: 'image/webp' }));
+  return { size: bitmap.width + 'x' + bitmap.height, alice: new TextDecoder().decode(out).includes('Alice'),
+    vp8Kept: new TextDecoder('latin1').decode(out).includes(new TextDecoder('latin1').decode(plain.subarray(20, 60))) };
+})()`);
+if (webpCheck?.skipped) console.log('  - WebP chunk cleaning: this browser cannot write a WebP to start from, skipped');
+else ok(webpCheck.size === '24x16' && !webpCheck.alice && webpCheck.vp8Kept,
+  `a WebP loses its EXIF and XMP without being re-encoded, and still decodes (${JSON.stringify(webpCheck)})`);
+
 // A photo a canvas reads but cannot write — HEIC, AVIF — leaves as a clean
 // JPEG. (A PNG under a HEIC label stands in here: what decodes it is the
 // browser's sniffing, and Chromium has no HEIC decoder to show this with.)

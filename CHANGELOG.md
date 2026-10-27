@@ -162,6 +162,10 @@ compare rather than take a hash on trust.
   orientation kept on its own, and a motion photo's video or Samsung's
   capture times after the picture cut off. Every pixel is the camera's. A
   JPEG too malformed to walk is still re-encoded.
+- **An animated WebP sticker or PNG stays animated.** Re-encoding through a
+  canvas kept only the first frame. PNG and WebP now keep only the chunks it
+  takes to draw them — pixels, colour profile, animation frames — and lose
+  text, EXIF, XMP, times and makers' private chunks, without re-encoding.
 - **Back no longer ends a conversation at a touch.** A room lives only in
   the page, and the back button — or a phone's edge swipe — left it, keys and
   all. Back now closes what is open over the conversation, then asks for a
