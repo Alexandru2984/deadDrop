@@ -131,13 +131,20 @@ const inspect = (bytes) => {
   writeFileSync(path, bytes);
   // Reads every part, checks every CRC, and reports what a reader sees.
   return JSON.parse(execFileSync('python3', ['-I', '-c', `
-import json, sys, zipfile
+import json, sys, zipfile, xml.parsers.expat
+def wellformed(data):
+    try:
+        xml.parsers.expat.ParserCreate().Parse(data, True)
+        return True
+    except xml.parsers.expat.ExpatError:
+        return False
 z = zipfile.ZipFile(sys.argv[1])
 bad = z.testzip()
 print(json.dumps({
   "bad": bad,
   "comment": z.comment.decode("latin1"),
-  "parts": {i.filename: z.read(i).decode("utf-8") for i in z.infolist()},
+  "parts": {i.filename: z.read(i).decode("latin1" if i.filename.endswith(".bin") else "utf-8") for i in z.infolist()},
+  "malformed": [i.filename for i in z.infolist() if i.filename.endswith((".xml", ".rels")) and not wellformed(z.read(i))],
   "times": sorted({i.date_time for i in z.infolist()}),
   "extra": sum(len(i.extra) + len(i.comment) for i in z.infolist()),
 }))`, path], { encoding: 'utf8' }));
@@ -178,6 +185,117 @@ try {
   ok(odtSeen.parts['meta.xml'].includes('office:version="1.3"'), 'and keeps the version its meta part declared');
   ok(odtOut.subarray(30, 38).toString() === 'mimetype' && odtOut.readUInt16LE(8) === 0,
     'mimetype is still first and stored');
+
+  // What names the person out of their sight: where the template was, the
+  // accounts behind comment authors, the printer and its driver's notes.
+  const OFFICE_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  const EMAIL = 'alice@example.com';
+  const LIVE_ID = '9c4e0d1a2b3c4d5e';
+  const devmode = () => {
+    const d = Buffer.alloc(220 + 64);
+    d.write('\\\\PRINT01\\Floor3-HP', 0, 'utf16le');
+    d.writeUInt16LE(0x0401, 64); // dmSpecVersion
+    d.writeUInt16LE(220, 68); // dmSize
+    d.writeUInt16LE(64, 70); // dmDriverExtra
+    d.writeUInt16LE(2, 76); // landscape
+    d.write('A4', 102, 'utf16le'); // dmFormName
+    d.write('alice JOB-1234', 220, 'utf16le');
+    return d;
+  };
+  const traced = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: BODY },
+    { name: 'word/_rels/document.xml.rels', data: `<Relationships><Relationship Id="rId1" Type="${OFFICE_REL}/styles" Target="styles.xml"/></Relationships>` },
+    { name: 'word/_rels/settings.xml.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="rId2" Type="${OFFICE_REL}/mailMergeSource" Target="file:///C:\\Users\\alice\\Documents\\Guests.xlsx" TargetMode="External"/>` +
+      `<Relationship Id="rId1" Type="${OFFICE_REL}/attachedTemplate" TargetMode='External' Target='file:///C:\\Users\\alice\\AppData\\Roaming\\Microsoft\\Templates\\Normal.dotm'/></Relationships>` },
+    { name: 'word/people.xml', data: '<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">' +
+      `<w15:person w15:author="${AUTHOR}"><w15:presenceInfo w15:providerId="AD" w15:userId="S::${EMAIL}::4f1c2d3e"/></w15:person>` +
+      `<w15:person w15:author="Bob &quot;B&quot; Jones"><w15:presenceInfo w15:providerId="Windows Live" w15:userId="${LIVE_ID}"/></w15:person></w15:people>` },
+    { name: 'word/printerSettings/printerSettings1.bin', data: devmode() },
+  ]);
+  const tracedOut = Buffer.from(await (await scrubFile(new File([traced], 'Invitation.docx', { type: '' }))).arrayBuffer());
+  const tracedSeen = inspect(tracedOut);
+  const utf16 = (text) => Buffer.from(text, 'utf16le').toString('latin1');
+  ok(tracedSeen.bad === null && tracedSeen.malformed.length === 0, 'the rewritten parts are still well-formed XML');
+  const rels = tracedSeen.parts['word/_rels/settings.xml.rels'];
+  ok(!rels.includes('alice') && rels.includes('Target="Normal.dotm"') && rels.includes('Target="Guests.xlsx"'),
+    "a Word template's path, with the user name in it, keeps only the file name — a mail merge's data too");
+  ok(tracedSeen.parts['word/_rels/document.xml.rels'].includes('Target="styles.xml"'), 'the links inside the document are left alone');
+  const people = tracedSeen.parts['word/people.xml'];
+  ok(!people.includes(EMAIL) && !people.includes(LIVE_ID) && !/providerId="(?:AD|Windows Live)"/.test(people),
+    "the work e-mail and Microsoft account behind comment authors' names are gone");
+  ok(people.includes(`w15:userId="${AUTHOR}"`) && people.includes('w15:userId="Bob &quot;B&quot; Jones"')
+    && (people.match(/w15:providerId="None"/g) || []).length === 2,
+    "and each says what Office writes for someone not signed in: the name, provider None");
+  const printer = Buffer.from(tracedSeen.parts['word/printerSettings/printerSettings1.bin'], 'latin1');
+  ok(printer.length === devmode().length && !printer.includes(utf16('PRINT01')) && !printer.includes(utf16('alice')),
+    "the printer's name and its driver's notes on the user are zeroed");
+  ok(printer.readUInt16LE(68) === 220 && printer.readUInt16LE(76) === 2 && printer.includes(utf16('A4')),
+    'while the paper, the orientation and the settings around them stay');
+
+  const book = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'xl/workbook.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x15">' +
+      '<fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="27425"/><workbookPr defaultThemeVersion="202300"/>' +
+      '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="x15">' +
+      '<x15ac:absPath url="C:\\Users\\alice\\OneDrive - Example Holdings\\Budget\\" xmlns:x15ac="http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac"/>' +
+      '</mc:Choice></mc:AlternateContent><bookViews><workbookView xWindow="-110" yWindow="-110"/></bookViews>' +
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets><calcPr calcId="191029"/></workbook>' },
+    { name: 'xl/persons/person.xml', data: '<personList xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">' +
+      `<person displayName="${AUTHOR}" id="{6A3E1F02-1B2C-4D5E-8F90-A1B2C3D4E5F6}" userId="${EMAIL}" providerId="AD"/></personList>` },
+  ]);
+  const bookSeen = inspect(Buffer.from(await (await scrubFile(new File([book], 'Budget.xlsx', { type: '' }))).arrayBuffer()));
+  const workbook = bookSeen.parts['xl/workbook.xml'];
+  ok(bookSeen.malformed.length === 0 && !workbook.includes('alice') && !workbook.includes('absPath'),
+    'the folder Excel last saved a workbook in is gone');
+  ok(workbook.includes('<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>') && workbook.includes('<bookViews>'),
+    'and the rest of the workbook is as it was');
+  ok(bookSeen.parts['xl/persons/person.xml'].includes(`userId="${AUTHOR}" providerId="None"`) && !bookSeen.parts['xl/persons/person.xml'].includes(EMAIL),
+    "so is the account behind an Excel comment's author");
+
+  const deck = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'ppt/authors.xml', data: '<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main">' +
+      `<p188:author id="{1A2B3C4D-0000-4000-8000-000000000001}" name="${AUTHOR}" initials="AE" userId="S::${EMAIL}::8d3c" providerId="AD"/></p188:authorLst>` },
+    { name: 'ppt/commentAuthors.xml', data: '<p:cmAuthorLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+      `<p:cmAuthor id="1" name="${AUTHOR}" initials="AE" lastIdx="1" clrIdx="0"><p:extLst><p:ext uri="{19B8F6BF-5375-455C-9EA6-DF929625EA0E}">` +
+      `<p15:presenceInfo xmlns:p15="http://schemas.microsoft.com/office/powerpoint/2012/main" userId="S::${EMAIL}::8d3c" providerId="AD"/>` +
+      '</p:ext></p:extLst></p:cmAuthor></p:cmAuthorLst>' },
+  ]);
+  const deckSeen = inspect(Buffer.from(await (await scrubFile(new File([deck], 'Pitch.pptx', { type: '' }))).arrayBuffer()));
+  ok(deckSeen.malformed.length === 0 && !JSON.stringify(deckSeen.parts).includes(EMAIL)
+    && deckSeen.parts['ppt/authors.xml'].includes(`name="${AUTHOR}" initials="AE" userId="${AUTHOR}" providerId="None"`)
+    && deckSeen.parts['ppt/commentAuthors.xml'].includes(`userId="${AUTHOR}" providerId="None"`),
+    "and behind a PowerPoint comment's, in both the new and the older list");
+
+  const SETUP = Buffer.from('PRINT01 Floor3 alice JOB-1234').toString('base64');
+  const odtPrinted = zip([
+    { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', deflate: false },
+    { name: 'content.xml', data: '<office:document-content office:version="1.3"/>' },
+    { name: 'settings.xml', data: '<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0">' +
+      '<office:settings><config:config-item-set config:name="ooo:configuration-settings">' +
+      '<config:config-item config:name="PrinterName" config:type="string">PRINT01 Floor3 (alice)</config:config-item>' +
+      `<config:config-item config:type="base64Binary" config:name="PrinterSetup">${SETUP}</config:config-item>` +
+      '<config:config-item config:name="PrinterIndependentLayout" config:type="string">high-resolution</config:config-item>' +
+      '</config:config-item-set><config:config-item-set config:name="ooo:view-settings">' +
+      '<config:config-item config:name="PrinterName" config:type="string"/><config:config-item config:name="ViewId" config:type="string">view2</config:config-item>' +
+      '</config:config-item-set></office:settings></office:document-settings>' },
+  ]);
+  const odtPrintedSeen = inspect(Buffer.from(await (await scrubFile(new File([odtPrinted], 'notes.odt', { type: '' }))).arrayBuffer()));
+  const odfSettings = odtPrintedSeen.parts['settings.xml'];
+  ok(odtPrintedSeen.malformed.length === 0 && !odfSettings.includes('alice') && !odfSettings.includes(SETUP),
+    "LibreOffice's printer name and settings are emptied");
+  ok(odfSettings.includes('config:name="PrinterIndependentLayout" config:type="string">high-resolution<') && odfSettings.includes('>view2<'),
+    'and its other settings kept');
+
+  const untraced = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'xl/workbook.xml', data: '<workbook><sheets/></workbook>' },
+  ]);
+  ok(Buffer.from(await (await scrubFile(new File([untraced], 'b.xlsx', { type: '' }))).arrayBuffer()).includes(deflateRawSync(Buffer.from('<workbook><sheets/></workbook>'))),
+    'a part with nothing to remove is still carried as it was compressed');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
@@ -194,6 +312,8 @@ const encrypted = Buffer.from(docx);
 encrypted.writeUInt16LE(encrypted.readUInt16LE(encrypted.indexOf(Buffer.from([0x50, 0x4b, 1, 2])) + 8) | 1,
   encrypted.indexOf(Buffer.from([0x50, 0x4b, 1, 2])) + 8);
 ok(await asked(encrypted) === 'scrub.cannotReadDoc', 'and one with an encrypted part');
+ok(await asked(zip([{ name: '[Content_Types].xml', data: '<Types/>' }, { name: 'xl/workbook.xml', data: Buffer.from('\ufeff<workbook/>', 'utf16le') }]), 'b.xlsx') === 'scrub.cannotReadDoc',
+  'and one whose part to clean is not in UTF-8');
 const truncated = docx.subarray(0, docx.length - 40);
 ok(await asked(truncated) === 'scrub.cannotReadDoc', 'and a truncated one');
 const tricky = zip([

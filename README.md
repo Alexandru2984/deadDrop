@@ -169,8 +169,13 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   location, device and time boxes blanked in place. Word, Excel, PowerPoint and
   OpenDocument files have their property parts emptied — author, last editor,
   company, template path, times, editing time, custom properties — and every
-  part's archive timestamp set to 1980; the content, including comments and
-  tracked changes with their authors, is left as written. A PDF's information
+  part's archive timestamp set to 1980. What names the person out of sight
+  goes too: Word's template and mail merge paths keep only their file name,
+  Excel's note of the folder it saved in is dropped, comment authors' work
+  e-mail or Microsoft account becomes what Office writes for someone signed
+  out, and the printer's name and its driver's own data are zeroed, in
+  Office's and LibreOffice's copies alike. The content, including comments
+  and tracked changes with their authors, is left as written. A PDF's information
   dictionary (in every revision) and XMP streams become spaces in place, so
   the file keeps its length and every offset. Photos inside documents and
   PDFs — kept as the original JPEG, GPS included — have their EXIF, XMP, IPTC

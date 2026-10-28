@@ -119,6 +119,18 @@ compare rather than take a hash on trust.
   and linearization stay valid. An encrypted PDF, one whose properties sit in
   a compressed object stream, and a signed one — signed Office files too —
   are put to the person: cleaning would fail, or break the signature.
+- **Office documents also lose what names the person out of sight.** Word
+  keeps where it found the template — `C:\Users\alice\AppData\…\Normal.dotm`,
+  a user name in plain text — and a mail merge's data file the same way;
+  each keeps only its file name. Excel notes the folder a workbook was last
+  saved in; that goes. Behind every comment author's name Office keeps the
+  account they were signed in with — a work e-mail with a directory ID, or a
+  Microsoft account's number — which becomes what Office writes for someone
+  signed out: the name again, provider "None". The printer a document was
+  set up for — on a company network, its office and floor — is zeroed with
+  the block its driver keeps, where some keep the user's name for job
+  accounting; LibreOffice's copy of it is emptied. A part that cannot be read
+  as text is put to the person.
 - **Photos inside documents and PDFs** lose their GPS position, time, device,
   XMP and comments. Word, PowerPoint and PDFs keep a pasted phone photo as
   the original JPEG; its descriptive segments are blanked in place, without
