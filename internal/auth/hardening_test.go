@@ -787,6 +787,15 @@ func TestSessionTokensAreNotKeptInMemory(t *testing.T) {
 	if _, ok := sm.get(other); ok {
 		t.Fatal("the other session survived")
 	}
+	// Remembering that it was signed out keeps no cookie either.
+	for key := range sm.revoked {
+		if key == other || strings.Contains(key, other) {
+			t.Fatal("the revocation list holds the cookie value itself")
+		}
+	}
+	if !sm.wasRevoked(other) || sm.wasRevoked(token) {
+		t.Fatal("a signed-out session is not told apart from a live one")
+	}
 	sm.delete(token)
 	if _, ok := sm.get(token); ok {
 		t.Fatal("logout did not remove a hashed session")
@@ -918,5 +927,109 @@ func TestAnAccountsOwnSourceIsNotSpacedOut(t *testing.T) {
 		if ok, _ := l.admitChallenge("alice", "home"); !ok {
 			t.Fatal("the owner's recent source was held up by someone else's guessing")
 		}
+	}
+}
+
+func signOutOthersRequest(t *testing.T, h *Handler, token string, proof any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, _ := json.Marshal(proof)
+	req := httptest.NewRequest(http.MethodPost, "/api/account/signout-others", bytes.NewReader(body))
+	req.AddCookie(&http.Cookie{Name: "dd_session", Value: token})
+	w := httptest.NewRecorder()
+	h.SignOutOthers(w, req)
+	return w
+}
+
+// Signing out everywhere else keeps this session, ends the rest, and wants
+// the password: a stolen cookie must not be able to throw the owner out. A
+// decoy session reaches only decoy sessions, and answers the same way.
+func TestSignOutOthers(t *testing.T) {
+	h := newTestHandler(t)
+	salt, verifier := testSRPCredential("alice", "primary password")
+	if err := h.store.registerSRP("alice", salt, verifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	duressSalt, duressVerifier := testSRPCredential("alice", "decoy password")
+	if err := h.store.setDuress("alice", duressSalt, duressVerifier, defaultKdf); err != nil {
+		t.Fatal(err)
+	}
+	bob := createTestSession(t, h, "bob", false)
+	here := createTestSession(t, h, "alice", false)
+	laptop := createTestSession(t, h, "alice", false)
+	decoyHere := createTestSession(t, h, "alice", true)
+	decoyElsewhere := createTestSession(t, h, "alice", true)
+
+	// The cookie alone, or the wrong password, does nothing.
+	if w := signOutOthersRequest(t, h, here, map[string]string{}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("cookie only: got %d, want 401", w.Code)
+	}
+	if w := signOutOthersRequest(t, h, here, freshProof(t, h, "alice", "not the password")); w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password: got %d, want 401", w.Code)
+	}
+	if _, ok := h.sess.get(laptop); !ok {
+		t.Fatal("a refused request ended a session")
+	}
+
+	// From a decoy: only the other decoy session goes.
+	w := signOutOthersRequest(t, h, decoyHere, freshProof(t, h, "alice", "decoy password"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("decoy: got %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Status string `json:"status"`
+		Ended  int    `json:"ended"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Ended != 1 {
+		t.Fatalf("decoy answer: %s", w.Body.String())
+	}
+	if _, ok := h.sess.get(decoyElsewhere); ok {
+		t.Fatal("the decoy's other session survived")
+	}
+	for _, token := range []string{decoyHere, here, laptop} {
+		if _, ok := h.sess.get(token); !ok {
+			t.Fatal("a decoy session reached past its own kind, or ended itself")
+		}
+	}
+
+	// From the real account: everything else of alice's goes, decoy included;
+	// this session and anyone else's stay.
+	decoyAgain := createTestSession(t, h, "alice", true)
+	w = signOutOthersRequest(t, h, here, freshProof(t, h, "alice", "primary password"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("primary: got %d: %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || got.Ended != 3 {
+		t.Fatalf("primary answer: %s", w.Body.String())
+	}
+	for _, token := range []string{laptop, decoyHere, decoyAgain} {
+		if _, ok := h.sess.get(token); ok {
+			t.Fatal("another session of the account survived")
+		}
+	}
+	if _, ok := h.sess.get(here); !ok {
+		t.Fatal("the session that asked was ended")
+	}
+	if _, ok := h.sess.get(bob); !ok {
+		t.Fatal("another account's session was ended")
+	}
+
+	// The browser that was signed out is told so; one that never had a
+	// session, or whose session expired, is told it expired.
+	me := func(token string) string {
+		req := httptest.NewRequest(http.MethodGet, "/api/me", nil)
+		req.AddCookie(&http.Cookie{Name: "dd_session", Value: token})
+		w := httptest.NewRecorder()
+		h.Me(w, req)
+		var body struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return fmt.Sprint(w.Code, " ", body.Error)
+	}
+	if got := me(laptop); got != "401 signed out" {
+		t.Fatalf("signed-out browser: %s", got)
+	}
+	if got := me("never-a-session"); got != "401 session expired" {
+		t.Fatalf("unknown token: %s", got)
 	}
 }

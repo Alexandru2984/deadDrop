@@ -68,6 +68,7 @@ type Peer struct {
 	send         chan []byte
 	joinTimer    *time.Timer
 	sessionValid func() bool
+	sessionGone  func() bool
 	closeOnce    sync.Once
 	windowAt     time.Time
 	windowMsgs   int
@@ -80,7 +81,16 @@ type Peer struct {
 type ConnectionAccess struct {
 	Principal string
 	Valid     func() bool
+	// Revoked, when set, tells an ended session from an expired one, so the
+	// browser can be told it was signed out and end what it still has open.
+	Revoked func() bool
 }
+
+// The close reasons a browser acts on. Anything else is only reported.
+const (
+	reasonSessionExpired = "session expired"
+	reasonSessionRevoked = "session revoked"
+)
 
 // SignalMessage is the envelope for all signaling-layer messages.
 type SignalMessage struct {
@@ -135,6 +145,7 @@ func HandleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request, access Co
 		conn:         conn,
 		send:         make(chan []byte, sendQueueSize),
 		sessionValid: access.Valid,
+		sessionGone:  access.Revoked,
 		windowAt:     time.Now(),
 		principal:    access.Principal,
 	}
@@ -178,7 +189,7 @@ func (p *Peer) readPump() {
 			return
 		}
 		if !p.sessionValid() {
-			p.closeWithPolicy("session expired")
+			p.closeWithPolicy(p.sessionEndReason())
 			return
 		}
 		if !p.allowInbound(len(raw)) {
@@ -209,7 +220,7 @@ func (p *Peer) writePump() {
 		select {
 		case msg, ok := <-p.send:
 			if !p.sessionValid() {
-				p.closeWithPolicy("session expired")
+				p.closeWithPolicy(p.sessionEndReason())
 				return
 			}
 			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
@@ -224,7 +235,7 @@ func (p *Peer) writePump() {
 			}
 		case <-ticker.C:
 			if !p.sessionValid() {
-				p.closeWithPolicy("session expired")
+				p.closeWithPolicy(p.sessionEndReason())
 				return
 			}
 			if err := p.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
@@ -235,7 +246,7 @@ func (p *Peer) writePump() {
 			}
 		case <-sessionTicker.C:
 			if !p.sessionValid() {
-				p.closeWithPolicy("session expired")
+				p.closeWithPolicy(p.sessionEndReason())
 				return
 			}
 		}
@@ -316,6 +327,14 @@ func (p *Peer) sendError(message string) {
 	if !safeSend(p.send, data) {
 		p.terminate()
 	}
+}
+
+// sessionEndReason says why a session that no longer validates is gone.
+func (p *Peer) sessionEndReason() string {
+	if p.sessionGone != nil && p.sessionGone() {
+		return reasonSessionRevoked
+	}
+	return reasonSessionExpired
 }
 
 func (p *Peer) closeWithPolicy(reason string) {

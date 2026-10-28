@@ -91,6 +91,19 @@ compare rather than take a hash on trust.
 
 ### Added
 
+- **Sign out everywhere else**, in the account panel: every other browser
+  signed in to the account — one left open on someone else's computer, a lost
+  phone — is signed out, and the conversations it has open close within
+  seconds; this one stays. It re-checks the password like every account
+  action, so a stolen cookie cannot use it to throw the owner out. From a
+  decoy session it reaches only other decoy sessions, and answers in the same
+  shape.
+- **A password change closes the other browsers' conversations too.** It
+  ended their sessions, but a conversation already open there is direct and
+  carried on — after the owner had changed the password because a device was
+  lost. A session its owner ended is now told apart from one that expired: the
+  first closes what it has open and says why; the second still keeps a running
+  conversation going, as before.
 - **Office documents lose their author before they leave.** Word, Excel,
   PowerPoint and OpenDocument files have their property parts emptied on the
   sender's device — author, last editor, company, manager, template path,

@@ -1353,6 +1353,46 @@ func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "ok"})
 }
 
+// SignOutOthers ends every other session of the account — a browser left
+// signed in somewhere else, a phone that was lost — keeping this one. Like the
+// other account actions it wants a fresh proof of the credential this session
+// was opened with, so a stolen cookie cannot use it to throw the owner out.
+//
+// From the real account it ends the decoy's sessions as well, as a password
+// change does. From a decoy session it ends only other decoy sessions: a
+// coercer can neither reach the real account's sessions nor tell from the
+// answer which kind of session asked — both answer with how many they ended,
+// counted among the sessions that kind can see.
+//
+// Live connections go with their sessions: the signaling pumps re-check the
+// session and close a socket whose session is gone.
+func (h *Handler) SignOutOthers(w http.ResponseWriter, r *http.Request) {
+	username, duress, c, ok := h.requireLiveSession(w, r)
+	if !ok {
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+		M1    string `json:"M1"`
+		M1d   string `json:"M1d"`
+	}
+	if err := strictjson.DecodeObject(r.Body, &body); err != nil {
+		jsonErr(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if !h.requireFreshProof(r, username, duress, body.Token, body.M1, body.M1d) {
+		jsonErr(w, "re-authentication required", http.StatusUnauthorized)
+		return
+	}
+	var ended int
+	if duress {
+		ended = h.sess.deleteUserKindExcept(username, true, c.Value)
+	} else {
+		ended = h.sess.deleteUserExcept(username, c.Value)
+	}
+	jsonOK(w, map[string]any{"status": "ok", "ended": ended})
+}
+
 // GenerateInvite issues a new invite code. Protected by the ADMIN_TOKEN env secret.
 func (h *Handler) GenerateInvite(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {

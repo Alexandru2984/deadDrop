@@ -374,6 +374,7 @@ func main() {
 	mux.HandleFunc("/api/account/verifier", authRL.Wrap(middleware.RequireSameOrigin(authH.SetVerifier)))
 	mux.HandleFunc("/api/account/duress", authRL.Wrap(middleware.RequireSameOrigin(authH.SetDuress)))
 	mux.HandleFunc("/api/account/delete", authRL.Wrap(middleware.RequireSameOrigin(authH.DeleteAccount)))
+	mux.HandleFunc("/api/account/signout-others", authRL.Wrap(middleware.RequireSameOrigin(authH.SignOutOthers)))
 
 	// The network admin endpoint is disabled by default; the local `deaddrop
 	// invite` CLI remains available without exposing an Internet attack surface.
@@ -411,6 +412,7 @@ func main() {
 		signaling.HandleWebSocket(hub, w, r, signaling.ConnectionAccess{
 			Principal: principal,
 			Valid:     func() bool { return authH.SessionValid(r) },
+			Revoked:   func() bool { return authH.SessionRevoked(r) },
 		})
 	}))
 

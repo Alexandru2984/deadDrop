@@ -122,6 +122,15 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
 - Sessions live in memory only and die at whichever bound comes first: 30 minutes
   idle, or 12 hours absolute. A primary password change closes every session for
   the account and rotates the changing browser's own token.
+- “Sign out everywhere else” ends every other session of the account after
+  re-proving the password, so a stolen cookie cannot use it to throw the
+  owner out. From a decoy session it ends only other decoy sessions and
+  answers the same way. A browser whose session its owner ended — this, a
+  password change, deleting the account — is told so within seconds and
+  closes the conversations it still has open; one whose session merely
+  expired keeps them, as direct conversations do not need the server. The
+  server remembers which sessions were ended, by hash, until each would have
+  expired anyway.
 - The server persists handles, SRP salts/verifiers/KDF labels, optional duress
   verifiers, invites (single-use, expiring after 14 days by default), and one
   local anti-enumeration secret. It does not persist

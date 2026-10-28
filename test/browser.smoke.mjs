@@ -347,6 +347,22 @@ await setDuress('decoy-' + NEW_PASS.split('').reverse().join(''), NEW_PASS);
 ok(await waitFor(async () => /✓/.test(await msgOf('duress-msg')), { timeout: 20000 }),
   'a good decoy password is saved and says so');
 
+// Signing out everywhere else: a cookie alone is not enough, and with the
+// password it reports what it ended. The password change above already
+// closed the others, so there is nothing left to end.
+await sessionEval(`
+  document.querySelector('#current-pass').value = '';
+  document.querySelector('#signout-others-btn').click(); true
+`);
+ok(/current password/i.test(await msgOf('sessions-msg')), 'signing out elsewhere asks for the current password first');
+await sessionEval(`
+  document.querySelector('#current-pass').value = ${JSON.stringify(NEW_PASS)};
+  document.querySelector('#signout-others-btn').click(); true
+`);
+ok(await waitFor(async () => /✓ No other session/.test(await msgOf('sessions-msg')), { timeout: 20000 }),
+  `with it, it signs out everywhere else and says what it found (${await msgOf('sessions-msg') || 'nothing shown'})`);
+ok(await sessionEval(`fetch('/api/me').then((r) => r.status)`) === 200, 'and this browser stays signed in');
+
 // Settings survive a reload, and only the ones the user changed differ from
 // the protective defaults.
 await sessionEval(`

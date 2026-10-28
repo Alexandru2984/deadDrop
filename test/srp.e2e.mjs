@@ -209,6 +209,18 @@ async function srpLogin(username, password, jar) {
   ok(afterDown.status === 200 && afterDown.serverOK === true && srpLogin.lastChallenge?.kdf === reg.kdf,
      'rejected downgrade leaves the stretched credential intact');
 
+  // 4e. Signing out everywhere else: another browser's session ends, this one
+  // stays, and a cookie alone cannot do it.
+  const elsewhere = {};
+  ok((await srpLogin(USER, PASS, elsewhere)).status === 200, 'a second browser signs in');
+  const outNoProof = await post('/api/account/signout-others', { token: '', M1: '', M1d: '' }, jar2);
+  ok(outNoProof.status === 401 && (await get('/api/me', elsewhere)).status === 200,
+    'signing out other sessions without a fresh proof is refused');
+  const out = await post('/api/account/signout-others', await reauthProof(USER, PASS), jar2);
+  ok(out.status === 200 && out.json?.ended >= 1, `signing out other sessions works (${out.json?.ended} ended)`);
+  ok((await get('/api/me', elsewhere)).status === 401 && (await get('/api/me', jar2)).status === 200,
+    'the other browser is signed out, this one is not');
+
   // 5. Cleanup: delete the throwaway account.
   // A live cookie alone must not be able to destroy the account.
   const delNoProof = await post('/api/account/delete', { token: '', M1: '', M1d: '' }, jar2);

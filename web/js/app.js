@@ -283,6 +283,8 @@ class DeadDrop {
       delAccountBtn:$('#del-account-btn'),
       passMsg:      $('#pass-msg'),
       duressMsg:    $('#duress-msg'),
+      signOutOthersBtn: $('#signout-others-btn'),
+      sessionsMsg:  $('#sessions-msg'),
       deleteMsg:    $('#delete-msg'),
       createBtn:   $('#create-room'),
       joinBtn:     $('#join-room'),
@@ -374,7 +376,7 @@ class DeadDrop {
         this._restoreFocus();
       } else {
         // A fresh look at the panel starts without last time's results.
-        for (const msg of [this.el.passMsg, this.el.duressMsg, this.el.deleteMsg]) msg.classList.add('hidden');
+        for (const msg of [this.el.passMsg, this.el.duressMsg, this.el.sessionsMsg, this.el.deleteMsg]) msg.classList.add('hidden');
         this._renderContacts();
         this._captureFocus(this.el.accountPanel);
       }
@@ -387,6 +389,7 @@ class DeadDrop {
     });
     this.el.genNewPassBtn.addEventListener('click', () => this._fillPassphrase(this.el.newPass));
     this.el.delAccountBtn.addEventListener('click', () => this._deleteAccount());
+    this.el.signOutOthersBtn.addEventListener('click', () => this._signOutOthers());
     // Room
     this.el.createBtn.addEventListener('click', () => this.createRoom());
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
@@ -561,6 +564,8 @@ class DeadDrop {
         this._armIdleLock();
       } else {
         this._showPage('auth');
+        const data = await res.json().catch(() => ({}));
+        if (data.error === 'signed out') this._showAuthError(t('auth.signedOutElsewhere'));
       }
     } catch {
       this._showPage('auth');
@@ -809,6 +814,36 @@ class DeadDrop {
     });
   }
 
+  /**
+   * End every other session of this account. It wants the current password,
+   * like every action here, so a stolen cookie cannot use it to throw the
+   * owner out; the server closes those sessions' live connections too.
+   */
+  async _signOutOthers() {
+    const current = this.el.currentPass.value;
+    const say = (text, ok) => this._accountMsg(this.el.sessionsMsg, text, ok);
+    if (!current) {
+      this.el.currentPass.focus();
+      say(t('account.needCurrent'));
+      return;
+    }
+    await this._accountBusy(this.el.signOutOthersBtn, say, async () => {
+      let proof;
+      try {
+        proof = await this._reauthProof(this.username, current);
+      } catch {
+        say(t('account.wrongCurrent'));
+        return;
+      }
+      const res = await this._postJSON('/api/account/signout-others', proof);
+      if (res.status === 401) { say(t('account.wrongCurrent')); return; }
+      if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
+      this.el.currentPass.value = '';
+      const ended = Number(res.data.ended) || 0;
+      say(ended ? t('sessions.ended').replace('{n}', String(ended)) : t('sessions.none'), true);
+    });
+  }
+
   /** Show what an account action did, under its own button, until the next one. */
   _accountMsg(el, text, ok = false) {
     el.textContent = text;
@@ -857,11 +892,25 @@ class DeadDrop {
    * ends anything now; a network failure is left to the reconnect logic. A
    * conversation that is already running is direct and is not torn down —
    * it is told the login ended, and the room goes to sign-in once empty.
+   *
+   * Unless the account's owner ended this session — a password change or
+   * "sign out everywhere else" from another browser. That is someone taking
+   * this browser's access away, a lost phone's most likely: the
+   * conversations it still has open end with it.
    */
   async _recheckSession() {
     let res;
     try { res = await fetch('/api/me'); } catch { return; }
     if (res.status !== 401) return;
+    const data = await res.json().catch(() => ({}));
+    if (data.error === 'signed out') {
+      this._disarmIdleLock();
+      this._cleanup();
+      this.username = null;
+      this._showPage('auth');
+      this._showAuthError(t('auth.signedOutElsewhere'));
+      return;
+    }
     if (this._verifiedSessions().length > 0) {
       if (!this._warnedSessionEnded) {
         this._warnedSessionEnded = true;
@@ -1173,9 +1222,11 @@ class DeadDrop {
           .catch((err) => console.warn('[ws] signaling message failed', err));
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         clearTimeout(timer);
         if (generation !== this._signalGeneration || this.ws !== socket) return;
+        // The server ended the session on purpose: ask what that means here.
+        if (event.reason === 'session revoked') this._recheckSession();
         if (settled && this.roomCode) this._onSignalingLost();
         else this._setStatus('disconnected', () => t('st.serverLost'));
         if (!settled) {

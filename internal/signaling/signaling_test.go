@@ -610,6 +610,49 @@ func TestOpenWebSocketIsRevokedWithSession(t *testing.T) {
 	}
 }
 
+// The browser is told why its socket closed: a session its owner ended
+// ("revoked") makes it end what it still has open; one that expired does not.
+func TestSocketCloseSaysWhetherTheSessionWasEndedOrExpired(t *testing.T) {
+	for _, tc := range []struct {
+		revoked bool
+		want    string
+	}{{true, reasonSessionRevoked}, {false, reasonSessionExpired}} {
+		hub := NewHub()
+		go hub.Run()
+		var valid, revoked atomic.Bool
+		valid.Store(true)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			HandleWebSocket(hub, w, r, ConnectionAccess{Principal: "alice", Valid: valid.Load, Revoked: revoked.Load})
+		})
+		srv := httptest.NewServer(mux)
+		conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http")+"/ws", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.ReadJSON(&SignalMessage{}); err != nil {
+			t.Fatal(err)
+		}
+		revoked.Store(tc.revoked)
+		valid.Store(false)
+		if err := conn.WriteJSON(SignalMessage{Type: "unsupported"}); err != nil {
+			t.Fatal(err)
+		}
+		conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var closeErr *websocket.CloseError
+		for {
+			if _, _, err = conn.ReadMessage(); err != nil {
+				break
+			}
+		}
+		if !errors.As(err, &closeErr) || closeErr.Code != websocket.ClosePolicyViolation || closeErr.Text != tc.want {
+			t.Fatalf("revoked=%v: closed with %v, want %q", tc.revoked, err, tc.want)
+		}
+		conn.Close()
+		srv.Close()
+	}
+}
+
 // A full room and a server at its global room cap must be indistinguishable to
 // the client. The second is state about how busy the instance is, so a distinct
 // reply would let any account poll other people's activity.

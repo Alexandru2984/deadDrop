@@ -247,7 +247,34 @@ await a.eval(`
 ok(await waitFor(async () => (await b.transcript()).includes(after)),
   'A and B keep talking after C leaves');
 
-const errors = peers.flatMap((p) => p.errors);
+// A signs in on a second browser and signs out everywhere else, as after
+// losing a phone. The first browser's conversation does not carry on, as it
+// would if its login had merely expired: it closes, and says why.
+const a2 = await Peer.open(cdp, 'a2');
+await a2.goto(BASE + '/');
+await a2.eval(`
+  document.querySelector('#auth-user').value = ${JSON.stringify(USERS[0])};
+  document.querySelector('#auth-pass').value = ${JSON.stringify(PASS)};
+  document.querySelector('#login-btn').click(); true
+`);
+ok(await waitFor(() => a2.eval(`!document.querySelector('#landing').classList.contains('hidden')`), { timeout: 25000 }),
+  'A signs in on a second browser');
+await a2.eval(`
+  document.querySelector('#settings-btn').click();
+  document.querySelector('#current-pass').value = ${JSON.stringify(PASS)};
+  document.querySelector('#signout-others-btn').click(); true
+`);
+ok(await waitFor(() => a2.eval(`/✓/.test(document.querySelector('#sessions-msg').textContent)`), { timeout: 20000 }),
+  'and signs out everywhere else');
+ok(await waitFor(() => a.eval(`
+  !document.querySelector('#auth').classList.contains('hidden') &&
+  /signed out from another/.test(document.querySelector('#auth-error').textContent)
+`), { timeout: 30000 }), 'the first browser leaves its conversation for the sign-in page, saying why');
+ok(await waitFor(async () => (await verifyRows(b)).length === 0, { timeout: 30000 }),
+  'and B sees A gone');
+ok(await a2.eval(`fetch('/api/me').then((r) => r.status)`) === 200, 'the second browser is still signed in');
+
+const errors = [...peers, a2].flatMap((p) => p.errors);
 ok(errors.length === 0, `no uncaught exceptions in any peer${errors.length ? ': ' + errors[0] : ''}`);
 
 cdp.close();

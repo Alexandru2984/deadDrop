@@ -171,7 +171,17 @@ func (s *session) live(now time.Time) bool {
 type sessions struct {
 	mu sync.RWMutex
 	m  map[string]*session
+	// revoked remembers, by the same key, sessions the account owner ended —
+	// a password change, signing out everywhere else, deleting the account —
+	// until each would have expired anyway. A browser holding one is told it
+	// was signed out, and ends the conversations it still has open; one whose
+	// session merely expired keeps them. Nothing else is kept about it.
+	revoked map[string]time.Time
 }
+
+// At most this many revocations are remembered. Past it a revoked session is
+// still ended; its browser is only told "expired" rather than "signed out".
+const maxRevoked = 50_000
 
 // tokenKey maps a session token to its map key. The empty token (no session
 // to keep) maps to the empty key, which no real session has.
@@ -197,7 +207,7 @@ const (
 )
 
 func newSessions() *sessions {
-	sm := &sessions{m: make(map[string]*session)}
+	sm := &sessions{m: make(map[string]*session), revoked: make(map[string]time.Time)}
 	go sm.reap()
 	return sm
 }
@@ -281,36 +291,75 @@ func (sm *sessions) deleteUser(username string) {
 	sm.deleteUserExcept(username, "")
 }
 
-func (sm *sessions) deleteUserExcept(username, keepToken string) {
+// deleteUserExcept ends every session of username but keepToken's, and says
+// how many it ended.
+func (sm *sessions) deleteUserExcept(username, keepToken string) int {
 	keep := tokenKey(keepToken)
+	ended := 0
 	sm.mu.Lock()
 	for token, s := range sm.m {
 		if token != keep && s.username == username {
-			delete(sm.m, token)
+			sm.revokeLocked(token, s)
+			ended++
 		}
 	}
 	sm.mu.Unlock()
+	return ended
 }
 
 func (sm *sessions) deleteUserKind(username string, duress bool) {
 	sm.deleteUserKindExcept(username, duress, "")
 }
 
-func (sm *sessions) deleteUserKindExcept(username string, duress bool, keepToken string) {
+// deleteUserKindExcept ends username's primary or decoy sessions but
+// keepToken's, and says how many it ended.
+func (sm *sessions) deleteUserKindExcept(username string, duress bool, keepToken string) int {
 	keep := tokenKey(keepToken)
+	ended := 0
 	sm.mu.Lock()
 	for token, s := range sm.m {
 		if token != keep && s.username == username && s.duress == duress {
-			delete(sm.m, token)
+			sm.revokeLocked(token, s)
+			ended++
 		}
 	}
 	sm.mu.Unlock()
+	return ended
+}
+
+// revokeLocked ends a session the account owner ended, and remembers that
+// it was ended rather than left to expire.
+func (sm *sessions) revokeLocked(key string, s *session) {
+	delete(sm.m, key)
+	if sm.revoked == nil {
+		sm.revoked = make(map[string]time.Time)
+	}
+	if len(sm.revoked) < maxRevoked {
+		sm.revoked[key] = s.expiresAt
+	}
+}
+
+// wasRevoked reports whether token's session was ended by its owner, as
+// opposed to expiring or never having existed.
+func (sm *sessions) wasRevoked(token string) bool {
+	if token == "" {
+		return false
+	}
+	sm.mu.RLock()
+	until, ok := sm.revoked[tokenKey(token)]
+	sm.mu.RUnlock()
+	return ok && time.Now().Before(until)
 }
 
 func (sm *sessions) removeExpiredLocked(now time.Time) {
 	for token, s := range sm.m {
 		if !s.live(now) {
 			delete(sm.m, token)
+		}
+	}
+	for token, until := range sm.revoked {
+		if !now.Before(until) {
+			delete(sm.revoked, token)
 		}
 	}
 }
@@ -396,6 +445,10 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	username, _, ok := h.sess.getMeta(c.Value)
 	if !ok {
+		if h.sess.wasRevoked(c.Value) {
+			jsonErr(w, "signed out", http.StatusUnauthorized)
+			return
+		}
 		jsonErr(w, "session expired", http.StatusUnauthorized)
 		return
 	}
@@ -426,6 +479,13 @@ func (h *Handler) RequireAuth(next http.HandlerFunc) http.HandlerFunc {
 func (h *Handler) SessionValid(r *http.Request) bool {
 	_, ok := h.SessionPrincipal(r)
 	return ok
+}
+
+// SessionRevoked reports whether the request's session was ended by the
+// account owner rather than left to expire.
+func (h *Handler) SessionRevoked(r *http.Request) bool {
+	c, err := sessionCookie(r)
+	return err == nil && h.sess.wasRevoked(c.Value)
 }
 
 // SessionPrincipal returns the account identity only for in-process resource
