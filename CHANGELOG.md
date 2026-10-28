@@ -191,6 +191,13 @@ compare rather than take a hash on trust.
   canvas kept only the first frame. PNG and WebP now keep only the chunks it
   takes to draw them — pixels, colour profile, animation frames — and lose
   text, EXIF, XMP, times and makers' private chunks, without re-encoding.
+- **GIFs are cleaned too.** They went out untouched, comment and XMP
+  included — an editor's name, a camera's description. A GIF now keeps its
+  frames, their timing, its loop count and colour profile, byte for byte,
+  and loses comments, XMP, Photoshop's IPTC block and every other
+  application block, along with anything after its end. One too malformed
+  to walk is sent only if the person agrees, rather than flattened to a
+  still.
 - **Back no longer ends a conversation at a touch.** A room lives only in
   the page, and the back button — or a phone's edge swipe — left it, keys and
   all. Back now closes what is open over the conversation, then asks for a

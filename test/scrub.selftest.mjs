@@ -20,7 +20,7 @@
 import { scrubMovie, scrubbedName, isScrubbable, scrubFile, typeOf } from '../web/js/scrub.js';
 import { deflateRawSync } from 'node:zlib';
 import { zip, crc32 } from './lib/zip.mjs';
-import { blankJpegMeta, jpegEnd, stripPngMeta, cleanPng, cleanWebp } from '../web/js/imagemeta.js';
+import { blankJpegMeta, jpegEnd, stripPngMeta, cleanPng, cleanWebp, cleanGif } from '../web/js/imagemeta.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -431,6 +431,51 @@ ok(webpOut.readUInt32LE(4) === webpOut.length - 8 && webpOut[20] === 0x32 && web
   'its header says so — size and flags — and its animation frames stay');
 ok(cleanWebp(riff(VP8X, riffChunk('EXIF', exifBody(8)))) === null, 'one whose EXIF turns it is left to be re-encoded');
 ok(cleanWebp(Buffer.from('RIFF\x10\0\0\0WEBPVP8 \xff\xff\0\0')) === null, 'a WebP that overruns itself is not walked');
+
+// A GIF: two frames with their timing, a loop count and a colour profile —
+// and a comment, XMP (with the trailer that lets a GIF reader skip it),
+// Photoshop's IPTC block, an unknown extension, and bytes after the end.
+const subBlocks = (data) => {
+  const parts = [];
+  for (let i = 0; i < data.length; i += 255) {
+    const piece = data.subarray(i, i + 255);
+    parts.push(Buffer.from([piece.length]), piece);
+  }
+  return Buffer.concat([...parts, Buffer.from([0])]);
+};
+const gifApp = (id, data) => Buffer.concat([Buffer.from([0x21, 0xff, 11]), Buffer.from(id, 'latin1'), subBlocks(Buffer.from(data, 'latin1'))]);
+const GIF_HEAD = Buffer.from('47494638396102000200800000000000ffffff', 'hex'); // 2x2, two-colour table
+const gifFrame = (delay) => Buffer.concat([
+  Buffer.from([0x21, 0xf9, 4, 0, delay, 0, 0, 0]), // graphic control: delay
+  Buffer.from('2c000000000200020000', 'hex'), Buffer.from([2]), subBlocks(Buffer.from([0x84, 0x1d, 0x05])),
+]);
+const LOOP = gifApp('NETSCAPE2.0', '\x01\x00\x00');
+const GIF_ICC = gifApp('ICCRGBG1012', 'colour profile bytes');
+const magic = Buffer.from([1, ...Array.from({ length: 256 }, (_, i) => 255 - i)]); // XMP's skip trailer
+const XMP_BLOCK = Buffer.concat([Buffer.from([0x21, 0xff, 11]), Buffer.from('XMP DataXMP'),
+  Buffer.from(`<x:xmpmeta><dc:creator>${AUTHOR}</dc:creator><photoshop:City>Bucharest</photoshop:City></x:xmpmeta>`), magic, Buffer.from([0])]);
+const gif = Buffer.concat([
+  GIF_HEAD, LOOP,
+  Buffer.concat([Buffer.from([0x21, 0xfe]), subBlocks(Buffer.from(`made by ${AUTHOR}`))]),
+  XMP_BLOCK, gifApp('MGK8BIM0000', `8BIM IPTC ${AUTHOR}`), GIF_ICC,
+  Buffer.concat([Buffer.from([0x21, 0x99]), subBlocks(Buffer.from(AUTHOR))]),
+  gifFrame(10), gifFrame(20), Buffer.from([0x3b]), Buffer.from(`trailing ${AUTHOR}`),
+]);
+const gifOut = Buffer.from(cleanGif(gif));
+ok(!gifOut.includes(AUTHOR) && !gifOut.includes('Bucharest') && !gifOut.includes('XMP DataXMP') && !gifOut.includes('MGK8BIM'),
+  'a GIF loses its comment, XMP, IPTC, unknown extensions and what follows its end');
+ok(gifOut.equals(Buffer.concat([GIF_HEAD, LOOP, GIF_ICC, gifFrame(10), gifFrame(20), Buffer.from([0x3b])])),
+  'and keeps its frames, their timing, its loop count and colour profile, byte for byte');
+ok(Buffer.from(cleanGif(Buffer.concat([GIF_HEAD, gifFrame(10)]))).equals(Buffer.concat([GIF_HEAD, gifFrame(10), Buffer.from([0x3b])])),
+  'one that stops short of its trailer is given one');
+ok(cleanGif(Buffer.concat([GIF_HEAD, gifFrame(10)]).subarray(0, -3)) === null && cleanGif(Buffer.from('GIF89a\x01\x00\x01\x00\xf7\0\0')) === null,
+  'a GIF cut inside a frame, or its colour table, is not walked');
+const gifFile = await scrubFile(new File([gif], 'IMG_20261027_143200.gif', { type: 'image/gif' }));
+ok(isScrubbable(gifFile) && gifFile.type === 'image/gif' && gifFile.name === 'photo.gif'
+  && Buffer.from(await gifFile.arrayBuffer()).equals(gifOut), 'it goes out as a GIF, under a name without the time');
+let gifPrompt = null;
+try { await scrubFile(new File([Buffer.from('GIF89a\x01\x00')], 'x.gif', { type: 'image/gif' })); } catch (e) { gifPrompt = e.undecodable; }
+ok(gifPrompt === true, 'and one that cannot be walked is put to the person, not flattened to a still');
 
 // Pasted into a Word document, then into a PDF.
 const withPhoto = zip([

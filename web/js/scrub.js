@@ -7,9 +7,9 @@
  * other person intact, and a peer is exactly who should not get a home address
  * from a picture of a cat.
  *
- * JPEG, PNG and WebP are cleaned without re-encoding (imagemeta.js): a
+ * JPEG, PNG, WebP and GIF are cleaned without re-encoding (imagemeta.js): a
  * JPEG's descriptive segments are blanked and anything after the picture cut
- * off, a PNG or WebP keeps only the chunks it takes to draw it. Every pixel,
+ * off, a PNG, WebP or GIF keeps only the blocks it takes to draw it. Every pixel,
  * the colour profile and an animation's frames stay as they were, and a
  * portrait photo keeps a minimal EXIF holding only its orientation. HEIC,
  * AVIF and TIFF, and a file too odd to walk, are re-encoded through a
@@ -28,10 +28,10 @@
 
 import { DOCUMENTS, DOCUMENT_EXTENSIONS, scrubDocument } from './docscrub.js';
 import { scrubPdf } from './pdfscrub.js';
-import { cleanJpeg, cleanPng, cleanWebp } from './imagemeta.js';
+import { cleanGif, cleanJpeg, cleanPng, cleanWebp } from './imagemeta.js';
 
 // Cleaned where they lie, losslessly, before a canvas is tried.
-const LOSSLESS = { 'image/jpeg': cleanJpeg, 'image/png': cleanPng, 'image/webp': cleanWebp };
+const LOSSLESS = { 'image/jpeg': cleanJpeg, 'image/png': cleanPng, 'image/webp': cleanWebp, 'image/gif': cleanGif };
 
 // Formats a canvas can write back without changing what kind of file it is.
 const SCRUBBABLE = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -64,7 +64,7 @@ const JPEG_QUALITY = 0.92;
 const MOVIES = new Set(['video/mp4', 'video/quicktime', 'video/3gpp', 'audio/mp4', 'audio/x-m4a']);
 
 const EXT = {
-  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
+  'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif',
   'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/3gpp': '3gp',
   'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a',
 };
@@ -93,7 +93,7 @@ export function scrubbedName(name, type) {
 /** True when `file` is a picture, movie or document rewritten before sending. */
 export function isScrubbable(file) {
   const type = typeOf(file);
-  return SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type)
+  return Object.hasOwn(LOSSLESS, type) || SCRUBBABLE.has(type) || CONVERTED.has(type) || MOVIES.has(type)
     || DOCUMENTS.has(type) || type === 'application/pdf';
 }
 
@@ -170,11 +170,13 @@ function blankBoxes(bytes, start, end, depth) {
  */
 export async function scrubImage(file) {
   const type = typeOf(file);
-  if (!SCRUBBABLE.has(type) && !CONVERTED.has(type)) return file;
   if (Object.hasOwn(LOSSLESS, type)) {
     const clean = LOSSLESS[type](new Uint8Array(await file.arrayBuffer()));
     if (clean) return new File([clean], scrubbedName(file.name, type), { type, lastModified: 0 });
+    // A canvas cannot write a GIF back, let alone keep it moving.
+    if (!SCRUBBABLE.has(type)) throw Object.assign(new Error('cannot walk the GIF'), { undecodable: true });
   }
+  if (!SCRUBBABLE.has(type) && !CONVERTED.has(type)) return file;
   const converting = CONVERTED.has(type);
   const outType = converting ? 'image/jpeg' : type;
   let bitmap;

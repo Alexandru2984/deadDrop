@@ -20,6 +20,10 @@
  * XMP, times, makers' private chunks. Neither format has a length to keep.
  * Re-encoding them through a canvas instead used to turn an animated sticker
  * into its first frame.
+ *
+ * A GIF keeps its frames, their timing and its loop count, and loses its
+ * comments and the application blocks that describe it: XMP, Photoshop's
+ * IPTC and the like.
  */
 
 const APP0 = 0xe0;
@@ -241,6 +245,55 @@ export function cleanWebp(bytes) {
   new DataView(out.buffer).setUint32(4, 4 + body.length, true);
   out.set(body, 12);
   return out;
+}
+
+// Application blocks a GIF needs drawn as made: the loop count (Netscape's,
+// and the older ANIMEXTS) and an ICC colour profile. Any other — XMP,
+// Photoshop's IPTC, an editor's own — is description, as is a comment.
+const GIF_KEPT_APPS = new Set(['NETSCAPE2.0', 'ANIMEXTS1.0', 'ICCRGBG1012']);
+
+/**
+ * A copy of the GIF with its frames, their timing and its loop count, and
+ * nothing else, ending at its trailer — added when the file stopped short
+ * of one, as some encoders do. Null when it is not a GIF this can walk.
+ */
+export function cleanGif(bytes) {
+  const header = String.fromCharCode(...bytes.subarray(0, 6));
+  if ((header !== 'GIF87a' && header !== 'GIF89a') || bytes.length < 13) return null;
+  const colourTable = (packed) => (packed & 0x80 ? 3 << ((packed & 7) + 1) : 0);
+  // Past the data sub-blocks starting at `pos`, or -1 when they overrun.
+  const subBlocks = (pos) => {
+    while (pos < bytes.length) {
+      if (bytes[pos] === 0) return pos + 1;
+      pos += 1 + bytes[pos];
+    }
+    return -1;
+  };
+  let pos = 13 + colourTable(bytes[10]);
+  if (pos > bytes.length) return null;
+  const kept = [bytes.subarray(0, pos)];
+  while (pos < bytes.length && bytes[pos] !== 0x3b) {
+    const start = pos;
+    if (bytes[pos] === 0x2c) {
+      if (pos + 11 > bytes.length) return null;
+      pos = subBlocks(pos + 10 + colourTable(bytes[pos + 9]) + 1);
+      if (pos < 0) return null;
+      kept.push(bytes.subarray(start, pos));
+    } else if (bytes[pos] === 0x21 && pos + 2 < bytes.length) {
+      const label = bytes[pos + 1];
+      pos = subBlocks(pos + 2);
+      if (pos < 0) return null;
+      const app = label === 0xff && bytes[start + 2] === 11
+        ? String.fromCharCode(...bytes.subarray(start + 3, start + 14)) : '';
+      // Graphic control (a frame's delay and transparency), plain text, and
+      // the application blocks above.
+      if (label === 0xf9 || label === 0x01 || GIF_KEPT_APPS.has(app)) kept.push(bytes.subarray(start, pos));
+    } else {
+      return null;
+    }
+  }
+  kept.push(Uint8Array.of(0x3b));
+  return concat(kept);
 }
 
 function concat(parts) {
