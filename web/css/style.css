@@ -1116,6 +1116,13 @@ select { cursor: pointer; width: auto; }
 
 .file-icon { font-size: 22px; line-height: 1; }
 
+.file-note {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.file-note.warn { color: #ffaa00; }
+
 .file-details {
   display: flex;
   align-items: center;

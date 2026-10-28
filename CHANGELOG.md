@@ -205,6 +205,11 @@ compare rather than take a hash on trust.
 - **Each message shows when it reached your screen**, by your own device's
   clock and in its time format. No time travels with a message: a sender's
   timestamp would tell the other side their clock and time zone.
+- **The sender sees whether a file left clean.** Under their own copy:
+  "Sent without metadata", or a warning when they chose to send one that
+  could not be cleaned as it was. Nothing is claimed for a kind of file that
+  is not cleaned, and nothing is shown to the receiver, who could not check
+  it.
 - **Several files can be picked or dropped at once** — up to ten, sent one
   after another so a phone's tab never holds ten files and their ciphertext
   together. Pasted screenshots go the same way, and leaving the room stops the

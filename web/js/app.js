@@ -1860,9 +1860,14 @@ class DeadDrop {
       this._renderSystem(`${t('err.fileTooLarge')} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
       return;
     }
+    // What the sender is told under their own copy: that it left clean, or
+    // that they chose to send it as it was. Nothing is claimed for a kind of
+    // file this does not clean.
+    let scrubNote = null;
     if (this.el.scrubToggle.checked && !recorded && isScrubbable(file)) {
       try {
         file = await scrubFile(file);
+        scrubNote = 'file.cleaned';
       } catch (err) {
         console.warn('metadata removal failed:', err?.message);
         // A HEIC or TIFF photo this browser cannot read, or a document that
@@ -1873,6 +1878,7 @@ class DeadDrop {
           this._renderSystem(t('err.scrubFailed'));
           return;
         }
+        scrubNote = 'file.sentAsIs';
       }
     }
     if (file.size > MAX_FILE_SIZE) {
@@ -1901,6 +1907,11 @@ class DeadDrop {
     // while to leave; closing the tab before then loses it. Say how far it got.
     const targets = [...this.peers].filter(([, s]) => s.verified && s.conn.userVerified);
     const own = document.getElementById(this._domMessageId(this._messageKey(null, id)));
+    if (own && scrubNote) {
+      own.querySelector('.file-details')?.after(h('div', {
+        class: `file-note${scrubNote === 'file.sentAsIs' ? ' warn' : ''}`, 'data-i18n': scrubNote, text: t(scrubNote),
+      }));
+    }
     // On a slow link 25 MB takes minutes; one sent by mistake can be stopped.
     // Cancelling withdraws it as a delete for everyone does, which also tells
     // each peer to drop the part that already arrived.

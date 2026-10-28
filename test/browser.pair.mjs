@@ -765,6 +765,12 @@ await alice.eval(`window.confirm = () => true; true`);
 await pick(alice, `async () => new Blob(['not really a photo'])`, 'IMG_0002.heic', 'image/heic');
 ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'IMG_0002.heic'), { timeout: 20000 }),
   'and goes as it is when the person agrees');
+const noteOf = (peer, name) => peer.eval(`(() => {
+  const bubble = [...document.querySelectorAll('.msg.mine')].find((m) => m.querySelector('.file-name')?.textContent === ${JSON.stringify(name)});
+  return bubble?.querySelector('.file-note')?.textContent ?? null;
+})()`);
+ok(/with its metadata/.test(await noteOf(alice, 'IMG_0002.heic') || ''),
+  'and the sender is told, under their copy, that it went with its metadata');
 
 // An office document goes with its author and company emptied out. Under a
 // kilobyte the size is shown to the byte, so the receiver showing exactly
@@ -781,6 +787,8 @@ const planGot = await waitFor(async () => (await bob.receivedFiles()).find((f) =
   { timeout: 20000 });
 ok(planGot && planClean.size < 1024 && plan.length > 1024 && planGot.size === `${planClean.size} B`,
   `a Word document arrives under its own name with its properties emptied (${planGot?.size} of ${plan.length} B)`);
+ok(/without metadata/.test(await noteOf(alice, 'Plan.docx') || '') && (await noteOf(bob, 'Plan.docx')) === null,
+  'the sender sees it left without metadata; the receiver is shown no claim it cannot check');
 
 // A signed PDF would have its signature broken by any change: the person is
 // asked, in their words, and nothing goes when they decline.
