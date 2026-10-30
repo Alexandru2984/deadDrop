@@ -9,7 +9,21 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.6.0 — 2026-10-30
+
+**Update when you can.** Files no longer say who sent them: videos, iPhone
+HEIC photos, Word, Excel, PowerPoint and LibreOffice documents, PDFs and the
+photos inside them leave without their location, author, company or
+device. A lost phone can be signed out, and its open conversations closed,
+from any other browser. Signing in holds up against floods and guessing
+from many addresses, and the panic button always ends the session. Timed
+and burn-after-reading messages wait until someone can read them. New:
+replies, deleting a message for everyone, delivery ticks, voice calls, and
+sending several files at once.
+
+No protocol change: a tab still on 0.5.0 talks to one on 0.6.0, and passes
+over what it does not know yet — a reply's quote, a tick, a deletion for
+everyone, a refused file. Reloading picks it all up.
 
 ### Security
 

@@ -10,4 +10,4 @@ package deaddrop
 // Bump this, tag the commit, and `deaddrop version` prints both this and the
 // digest of the client the binary serves — the two things somebody needs in
 // order to check rather than trust.
-const Version = "0.5.0"
+const Version = "0.6.0"
