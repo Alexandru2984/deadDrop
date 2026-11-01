@@ -18,7 +18,7 @@
  */
 
 import { scrubMovie, scrubbedName, isScrubbable, scrubFile, typeOf } from '../web/js/scrub.js';
-import { deflateRawSync } from 'node:zlib';
+import { deflateRawSync, deflateSync, inflateSync } from 'node:zlib';
 import { zip, crc32 } from './lib/zip.mjs';
 import { blankJpegMeta, jpegEnd, stripPngMeta, cleanPng, cleanWebp, cleanGif } from '../web/js/imagemeta.js';
 import { execFileSync } from 'node:child_process';
@@ -610,9 +610,9 @@ ok(pdfText.includes(CONTENT), 'the page content is untouched');
 let pdfDiff = 0;
 for (let i = 0; i < report.length; i++) if (report[i] !== pdfOut[i] && pdfOut[i] !== 0x20) pdfDiff++;
 ok(pdfDiff === 0, 'every changed byte became a space');
-const offsetsLand = (t) => {
+const offsetsLand = (t, count = 9) => {
   const offs = [...t.matchAll(/^(\d{10}) 00000 n /gm)].map(([, off]) => Number(off));
-  return offs.length === 9 && offs.every((off) => /^\d+ 0 obj/.test(t.slice(off)));
+  return offs.length === count && offs.every((off) => /^\d+ 0 obj/.test(t.slice(off)));
 };
 ok(offsetsLand(report.toString('latin1')) && offsetsLand(pdfText), 'every cross-reference offset still lands on its object');
 ok(/\/Title \(\s+\)/.test(pdfText) && /\/Author <\s+>/.test(pdfText) && pdfText.includes('/Trapped /False'),
@@ -625,8 +625,49 @@ ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [5, '<< /Author (A) >>']], {
   'an encrypted PDF is put to the person');
 ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [5, '<< /Author (A) >>'], [8, '<< /Type /Sig /ByteRange [0 10 20 30] /Contents <00> >>']])) === 'scrub.signedDoc',
   'so is a signed one, which a change would break');
-ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [3, '<< /Type /ObjStm /N 1 /First 4 /Length 0 >>\nstream\n\nendstream']])) === 'scrub.cannotReadDoc',
-  'and one whose information dictionary is inside a compressed object stream');
+
+// Ghostscript, qpdf and Acrobat's reduced size keep the information dictionary
+// in a compressed object stream. It is inflated, blanked, compressed back into
+// the bytes it had, and its length rewritten in place.
+const objStm = (objects, lengthRef = null) => {
+  let header = '';
+  let body = '';
+  for (const [num, text] of objects) { header += `${num} ${body.length} `; body += text + '\n'; }
+  const packed = deflateSync(Buffer.from(header + body, 'latin1'), { level: 9 });
+  const length = lengthRef ?? packed.length;
+  return { packed, decoded: header + body, entry: `<< /Type /ObjStm /N ${objects.length} /First ${header.length} /Filter /FlateDecode /Length ${length} >>\nstream\n${packed.toString('latin1')}\nendstream` };
+};
+const streamOf = (bytes) => {
+  const t = bytes.toString('latin1');
+  const length = Number(/\/ObjStm[^>]*\/Length (\d+) *>>/.exec(t)?.[1] ?? /17 0 obj\n(\d+)/.exec(t)[1]);
+  const start = t.indexOf('stream\n') + 7;
+  return { data: inflateSync(bytes.subarray(start, start + length)).toString('latin1'), after: t.slice(start + length, t.indexOf('endstream', start)) };
+};
+const packedInfo = objStm([
+  [5, `<< /Author (${AUTHOR}) /Producer (GPL Ghostscript 10.06.0) /CreationDate (D:20261101163651+02'00') /Title 9 0 R /Trapped /False >>`],
+  [9, '(Microsoft Word - final3.docx)'],
+]);
+const gsLike = pdf([[1, '<< /Type /Catalog >>'], [3, packedInfo.entry]]);
+const gsOut = Buffer.from(await (await scrubFile(new File([gsLike], 'gs.pdf', { type: 'application/pdf' }))).arrayBuffer());
+const gsSeen = streamOf(gsOut);
+ok(gsOut.length === gsLike.length && offsetsLand(gsOut.toString('latin1'), 2),
+  'a PDF that keeps its information in a compressed object stream keeps its exact length');
+ok(!gsSeen.data.includes(AUTHOR) && !/Ghostscript|D:2026|final3/.test(gsSeen.data),
+  'and loses the author, the program, the date and a title held as its own object, inside the stream');
+ok(gsSeen.data.length === packedInfo.decoded.length && gsSeen.data.includes('/Trapped /False') && /\/Author \(\s+\)/.test(gsSeen.data),
+  'every object in the stream stays where its offset says, strings blanked inside their delimiters');
+ok(/^\n */.test(gsSeen.after), "what the smaller stream no longer needs is whitespace before endstream, and its length says so");
+
+const lengthHeld = objStm([[5, `<< /Author (${AUTHOR}) >>`]], '17 0 R');
+const heldOut = Buffer.from(await (await scrubFile(new File([pdf([[1, '<< /Type /Catalog >>'], [3, lengthHeld.entry],
+  [17, String(lengthHeld.packed.length)]])], 'held.pdf', { type: 'application/pdf' }))).arrayBuffer());
+const heldSeen = streamOf(heldOut);
+ok(!heldSeen.data.includes(AUTHOR) && /^\n */.test(heldSeen.after) && offsetsLand(heldOut.toString('latin1'), 3),
+  'a stream whose length is an object of its own — numbered past 9 — has that object rewritten');
+
+const predicted = objStm([[5, `<< /Author (${AUTHOR}) >>`]]);
+ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [3, predicted.entry.replace('/Filter /FlateDecode', '/Filter /FlateDecode /DecodeParms << /Predictor 12 >>')]])) === 'scrub.cannotReadDoc',
+  'one whose object stream could not be written back is put to the person');
 ok(await pdfAsked(Buffer.from('just text, not a PDF')) === 'scrub.cannotReadDoc', 'and something that is not a PDF at all');
 const bare = pdf([[1, '<< /Type /Catalog >>'], [5, '<< >>']]);
 ok(Buffer.from(await (await scrubFile(new File([bare], 'b.pdf', { type: 'application/pdf' }))).arrayBuffer()).equals(bare),

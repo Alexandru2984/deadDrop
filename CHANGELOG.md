@@ -11,6 +11,16 @@ compare rather than take a hash on trust.
 
 ## Unreleased
 
+### Added
+
+- **PDFs made by Ghostscript, qpdf or "Reduce file size" are cleaned too.**
+  They pack the author, the programs and the dates into a compressed object
+  stream, and were sent only if the person agreed to send them as they were.
+  That stream is now inflated, its strings blanked in place, and compressed
+  back into the bytes it had; the file keeps its length and every offset,
+  and opens as before. One that cannot be written back — a stream with a
+  predictor, or one that would not fit — is still put to the person.
+
 ### Fixed
 
 - **Search engines can find the site.** The reverse proxy told them not to

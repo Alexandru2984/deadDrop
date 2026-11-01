@@ -181,10 +181,13 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   PDFs — kept as the original JPEG, GPS included — have their EXIF, XMP, IPTC
   and comment segments blanked in place, keeping only the orientation, and
   anything a phone appended after the picture (a motion photo's video) cut
-  off; PNGs inside lose their text, EXIF and time chunks. A file that cannot be read —
-  encrypted, or a PDF that keeps its properties in a compressed object stream
-  — or one that is digitally signed, which any change would break, is sent
-  only if the person agrees. Other files go as chosen.
+  off; PNGs inside lose their text, EXIF and time chunks. A PDF that keeps
+  its information dictionary in a compressed object stream, as Ghostscript,
+  qpdf and reduced-size saves do, has that stream inflated, blanked and
+  compressed back into the bytes it had. A file that cannot be read —
+  encrypted, or an object stream that cannot be written back — or one that is
+  digitally signed, which any change would break, is sent only if the person
+  agrees. Other files go as chosen.
 - Copying a message takes it back out of the clipboard a minute later, as
   copying a room link does. A picture shown full screen closes with its
   message, and when the privacy screen comes up.

@@ -16,8 +16,14 @@
  * A photo placed in the document is stored as the original JPEG, EXIF and
  * all; its descriptive segments are blanked the same way (imagemeta.js).
  *
- * Some PDFs cannot be cleaned this way: an encrypted one, one that keeps its
- * information dictionary inside a compressed object stream, and one that is
+ * Ghostscript, qpdf and Acrobat's reduced-size saving keep the information
+ * dictionary inside a compressed object stream. That stream is inflated, its
+ * strings blanked the same way, and compressed again into the bytes it had:
+ * what it no longer needs is left as whitespace before `endstream`, and its
+ * length says so, so every offset in the file still holds.
+ *
+ * Some PDFs cannot be cleaned this way: an encrypted one, one whose object
+ * stream is compressed in a way this cannot write back, and one that is
  * digitally signed, where any change breaks the signature. Those are put to
  * the person, never sent as if they were clean.
  */
@@ -46,24 +52,29 @@ export async function scrubPdf(file) {
   const blank = (start, end) => bytes.fill(SPACE, start, end);
   const blankString = (start, end) => blank(start + 1, end - 1);
 
-  // Every information dictionary any revision's trailer names.
-  const infos = new Set([...text.matchAll(/\/Info\s+(\d+)\s+(\d+)\s+R/g)].map(([, num, gen]) => `${num} ${gen}`));
-  for (const info of infos) {
-    const [num, gen] = info.split(' ');
-    const found = objects(text, num, gen);
-    if (!found.length) throw unreadable('information dictionary in an object stream');
-    for (const at of found) {
-      if (!text.startsWith('<<', at)) throw unreadable('information is not a dictionary');
-      walkDict(text, at, blankString, (refNum, refGen) => {
-        // A value kept as its own object: `/Author 15 0 R`.
-        const held = objects(text, refNum, refGen);
-        if (!held.length) throw unreadable('information value in an object stream');
-        for (const v of held) {
-          if (text[v] === '(' || (text[v] === '<' && text[v + 1] !== '<')) blankString(v, stringEnd(text, v));
-        }
-      });
+  // Every information dictionary any revision's trailer names, with every
+  // value it keeps as an object of its own (`/Author 15 0 R`), wherever each
+  // lies: in plain text, or in a compressed object stream.
+  const packed = new ObjectStreams(bytes, text);
+  const cleaned = new Set();
+  const clean = async (num, gen, isInfo) => {
+    if (cleaned.has(`${num} ${gen}`)) return;
+    cleaned.add(`${num} ${gen}`);
+    const refs = [];
+    const plain = objects(text, num, gen);
+    for (const at of plain) {
+      if (text.startsWith('<<', at)) walkDict(text, at, blankString, (n, g) => refs.push([n, g]));
+      else if (isInfo) throw unreadable('information is not a dictionary');
+      else if (text[at] === '(' || (text[at] === '<' && text[at + 1] !== '<')) blankString(at, stringEnd(text, at));
     }
-  }
+    if (!plain.length && !await packed.blank(num, gen, isInfo, refs)) {
+      throw unreadable(isInfo ? 'information dictionary not found' : 'information value not found');
+    }
+    for (const [n, g] of refs) await clean(n, g, false);
+  };
+  const infos = new Set([...text.matchAll(/\/Info\s+(\d+)\s+(\d+)\s+R/g)].map(([, num, gen]) => `${num} ${gen}`));
+  for (const info of infos) await clean(...info.split(' '), true);
+  await packed.writeBack();
 
   for (const match of text.matchAll(SWEPT)) {
     const at = match.index + match[0].length;
@@ -168,6 +179,149 @@ function blankA85Jpeg(bytes, text, start, end) {
   }
 }
 
+/**
+ * The compressed object streams of a PDF 1.5 file, each inflated when first
+ * needed. One whose strings were blanked is compressed again into the bytes
+ * it had; see the top of this file.
+ */
+class ObjectStreams {
+  constructor(bytes, text) {
+    this.bytes = bytes;
+    this.text = text;
+    this.streams = null;
+  }
+
+  /**
+   * Blank the strings of object `num` wherever an object stream holds it,
+   * noting the objects it refers to in `refs`. False when no stream holds it
+   * — or when one that might could not be read.
+   */
+  async blank(num, gen, isInfo, refs) {
+    if (gen !== '0') return false; // an object in a stream is always generation 0
+    let found = false;
+    let unread = false;
+    for (const stream of this._list()) {
+      if (!await this._open(stream)) {
+        unread = true;
+        continue;
+      }
+      const at = stream.starts.get(num);
+      if (at === undefined) continue;
+      found = true;
+      const { decoded, view } = stream;
+      const blankString = (start, end) => {
+        decoded.fill(SPACE, start + 1, end - 1);
+        stream.dirty = true;
+      };
+      let i = at;
+      while (/\s/.test(view[i] ?? '')) i++;
+      if (view.startsWith('<<', i)) walkDict(view, i, blankString, (n, g) => refs.push([n, g]));
+      else if (isInfo) throw unreadable('information is not a dictionary');
+      else if (view[i] === '(' || (view[i] === '<' && view[i + 1] !== '<')) blankString(i, stringEnd(view, i));
+    }
+    return found && !unread;
+  }
+
+  /** Compress every changed stream back into its place. */
+  async writeBack() {
+    for (const stream of this.streams ?? []) {
+      if (!stream.dirty) continue;
+      const packed = await squeeze(stream.decoded, 'CompressionStream');
+      const { start, end } = stream.data;
+      if (packed.length > end - start) throw unreadable('object stream does not fit once cleaned');
+      this._setLength(stream, packed.length);
+      this.bytes.set(packed, start);
+      this.bytes.fill(SPACE, start + packed.length, end);
+      if (start + packed.length < end) this.bytes[start + packed.length] = 0x0a;
+    }
+  }
+
+  _list() {
+    if (this.streams) return this.streams;
+    this.streams = [];
+    for (const match of this.text.matchAll(/\d+\s+\d+\s+obj\s*<</g)) {
+      const dictStart = match.index + match[0].length - 2;
+      const dictEnd = dictEndOf(this.text, dictStart);
+      if (dictEnd < 0) continue;
+      const dict = this.text.slice(dictStart, dictEnd);
+      if (/\/Type\s*\/ObjStm(?![A-Za-z])/.test(dict)) this.streams.push({ dictStart, dictEnd, dict });
+    }
+    return this.streams;
+  }
+
+  /** Inflate a stream and index its objects; false when that cannot be done. */
+  async _open(stream) {
+    if (stream.opened !== undefined) return stream.opened;
+    stream.opened = false;
+    const { dict } = stream;
+    // Plain Flate only: a predictor or a second filter could not be written back.
+    if (!/\/Filter\s*(?:\/FlateDecode|\[\s*\/FlateDecode\s*\])(?![A-Za-z])/.test(dict) || /\/DecodeParms\b/.test(dict)) return false;
+    const count = /\/N\s+(\d+)(?!\d|\s+\d+\s+R)/.exec(dict);
+    const first = /\/First\s+(\d+)(?!\d|\s+\d+\s+R)/.exec(dict);
+    const data = streamData(this.text, stream.dictEnd, dict);
+    if (!count || !first || !data) return false;
+    let decoded;
+    try {
+      decoded = await squeeze(this.bytes.subarray(data.start, data.end), 'DecompressionStream');
+    } catch {
+      return false;
+    }
+    const view = new TextDecoder('latin1').decode(decoded);
+    const numbers = view.slice(0, Number(first[1])).match(/\d+/g) ?? [];
+    if (numbers.length < 2 * Number(count[1])) return false;
+    stream.starts = new Map();
+    for (let i = 0; i < Number(count[1]); i++) {
+      stream.starts.set(numbers[2 * i], Number(first[1]) + Number(numbers[2 * i + 1]));
+    }
+    Object.assign(stream, { data, decoded, view, opened: true });
+    return true;
+  }
+
+  /** Write the stream's new /Length over the old one, in the same width. */
+  _setLength(stream, length) {
+    const direct = /\/Length\s+(\d+)(?!\d|\s+\d+\s+R)/.exec(stream.dict);
+    let at;
+    let width;
+    if (direct) {
+      at = stream.dictStart + direct.index + direct[0].length - direct[1].length;
+      width = direct[1].length;
+    } else {
+      const ref = /\/Length\s+(\d+)\s+(\d+)\s+R/.exec(stream.dict);
+      const held = ref ? objects(this.text, ref[1], ref[2]) : [];
+      const digits = held.length === 1 ? /^\d+/.exec(this.text.slice(held[0], held[0] + 24)) : null;
+      if (!digits) throw unreadable('object stream length cannot be rewritten');
+      at = held[0];
+      width = digits[0].length;
+    }
+    const text = String(length).padEnd(width, ' ');
+    if (text.length > width) throw unreadable('object stream length cannot be rewritten');
+    for (let i = 0; i < width; i++) this.bytes[at + i] = text.charCodeAt(i);
+  }
+}
+
+// Bounded either way: a small stream that inflates to gigabytes is refused.
+const MAX_OBJECT_STREAM = 32 << 20;
+
+/** `bytes` through a zlib (de)compression stream. */
+async function squeeze(bytes, kind) {
+  const Stream = kind === 'CompressionStream' ? CompressionStream : DecompressionStream;
+  const reader = new Blob([bytes]).stream().pipeThrough(new Stream('deflate')).getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > MAX_OBJECT_STREAM) throw unreadable('object stream too large');
+      chunks.push(value);
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return new Uint8Array(await new Blob(chunks).arrayBuffer());
+}
+
 /** Where each `num gen obj` body begins, in every revision. */
 function objects(text, num, gen) {
   const at = [];
@@ -249,7 +403,7 @@ function streamData(text, dictEnd, dict) {
   const head = /^\s*stream(\r\n|\n)/.exec(text.slice(dictEnd, dictEnd + 64));
   if (!head) return null;
   const start = dictEnd + head[0].length;
-  const length = /\/Length\s+(\d+)(?!\s+\d+\s+R)/.exec(dict);
+  const length = /\/Length\s+(\d+)(?!\d|\s+\d+\s+R)/.exec(dict);
   if (length) {
     const end = start + Number(length[1]);
     if (/^\s*endstream/.test(text.slice(end, end + 32))) return { start, end };
