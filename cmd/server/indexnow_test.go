@@ -21,21 +21,21 @@ func TestIndexNowKeyIsWellFormedOrAbsent(t *testing.T) {
 	if key, err := indexNowKey(); key != "" || err != nil {
 		t.Fatalf("unset key = %q, %v", key, err)
 	}
-	t.Setenv("INDEXNOW_KEY", " 3f9a1c2b-0d4e ")
-	if key, err := indexNowKey(); key != "3f9a1c2b-0d4e" || err != nil {
+	t.Setenv("INDEXNOW_KEY", " sample-indexnow-key ")
+	if key, err := indexNowKey(); key != "sample-indexnow-key" || err != nil {
 		t.Fatalf("valid key = %q, %v", key, err)
 	}
 }
 
 func TestIndexNowKeyFileHoldsOnlyTheKey(t *testing.T) {
-	handler := indexNowKeyHandler("3f9a1c2b0d4e")
+	handler := indexNowKeyHandler("test-indexnow-key")
 	rec := httptest.NewRecorder()
-	handler(rec, httptest.NewRequest(http.MethodGet, "/3f9a1c2b0d4e.txt", nil))
-	if rec.Code != http.StatusOK || rec.Body.String() != "3f9a1c2b0d4e" || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
+	handler(rec, httptest.NewRequest(http.MethodGet, "/test-indexnow-key.txt", nil))
+	if rec.Code != http.StatusOK || rec.Body.String() != "test-indexnow-key" || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/plain") {
 		t.Fatalf("key file = %d %q %q", rec.Code, rec.Body.String(), rec.Header().Get("Content-Type"))
 	}
 	rec = httptest.NewRecorder()
-	handler(rec, httptest.NewRequest(http.MethodPost, "/3f9a1c2b0d4e.txt", nil))
+	handler(rec, httptest.NewRequest(http.MethodPost, "/test-indexnow-key.txt", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST to the key file = %d", rec.Code)
 	}
@@ -44,7 +44,7 @@ func TestIndexNowKeyFileHoldsOnlyTheKey(t *testing.T) {
 // The site and the IndexNow endpoint, played by one server: it serves whatever
 // key file it is given and records what was submitted.
 func TestSubmitIndexNowSendsOnlyThePublicPages(t *testing.T) {
-	const key = "3f9a1c2b0d4e"
+	const key = "test-indexnow-key"
 	served := key
 	status := http.StatusAccepted
 	var submitted []map[string]any
