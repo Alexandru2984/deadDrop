@@ -667,6 +667,9 @@ select { cursor: pointer; width: auto; }
   font-size: 14px;
 }
 .verify-bar.verified:not(.expanded) .verify-more { order: 2; margin-left: auto; }
+/* A finger-sized ▾ made the one-line bar 70px tall on a phone. Its target
+   keeps its size and reaches over the bar's padding instead. */
+.verify-bar.verified:not(.expanded) .verify-more { position: relative; z-index: 1; margin-block: -12px; }
 /* A group: one row per person, so a full-width warning under each code
    stacked the bar past half the screen before anyone could compare. The
    route sits as an icon beside the code instead — its sentence is the
@@ -1707,13 +1710,16 @@ select { cursor: pointer; width: auto; }
 
 /* Placed last: these override base rules of equal specificity defined above. */
 /* A phone on its side has ~360px of height for header, bar, conversation and
-   composer together. Give the conversation the room. */
-@media (max-height: 500px) {
+   composer together, and one upright with the keyboard open not much more.
+   Give the conversation the room. */
+@media (max-height: 600px) {
   .verify-bar { padding-top: 4px; padding-bottom: 4px; }
   .verify-bar > .verify-label,
   .verify-hint { display: none; }
   .verify-sas { font-size: 18px; }
   .chat-header { padding-top: 6px; padding-bottom: 6px; }
+  .chat-footer { padding-top: 6px; gap: 6px; }
+  #ttl-select { min-height: 36px; padding-top: 4px; padding-bottom: 4px; }
   .file-preview-img,
   .file-preview-video { max-height: 45vh; }
 }

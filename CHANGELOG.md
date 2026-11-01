@@ -9,6 +9,24 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+### Fixed
+
+- **The latest message stays in view.** A picture takes its height only
+  once it is decoded, after the conversation had already scrolled to it, so
+  half of every photo was left below the screen. Opening a phone's keyboard
+  shrank the conversation from the bottom, and the message being answered
+  went behind it. Whoever was reading at the end now stays there; someone
+  who scrolled up to read back is left where they are.
+- **More of the conversation fits on a phone.** The verified bar was 70px
+  tall for one line, because of the size of its ▾ button; it is now 45. On a
+  short screen — a phone with the keyboard open, or turned sideways — the
+  header, the bar and the composer tighten further.
+- **Opening the account panel on a phone no longer brings up the keyboard**
+  over it. The panel takes focus there instead of its first password field;
+  with a keyboard and mouse, the field still does.
+
 ## 0.6.0 — 2026-10-30
 
 **Update when you can.** Files no longer say who sent them: videos, iPhone

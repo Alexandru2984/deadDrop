@@ -429,6 +429,10 @@ class DeadDrop {
     // Chat
     this.el.sendBtn.addEventListener('click', () => this.sendMessage());
     this.el.messages.addEventListener('scroll', () => this._onLogScroll(), { passive: true });
+    // The keyboard coming up, or the phone turning, shrinks the log from the
+    // bottom: whoever was reading the latest message was left looking at
+    // older ones.
+    if (typeof ResizeObserver === 'function') new ResizeObserver(() => this._holdLogEnd()).observe(this.el.messages);
     // Anywhere on the picture closes it: there is nothing else to do there.
     this.el.imageViewer.addEventListener('click', () => this._closeImage());
     this.el.jumpNew.addEventListener('click', () => {
@@ -2947,6 +2951,9 @@ class DeadDrop {
     } else if (meta.fileType.startsWith('audio/')) {
       preview = h('audio', { src: blobUrl, controls: '', class: 'file-preview-audio' });
     }
+    // A picture or video takes its height only once decoded, after the log
+    // has scrolled to it: half of it was left below the screen.
+    preview?.addEventListener(preview.tagName === 'IMG' ? 'load' : 'loadedmetadata', () => this._holdLogEnd(), { once: true });
 
     // Anything without a preview is one compact row — icon, name and size —
     // rather than a tall card around a lone icon.
@@ -3353,7 +3360,13 @@ class DeadDrop {
     return list.scrollHeight - list.scrollTop - list.clientHeight < 80;
   }
 
+  /** Something in the log grew: whoever was reading at the end stays there. */
+  _holdLogEnd() {
+    if (this._followingEnd !== false) this.el.messages.scrollTop = this.el.messages.scrollHeight;
+  }
+
   _onLogScroll() {
+    this._followingEnd = this._atLogEnd();
     if (!this._scrolledAway || !this._atLogEnd()) return;
     this._scrolledAway = false;
     this.el.jumpNew.classList.add('hidden');
@@ -3527,6 +3540,7 @@ class DeadDrop {
     this._iceExpiresAt = 0;
     this.el.messages.replaceChildren();
     this._scrolledAway = false;
+    this._followingEnd = true;
     this.el.jumpNew.classList.add('hidden');
     this.encrypted = false;
     for (const control of [this.el.msgInput, this.el.sendBtn, this.el.attachBtn, this.el.recordBtn]) {
@@ -3599,9 +3613,13 @@ class DeadDrop {
         const r = el.getBoundingClientRect();
         return r.width > 0 && r.height > 0;
       });
+    // On a touch screen a focused text field brings the keyboard up over the
+    // panel that has just opened, before anyone chose to type; there the
+    // panel itself takes focus.
+    const typing = target?.matches('input:not([type="checkbox"]):not([type="radio"]), textarea');
     // The container itself is the fallback, which is why it carries tabindex="-1":
     // a dialog with nothing to focus should still put the reader inside it.
-    (target || dialog).focus?.();
+    ((typing && matchMedia('(pointer: coarse)').matches ? null : target) || dialog).focus?.();
   }
 
   /**

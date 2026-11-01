@@ -1118,6 +1118,38 @@ ok(await waitFor(() => bob.eval(`document.querySelector('#jump-new').classList.c
 ok(await waitFor(async () => !(await bob.transcript()).includes(offView), { timeout: 15000 }),
   'and the message burns once it has been seen');
 
+// ── The end of the conversation stays in view ──
+// A picture takes its height only once decoded, after the log has already
+// scrolled to it, and half of it was left below the screen. A phone's
+// keyboard shrinks the log from the bottom, and the latest message went
+// behind it. Whoever was reading at the end now stays there.
+const shortOfEnd = () => bob.eval(`(() => {
+  const log = document.querySelector('#messages');
+  return Math.round(log.scrollHeight - log.scrollTop - log.clientHeight);
+})()`);
+await alice.eval(`(() => {
+  const burn = document.querySelector('#burn-toggle');
+  if (burn.checked) burn.click();
+  const ttl = document.querySelector('#ttl-select');
+  ttl.value = '0';
+  ttl.dispatchEvent(new Event('change'));
+  return true;
+})()`);
+await bob.eval(`(() => { const log = document.querySelector('#messages'); log.scrollTop = log.scrollHeight; return true; })()`);
+await alice.sendGeneratedImage(300, 900, 'tall.png');
+ok(await waitFor(() => bob.eval(`(() => {
+  const last = [...document.querySelectorAll('.msg.theirs .file-preview-img')].at(-1);
+  return !!last && last.complete && last.naturalHeight === 900;
+})()`), { timeout: 40000 }), 'a tall picture arrives');
+await sleep(300);
+const short = await shortOfEnd();
+ok(short < 4, `once it is drawn, the conversation still ends at it (${short}px short)`);
+await cdp.send('Emulation.setDeviceMetricsOverride', { width: 800, height: 380, deviceScaleFactor: 1, mobile: false }, bob.sessionId);
+await sleep(500);
+const shortAfter = await shortOfEnd();
+await cdp.send('Emulation.clearDeviceMetricsOverride', {}, bob.sessionId);
+ok(shortAfter < 4, `and when the window shrinks, as a keyboard makes it, the end stays in view (${shortAfter}px short)`);
+
 // ── Back ──
 // A conversation lives only in the page; back, or a phone's edge swipe, used
 // to end it at a touch. Now it closes what is open, then asks again.
