@@ -174,16 +174,17 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   Excel's note of the folder it saved in is dropped, comment authors' work
   e-mail or Microsoft account becomes what Office writes for someone signed
   out, and the printer's name and its driver's own data are zeroed, in
-  Office's and LibreOffice's copies alike. So are the identifiers Office
-  keeps through every copy, which match a copy to its original: Word's
-  editing-session IDs (rsids) and document IDs go, as do Excel's document,
-  sheet, table and column IDs and PowerPoint's last-client record; paragraph,
-  comment, slide and shape IDs, which other parts point at, are replaced by
-  new random ones, consistently. A document from SharePoint or OneDrive loses
-  the library's record in its custom XML — the document ID, the address
-  naming the organisation and site, the people it was shared with — and a
-  cover page its company address, phone and e-mail. The content, including comments
-  and tracked changes with their authors, is left as written. A PDF's information
+  Office's and LibreOffice's copies alike. Identifiers kept through every
+  copy, which match a copy to its original, are taken out: Word's and
+  LibreOffice's editing-session IDs (rsids), Word's document IDs, Excel's
+  document, sheet, table and column IDs, and PowerPoint's last-client
+  record; paragraph, comment, slide and shape IDs, which other parts point
+  at, are replaced by new random ones, consistently. A document from
+  SharePoint or OneDrive loses the library's record in its custom XML — the
+  document ID, the address naming the organisation and site, the people it
+  was shared with — and a cover page its company address, phone and e-mail.
+  The content, including comments and tracked changes with their authors,
+  is left as written. A PDF's information
   dictionary (in every revision) and XMP streams become spaces in place, so
   the file keeps its length and every offset. Photos inside documents and
   PDFs — kept as the original JPEG, GPS included — have their EXIF, XMP, IPTC

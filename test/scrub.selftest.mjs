@@ -394,6 +394,28 @@ try {
   ok(odfSettings.includes('config:name="PrinterIndependentLayout" config:type="string">high-resolution<') && odfSettings.includes('>view2<'),
     'and its other settings kept');
 
+  const ODF_NS = 'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:officeooo="http://openoffice.org/2009/office"';
+  const odtSessions = zip([
+    { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', deflate: false },
+    { name: 'content.xml', data: `<office:document-content ${ODF_NS} office:version="1.3"><office:automatic-styles>` +
+      '<style:style style:name="P1" style:family="paragraph"><style:text-properties officeooo:rsid="00123abc" officeooo:paragraph-rsid="00123abc"/></style:style>' +
+      '<style:style style:name="T1" style:family="text"><style:text-properties style:font-name="Liberation Serif" officeooo:rsid="0045def0"/></style:style>' +
+      '</office:automatic-styles><office:body><office:text><text:p text:style-name="P1">The quarterly numbers are attached.</text:p></office:text></office:body></office:document-content>' },
+    { name: 'styles.xml', data: `<office:document-styles ${ODF_NS}><office:styles><style:default-style style:family="paragraph"><style:text-properties officeooo:rsid="00123abc"/></style:default-style></office:styles></office:document-styles>` },
+    { name: 'settings.xml', data: '<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0">' +
+      '<office:settings><config:config-item-set config:name="ooo:configuration-settings">' +
+      '<config:config-item config:name="Rsid" config:type="int">4567920</config:config-item><config:config-item config:name="RsidRoot" config:type="int">1194684</config:config-item>' +
+      '<config:config-item config:name="PrinterIndependentLayout" config:type="string">high-resolution</config:config-item>' +
+      '</config:config-item-set></office:settings></office:document-settings>' },
+  ]);
+  const odtSessionsSeen = inspect(Buffer.from(await (await scrubFile(new File([odtSessions], 'notes.odt', { type: '' }))).arrayBuffer()));
+  const odfAll = Object.values(odtSessionsSeen.parts).join('');
+  ok(odtSessionsSeen.malformed.length === 0 && !/rsid|00123abc|0045def0|4567920|1194684/i.test(odfAll),
+    "LibreOffice's editing sessions, on its styles and in its settings, are gone");
+  ok(odfAll.includes('<style:text-properties style:font-name="Liberation Serif"/>') && odfAll.includes('>The quarterly numbers are attached.</text:p>')
+    && odfAll.includes('>high-resolution<'),
+    'and the formatting, the text and the other settings stay');
+
   const untraced = zip([
     { name: '[Content_Types].xml', data: '<Types/>' },
     { name: 'xl/workbook.xml', data: '<workbook><sheets/></workbook>' },

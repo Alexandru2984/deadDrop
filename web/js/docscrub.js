@@ -178,7 +178,10 @@ async function replacementFor(bytes, entry, odf, ids) {
       const text = new TextDecoder().decode(await contentOf(bytes, entry, MAX_META_BYTES));
       return odfMeta(/office:version="([0-9.]{1,8})"/.exec(text)?.[1]);
     }
-    if (name === 'settings.xml') return rewritten(bytes, entry, withoutOdfPrinter);
+    if (name === 'settings.xml') return rewritten(bytes, entry, (xml) => withoutOdfSessions(withoutOdfPrinter(xml)));
+    if ((name === 'content.xml' || name === 'styles.xml') && entry.size <= MAX_PART_BYTES) {
+      return rewritten(bytes, entry, withoutOdfSessions);
+    }
   } else {
     if (OOXML_EMPTY.has(name)) return OOXML_EMPTY.get(name);
     const hidden = HIDDEN.find(([pattern]) => pattern.test(name));
@@ -378,6 +381,18 @@ async function itemText(bytes, entry, name) {
   } catch {
     throw unreadable(`${name} is neither UTF-8 nor UTF-16`);
   }
+}
+
+/**
+ * LibreOffice's counterpart of Word's rsids: the editing session that wrote
+ * each piece of text, on the styles that format it, and in the settings the
+ * current one and the one that created the document. Gone, for the same
+ * reason; LibreOffice starts new ones.
+ */
+function withoutOdfSessions(xml) {
+  return xml
+    .replace(/\sofficeooo:(?:paragraph-)?rsid\s*=\s*"[^"]*"/g, '')
+    .replace(/<config:config-item\b[^>]*\sconfig:name="Rsid(?:Root)?"[^>]*?(?:\/>|>[^<]*<\/config:config-item>)/g, '');
 }
 
 /** LibreOffice's record of the printer: its name, and its settings with the driver's own. */

@@ -30,7 +30,8 @@ compare rather than take a hash on trust.
   same sitting. The bookkeeping ones go; the ones comments point at are
   replaced by new random IDs, the same wherever they appear, so threads and
   comments stay attached. PowerPoint's change log loses the account behind
-  each change, as comment authors already did.
+  each change, as comment authors already did. LibreOffice keeps editing
+  sessions the same way, on its styles and in its settings; they go too.
 - **A document from SharePoint or OneDrive no longer says where it came
   from.** The library keeps its columns inside the file: the document's ID,
   the address that finds it — which names the organisation and the site —
