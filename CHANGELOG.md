@@ -20,6 +20,17 @@ compare rather than take a hash on trust.
   back into the bytes it had; the file keeps its length and every offset,
   and opens as before. One that cannot be written back — a stream with a
   predictor, or one that would not fit — is still put to the person.
+- **Office documents no longer carry what matches a copy to its original.**
+  Word marks every paragraph with the editing session that wrote it, and
+  keeps a list of those sessions and an ID for the document; Excel keeps the
+  document's ID and one on every sheet and table; PowerPoint one on every
+  slide and shape, and the last client to save. None names the sender, but
+  all survive every copy, so a document sent through Dead Drop could be
+  matched to the one on the sender's computer, and to others edited in the
+  same sitting. The bookkeeping ones go; the ones comments point at are
+  replaced by new random IDs, the same wherever they appear, so threads and
+  comments stay attached. PowerPoint's change log loses the account behind
+  each change, as comment authors already did.
 - **Search engines hear about a new release.** With `INDEXNOW_KEY` set, the
   service answers the key file IndexNow asks for, and a deploy that changes
   the home page or an about page tells Bing, Yandex and the others sharing

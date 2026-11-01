@@ -270,6 +270,83 @@ try {
     && deckSeen.parts['ppt/commentAuthors.xml'].includes(`userId="${AUTHOR}" providerId="None"`),
     "and behind a PowerPoint comment's, in both the new and the older list");
 
+  // Identifiers Office keeps through every copy, which match a copy to the
+  // original on the author's disk.
+  const W = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"';
+  const stamped = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: `<w:document ${W}><w:body>` +
+      '<w:p w14:paraId="1A2B3C4D" w14:textId="77777777" w:rsidR="00A1B2C3" w:rsidRDefault="00D4E5F6" w:rsidP="00A1B2C3">' +
+      '<w:r w:rsidRPr="00D4E5F6"><w:t>The quarterly numbers are attached.</w:t></w:r></w:p>' +
+      '<w:sectPr w:rsidR="00A1B2C3" w:rsidSect="00D4E5F6"/></w:body></w:document>' },
+    { name: 'word/settings.xml', data: `<w:settings ${W}><w:zoom w:percent="100"/>` +
+      '<w:rsids><w:rsidRoot w:val="00A1B2C3"/><w:rsid w:val="00A1B2C3"/><w:rsid w:val="00D4E5F6"/></w:rsids>' +
+      '<w14:docId w14:val="5B1C2D3E"/><w15:docId w15:val="{6A1B2C3D-4E5F-4061-8273-94A5B6C7D8E9}"/></w:settings>' },
+    { name: 'word/styles.xml', data: `<w:styles ${W}><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:rsid w:val="00A1B2C3"/></w:style></w:styles>` },
+    { name: 'word/commentsExtended.xml', data: `<w15:commentsEx ${W}><w15:commentEx w15:paraId="1a2b3c4d" w15:done="0"/></w15:commentsEx>` },
+    { name: 'word/commentsIds.xml', data: '<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">' +
+      '<w16cid:commentId w16cid:paraId="1A2B3C4D" w16cid:durableId="2B3C4D5E"/></w16cid:commentsIds>' },
+  ]);
+  const stampedSeen = inspect(Buffer.from(await (await scrubFile(new File([stamped], 'Report.docx', { type: '' }))).arrayBuffer()));
+  const wordAll = Object.values(stampedSeen.parts).join('');
+  ok(stampedSeen.bad === null && stampedSeen.malformed.length === 0 && !/rsid|docId|00A1B2C3|00D4E5F6|5B1C2D3E|6A1B2C3D/i.test(wordAll),
+    "Word's editing sessions, on every paragraph and in the settings, and the document's own IDs, are gone");
+  const paraId = /<w:p w14:paraId="([0-9A-F]{8})" w14:textId="([0-9A-F]{8})">/.exec(stampedSeen.parts['word/document.xml']);
+  ok(paraId && paraId[1] !== '1A2B3C4D' && paraId[2] !== '77777777' && parseInt(paraId[1], 16) < 0x80000000
+    && stampedSeen.parts['word/commentsExtended.xml'].includes(`w15:paraId="${paraId[1]}"`)
+    && stampedSeen.parts['word/commentsIds.xml'].includes(`w16cid:paraId="${paraId[1]}"`)
+    && !/2B3C4D5E/.test(stampedSeen.parts['word/commentsIds.xml']),
+    'paragraph and comment IDs are new, and what pointed at the old ones points at the new');
+  ok(stampedSeen.parts['word/document.xml'].includes('<w:r><w:t>The quarterly numbers are attached.</w:t></w:r>')
+    && stampedSeen.parts['word/styles.xml'].includes('<w:name w:val="heading 1"/></w:style>') && stampedSeen.parts['word/settings.xml'].includes('<w:zoom w:percent="100"/>'),
+    'and the text, the styles and the settings are as they were');
+
+  const EXT_URI = '{B025F937-C7B1-47D3-B67F-A62EFF666E3E}';
+  const stampedBook = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" xmlns:xr6="http://schemas.microsoft.com/office/spreadsheetml/2016/revision6" xmlns:xr10="http://schemas.microsoft.com/office/spreadsheetml/2016/revision10">' +
+      '<xr:revisionPtr revIDLastSave="0" documentId="13_ncr:1_{F1E2D3C4-B5A6-4978-8695-A4B3C2D1E0F9}" xr6:coauthVersionLast="47" xr6:coauthVersionMax="47" xr10:uidLastSave="{00000000-0000-0000-0000-000000000000}"/>' +
+      '<sheets><sheet name="Budget" sheetId="1"/></sheets></workbook>' },
+    { name: 'xl/worksheets/sheet1.xml', data: '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" xr:uid="{0A1B2C3D-4E5F-4A6B-8C7D-9E0F1A2B3C4D}">' +
+      `<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>1200</t></is></c></row></sheetData><extLst><ext uri="${EXT_URI}"/></extLst></worksheet>` },
+    { name: 'xl/tables/table1.xml', data: '<table xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" xmlns:xr3="http://schemas.microsoft.com/office/spreadsheetml/2016/revision3" id="1" xr:uid="{1B2C3D4E-5F60-4B7C-8D9E-0F1A2B3C4D5E}" name="Costs" ref="A1:A2">' +
+      '<tableColumns count="1"><tableColumn id="1" xr3:uid="{2C3D4E5F-6071-4C8D-9EAF-1A2B3C4D5E6F}" name="Amount"/></tableColumns></table>' },
+  ]);
+  const stampedBookSeen = inspect(Buffer.from(await (await scrubFile(new File([stampedBook], 'Budget.xlsx', { type: '' }))).arrayBuffer()));
+  const bookAll = Object.values(stampedBookSeen.parts).join('');
+  ok(stampedBookSeen.malformed.length === 0 && !/revisionPtr|documentId|xr\d*:uid|F1E2D3C4|0A1B2C3D|1B2C3D4E|2C3D4E5F/.test(bookAll),
+    "Excel's document ID, and the IDs of its sheets, tables and columns, are gone");
+  ok(bookAll.includes('<sheets><sheet name="Budget" sheetId="1"/></sheets>') && bookAll.includes('<t>1200</t>')
+    && bookAll.includes(`<ext uri="${EXT_URI}"/>`) && bookAll.includes('<tableColumn id="1" name="Amount"/>'),
+    "while the cells, the table, and the fixed IDs naming Office's extensions stay");
+
+  const SLIDE_ID = '3168075583';
+  const SHAPE_ID = '{0F1E2D3C-4B5A-4978-8796-A5B4C3D2E1F0}';
+  const stampedDeck = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'ppt/slides/slide1.xml', data: '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>' +
+      `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"><a:extLst><a:ext uri="{FF2B5EF4-FFF2-40B4-BE49-F238E27FC236}"><a16:creationId xmlns:a16="http://schemas.microsoft.com/office/drawing/2014/main" id="${SHAPE_ID}"/></a:ext></a:extLst></p:cNvPr></p:nvSpPr></p:sp>` +
+      `</p:spTree></p:cSld><p:extLst><p:ext uri="{BB962C8B-B14F-4D97-AF65-F5344CB8AC3E}"><p14:creationId xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main" val="${SLIDE_ID}"/></p:ext></p:extLst></p:sld>` },
+    { name: 'ppt/comments/modernComment_100_BCD3B6F.xml', data: '<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:pc="http://schemas.microsoft.com/office/powerpoint/2013/main/command" xmlns:ac="http://schemas.microsoft.com/office/drawing/2013/main/command">' +
+      `<p188:cm id="{5D6E7F80-91A2-4B3C-8D4E-5F60718293A4}"><ac:deMkLst><pc:docMk/><pc:sldMk cId="0" creationId="${SLIDE_ID}"/><ac:spMk id="2" creationId="${SHAPE_ID}"/></ac:deMkLst></p188:cm></p188:cmLst>` },
+    { name: 'ppt/revisionInfo.xml', data: '<p1510:revInfo xmlns:p1510="http://schemas.microsoft.com/office/powerpoint/2015/10/main"><p1510:revLst><p1510:client id="{9E8D7C6B-5A49-4382-9170-6F5E4D3C2B1A}" v="2541" dt="2026-10-27T14:32:00.000"/></p1510:revLst></p1510:revInfo>' },
+    { name: 'ppt/changesInfos/changesInfo1.xml', data: '<pc:chgInfo xmlns:pc="http://schemas.microsoft.com/office/powerpoint/2013/main/command">' +
+      `<pc:docChgLst><pc:chgData name="${AUTHOR}" userId="S::${EMAIL}::7e1f" providerId="AD" clId="Web-{9E8D7C6B-5A49-4382-9170-6F5E4D3C2B1A}"/></pc:docChgLst></pc:chgInfo>` },
+  ]);
+  const stampedDeckSeen = inspect(Buffer.from(await (await scrubFile(new File([stampedDeck], 'Pitch.pptx', { type: '' }))).arrayBuffer()));
+  const slide = stampedDeckSeen.parts['ppt/slides/slide1.xml'];
+  const comment = stampedDeckSeen.parts['ppt/comments/modernComment_100_BCD3B6F.xml'];
+  const newSlideId = /p14:creationId [^>]*val="(\d+)"/.exec(slide)?.[1];
+  const newShapeId = /a16:creationId [^>]*id="(\{[0-9A-F-]{36}\})"/.exec(slide)?.[1];
+  ok(stampedDeckSeen.malformed.length === 0 && newSlideId && newShapeId && !JSON.stringify(stampedDeckSeen.parts).includes(SLIDE_ID)
+    && !JSON.stringify(stampedDeckSeen.parts).includes(SHAPE_ID),
+    "every slide's and shape's creation ID is a new one");
+  ok(comment.includes(`<pc:sldMk cId="0" creationId="${newSlideId}"/>`) && comment.includes(`<ac:spMk id="2" creationId="${newShapeId}"/>`),
+    'and a comment still points at its slide and shape');
+  ok(!/9E8D7C6B|2026-10-27/.test(stampedDeckSeen.parts['ppt/revisionInfo.xml']) && /revInfo/.test(stampedDeckSeen.parts['ppt/revisionInfo.xml'])
+    && !stampedDeckSeen.parts['ppt/changesInfos/changesInfo1.xml'].includes(EMAIL),
+    'the last client to save, and when, are gone, and the account behind a change');
+
   const SETUP = Buffer.from('PRINT01 Floor3 alice JOB-1234').toString('base64');
   const odtPrinted = zip([
     { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', deflate: false },

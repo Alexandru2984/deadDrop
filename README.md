@@ -174,7 +174,12 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   Excel's note of the folder it saved in is dropped, comment authors' work
   e-mail or Microsoft account becomes what Office writes for someone signed
   out, and the printer's name and its driver's own data are zeroed, in
-  Office's and LibreOffice's copies alike. The content, including comments
+  Office's and LibreOffice's copies alike. So are the identifiers Office
+  keeps through every copy, which match a copy to its original: Word's
+  editing-session IDs (rsids) and document IDs go, as do Excel's document,
+  sheet, table and column IDs and PowerPoint's last-client record; paragraph,
+  comment, slide and shape IDs, which other parts point at, are replaced by
+  new random ones, consistently. The content, including comments
   and tracked changes with their authors, is left as written. A PDF's information
   dictionary (in every revision) and XMP streams become spaces in place, so
   the file keeps its length and every offset. Photos inside documents and

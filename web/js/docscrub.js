@@ -27,6 +27,10 @@
  * printer the document was set up for, with what its driver keeps about the
  * user.
  *
+ * And the identifiers Office stamps on a document and keeps through every
+ * copy of it — see withoutFingerprints — which let a copy be matched to the
+ * original on the author's disk.
+ *
  * Pictures inside are cleaned too: a phone photo pasted into a document is
  * kept as the original JPEG, with where and when it was taken. See
  * imagemeta.js.
@@ -91,11 +95,18 @@ const PICTURE = /\.(jpe?g|png)$/i;
 // Office's copy of the printer's settings, one per document or sheet.
 const PRINTER = /^(?:word|xl|ppt)\/printerSettings\/[^/]+\.bin$/i;
 
+// Office's own parts, where it stamps the identifiers withoutFingerprints
+// takes out. Anything larger than MAX_PART_BYTES is left as it was.
+const STAMPED = /^(?:word|xl|ppt)\/.+\.xml$/;
+
 // Office parts that name the person out of sight, each with what removes it.
 const HIDDEN = [
   [/^word\/_rels\/settings\.xml\.rels$/, withoutLocalPaths],
   [/^xl\/workbook\.xml$/, withoutSavedFolder],
-  [/^(?:word\/people|xl\/persons\/[^/]+|ppt\/authors|ppt\/commentAuthors)\.xml$/, withoutAccounts],
+  [/^(?:word\/people|xl\/persons\/[^/]+|ppt\/authors|ppt\/commentAuthors|ppt\/changesInfos\/[^/]+)\.xml$/, withoutAccounts],
+  // PowerPoint's note of the last client to save, by ID, and when.
+  [/^ppt\/revisionInfo\.xml$/, () => XML +
+    '<p1510:revInfo xmlns:p1510="http://schemas.microsoft.com/office/powerpoint/2015/10/main"/>'],
 ];
 
 /** Thrown for anything that is not a plain, readable document archive. */
@@ -120,8 +131,9 @@ export async function scrubDocument(file, type) {
   const out = [];
   const central = [];
   let offset = 0;
+  const ids = new Renumbering();
   for (const entry of entries) {
-    const replacement = await replacementFor(bytes, entry, odf);
+    const replacement = await replacementFor(bytes, entry, odf, ids);
     let data;
     let method = entry.method;
     let crc = entry.crc;
@@ -130,9 +142,12 @@ export async function scrubDocument(file, type) {
       data = bytes.subarray(entry.dataStart, entry.dataStart + entry.compressedSize);
     } else {
       data = typeof replacement === 'string' ? new TextEncoder().encode(replacement) : replacement;
-      method = 0;
       crc = crc32(data);
       size = data.length;
+      // Text is compressed again if it was: a document's whole body can be
+      // rewritten. A picture would not shrink.
+      if (method === 8 && typeof replacement === 'string' && typeof CompressionStream === 'function') data = await deflated(data);
+      else method = 0;
     }
     // Only UTF-8 names survive from the flags; a data descriptor is not
     // needed now that the sizes are known up front.
@@ -151,7 +166,7 @@ export async function scrubDocument(file, type) {
 }
 
 /** What a part becomes — a string or bytes — or null to copy it as it is. */
-async function replacementFor(bytes, entry, odf) {
+async function replacementFor(bytes, entry, odf, ids) {
   const { name } = entry;
   if (odf) {
     if (name === 'meta.xml') {
@@ -162,8 +177,11 @@ async function replacementFor(bytes, entry, odf) {
   } else {
     if (OOXML_EMPTY.has(name)) return OOXML_EMPTY.get(name);
     const hidden = HIDDEN.find(([pattern]) => pattern.test(name));
-    if (hidden) return rewritten(bytes, entry, hidden[1]);
+    if (hidden) return rewritten(bytes, entry, (xml) => withoutFingerprints(hidden[1](xml), ids));
     if (PRINTER.test(name)) return withoutPrinter(await partOf(bytes, entry));
+    if (STAMPED.test(name) && entry.size <= MAX_PART_BYTES) {
+      return rewritten(bytes, entry, (xml) => withoutFingerprints(xml, ids));
+    }
   }
   if (!PICTURE.test(name)) return null;
   const picture = await partOf(bytes, entry);
@@ -243,6 +261,78 @@ function withoutAccounts(xml) {
     const out = withValue(tag, '(?:[\\w.-]+:)?userId', name);
     return valueOf(out, '(?:[\\w.-]+:)?providerId') === null ? out : withValue(out, '(?:[\\w.-]+:)?providerId', 'None');
   });
+}
+
+/**
+ * Identifiers Office stamps on a document and keeps through every copy of
+ * it. None names anyone, but a copy that carries them can be matched to the
+ * original on the author's disk, paragraph by paragraph, and to other
+ * documents edited in the same sitting.
+ *
+ * Word marks every paragraph and run with the editing session that wrote it
+ * (rsids), and keeps the list of sessions, the first of them the one that
+ * created the document, with an ID for the document itself. Excel keeps the
+ * document's ID and the one it was saved over, and an ID on every sheet,
+ * table and column. These are only Office's bookkeeping, and go.
+ *
+ * Others are what parts of the document point at: Word's paragraph and
+ * comment IDs, which threaded comments refer to, and the creation IDs of
+ * slides and shapes, which PowerPoint's comments refer to. Each gets a new
+ * random one, the same wherever it appears.
+ */
+function withoutFingerprints(xml, ids) {
+  return xml
+    .replace(/<w:rsids\s*\/>|<w:rsids>[\s\S]*?<\/w:rsids>/g, '')
+    .replace(/<w:rsid\s[^>]*\/>/g, '')
+    .replace(/\sw:rsid[A-Za-z]*\s*=\s*"[^"]*"/g, '')
+    .replace(/<w1[45]:docId\b[^>]*\/>/g, '')
+    .replace(/<xr:revisionPtr\b[^>]*\/>/g, '')
+    .replace(/\sxr\d*:uid\s*=\s*"[^"]*"/g, '')
+    .replace(/(\s(?:w1[45]:paraId|w15:paraIdParent|w16cid:paraId|w14:textId|w16cid:durableId|w16cex:durableId)\s*=\s*")([0-9A-Fa-f]{8})"/g,
+      (_, head, id) => `${head}${ids.hex(id)}"`)
+    .replace(/(<(?:p14|a16):creationId\b[^>]*\s(?:val|id)\s*=\s*")([^"]+)"/g, (_, head, id) => `${head}${ids.any(id)}"`)
+    .replace(/(\screationId\s*=\s*")([^"]+)"/g, (_, head, id) => `${head}${ids.any(id)}"`);
+}
+
+/**
+ * New random identifiers for old ones, the same old one always getting the
+ * same, and no two old ones the same new one: Word has a paragraph ID for
+ * every paragraph, and 31 bits run into each other in a long document.
+ */
+class Renumbering {
+  constructor() {
+    this.seen = new Map();
+    this.issued = new Set();
+  }
+
+  /** Word's: eight hex digits, below 0x80000000 as Word requires. */
+  hex(id) {
+    return this._fresh(`hex:${id.toUpperCase()}`, () =>
+      (crypto.getRandomValues(new Uint32Array(1))[0] >>> 1 || 1).toString(16).toUpperCase().padStart(8, '0'));
+  }
+
+  /** A slide's 32-bit number, or a shape's {GUID}, in the same form. */
+  any(id) {
+    if (/^\{[0-9A-Fa-f-]{36}\}$/.test(id)) return this._fresh(id.toUpperCase(), () => `{${crypto.randomUUID().toUpperCase()}}`);
+    if (/^\d{1,10}$/.test(id)) return this._fresh(id, () => String(crypto.getRandomValues(new Uint32Array(1))[0] || 1));
+    return id;
+  }
+
+  _fresh(key, make) {
+    if (!this.seen.has(key)) {
+      let id;
+      do id = make(); while (this.issued.has(id));
+      this.issued.add(id);
+      this.seen.set(key, id);
+    }
+    return this.seen.get(key);
+  }
+}
+
+/** `data` deflated, as a ZIP stores it (method 8). */
+async function deflated(data) {
+  const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 /** LibreOffice's record of the printer: its name, and its settings with the driver's own. */
