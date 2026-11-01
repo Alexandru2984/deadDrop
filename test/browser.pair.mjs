@@ -801,6 +801,29 @@ ok(signedAsk.length === 1 && /signed/i.test(signedAsk[0]) && !(await bob.receive
   `a signed PDF asks before its signature is broken, and stays when declined (${signedAsk[0]})`);
 await alice.eval(`window.confirm = () => true; true`);
 
+// Comments and tracked changes are content and go, but not before the person
+// is told they are there, and by whom.
+const reviewedDoc = zip([
+  { name: '[Content_Types].xml', data: '<Types/>' },
+  { name: 'word/document.xml', data: '<w:document><w:body><w:p><w:ins w:id="1" w:author="Carol Reviewer"><w:r><w:t>six</w:t></w:r></w:ins></w:p></w:body></w:document>' },
+  { name: 'word/comments.xml', data: '<w:comments><w:comment w:id="0" w:author="Bob $&amp; Jones"><w:p/></w:comment></w:comments>' },
+]);
+const pickReviewed = (name) => pick(alice, `async () => new Blob([Uint8Array.from(atob(${JSON.stringify(reviewedDoc.toString('base64'))}), (c) => c.charCodeAt(0))])`,
+  name, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
+await pickReviewed('Review draft.docx');
+await sleep(1500);
+const reviewAsk = await alice.eval(`window.__asked`);
+ok(reviewAsk.length === 1 && /comments and tracked changes/.test(reviewAsk[0]) && reviewAsk[0].includes('Bob $& Jones') && reviewAsk[0].includes('Carol Reviewer')
+  && !(await bob.receivedFiles()).some((f) => f.name === 'Review draft.docx'),
+  `a document with comments and tracked changes asks first, naming who made them, and stays when declined (${reviewAsk[0]})`);
+ok(await alice.eval(`[...document.querySelectorAll('.msg.system')].some((m) => /Not sent/.test(m.textContent))`),
+  'and the sender is told how to send it without them');
+await alice.eval(`window.confirm = () => true; true`);
+await pickReviewed('Review final.docx');
+ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'Review final.docx'), { timeout: 20000 }),
+  'and goes, cleaned, when the person agrees');
+
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.
 const nastyName = '<img src=x onerror=alert(1)>.txt';

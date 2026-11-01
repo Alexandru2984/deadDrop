@@ -416,6 +416,56 @@ try {
     && odfAll.includes('>high-resolution<'),
     'and the formatting, the text and the other settings stay');
 
+  // Comments and tracked changes are content and stay, but the person is
+  // asked first, told whose names they carry.
+  const keptOf = async (entries, name) => (await scrubFile(new File([zip(entries)], name, { type: '' }))).kept ?? null;
+  const reviewed = await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: `<w:document ${W}><w:body><w:tbl><w:tblPr><w:tblBorders><w:insideH w:val="single"/></w:tblBorders></w:tblPr></w:tbl>` +
+      '<w:p><w:ins w:id="1" w:author="Carol Reviewer" w:date="2026-10-27T14:32:00Z"><w:r><w:t>six</w:t></w:r></w:ins>' +
+      '<w:del w:id="2" w:author="Carol Reviewer"><w:r><w:delText>five</w:delText></w:r></w:del></w:p></w:body></w:document>' },
+    { name: 'word/comments.xml', data: `<w:comments ${W}><w:comment w:id="0" w:author="Bob Jones" w:initials="BJ"><w:p><w:r><w:t>Check this</w:t></w:r></w:p></w:comment>` +
+      '<w:comment w:id="1" w:author="Ana &amp; Co &#x219B;"/></w:comments>' },
+  ], 'Plan.docx');
+  ok(reviewed?.comments && reviewed.changes && [...reviewed.people].sort().join('|') === 'Ana & Co ↛|Bob Jones|Carol Reviewer',
+    `a Word document's comments and tracked changes are noticed, with their authors (${JSON.stringify(reviewed)})`);
+  ok(await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: `<w:document ${W}><w:body><w:tblBorders><w:insideH/><w:insideV/></w:tblBorders><w:moveFromRangeStart w:id="1"/><w:p><w:r><w:t>Meet at six.</w:t></w:r></w:p></w:body></w:document>` },
+    { name: 'word/comments.xml', data: `<w:comments ${W}/>` },
+  ], 'Clean.docx') === null && docOut.kept === undefined,
+    'and one with neither is sent without asking — table borders and empty lists are not mistaken for them');
+  const sheetNotes = await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'xl/comments1.xml', data: '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><authors><author>Dan Analyst</author><author>tc={11111111-2222-4333-8444-555555555555}</author></authors>' +
+      '<commentList><comment ref="A1" authorId="0"><text><t>Too high</t></text></comment></commentList></comments>' },
+    { name: 'xl/threadedComments/threadedComment1.xml', data: '<ThreadedComments xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">' +
+      '<threadedComment ref="B2" dT="2026-10-27T14:32:00.00" personId="{AAAAAAAA-0000-4000-8000-000000000001}" id="{BBBBBBBB-0000-4000-8000-000000000001}"><text>Why?</text></threadedComment></ThreadedComments>' },
+    { name: 'xl/persons/person.xml', data: '<personList xmlns="http://schemas.microsoft.com/office/spreadsheetml/2018/threadedcomments">' +
+      `<person displayName="Eve Finance" id="{AAAAAAAA-0000-4000-8000-000000000001}" userId="${EMAIL}" providerId="AD"/>` +
+      '<person displayName="Frank Former" id="{AAAAAAAA-0000-4000-8000-000000000002}" userId="frank" providerId="None"/></personList>' },
+  ], 'Budget.xlsx');
+  ok(sheetNotes?.comments && !sheetNotes.changes && [...sheetNotes.people].sort().join('|') === 'Dan Analyst|Eve Finance',
+    `Excel's notes and threaded comments are noticed, named by who wrote them and no one else (${JSON.stringify(sheetNotes)})`);
+  const deckNotes = await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'ppt/comments/modernComment_100_1.xml', data: '<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main">' +
+      '<p188:cm id="{CCCCCCCC-0000-4000-8000-000000000001}" authorId="{DDDDDDDD-0000-4000-8000-000000000001}"><p188:txBody/></p188:cm></p188:cmLst>' },
+    { name: 'ppt/authors.xml', data: '<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main">' +
+      '<p188:author id="{DDDDDDDD-0000-4000-8000-000000000001}" name="Grace Designer" initials="GD" userId="Grace Designer" providerId="None"/>' +
+      '<p188:author id="{DDDDDDDD-0000-4000-8000-000000000002}" name="Heidi Gone" initials="HG" userId="Heidi Gone" providerId="None"/></p188:authorLst>' },
+  ], 'Pitch.pptx');
+  ok(deckNotes?.comments && deckNotes.people.join('|') === 'Grace Designer',
+    `so are PowerPoint's (${JSON.stringify(deckNotes)})`);
+  const odtNotes = await keptOf([
+    { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', deflate: false },
+    { name: 'content.xml', data: '<office:document-content><office:body><office:text><text:tracked-changes text:track-changes="true">' +
+      '<text:changed-region text:id="ct1"><text:insertion><office:change-info><dc:creator>Judy Editor</dc:creator><dc:date>2026-10-27T14:32:00</dc:date></office:change-info></text:insertion></text:changed-region></text:tracked-changes>' +
+      '<text:p><office:annotation office:name="n1"><dc:creator>Ivan Lector</dc:creator><text:p>Source?</text:p></office:annotation>Meet at six.<office:annotation-end office:name="n1"/></text:p></office:text></office:body></office:document-content>' },
+  ], 'notes.odt');
+  ok(odtNotes?.comments && odtNotes.changes && [...odtNotes.people].sort().join('|') === 'Ivan Lector|Judy Editor',
+    `and LibreOffice's (${JSON.stringify(odtNotes)})`);
+
   const untraced = zip([
     { name: '[Content_Types].xml', data: '<Types/>' },
     { name: 'xl/workbook.xml', data: '<workbook><sheets/></workbook>' },

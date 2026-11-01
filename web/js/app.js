@@ -104,6 +104,13 @@ function serverMessage(text, fallbackKey) {
   return key ? t(key) : text;
 }
 
+/** What to ask before a document goes with its comments or tracked changes. */
+function keptQuestion({ comments, changes, people }) {
+  const what = t(comments && changes ? 'scrub.keptBoth' : comments ? 'scrub.keptComments' : 'scrub.keptChanges');
+  const names = people.slice(0, 5).join(', ') + (people.length > 5 ? ` +${people.length - 5}` : '');
+  return t(people.length ? 'scrub.keptNamed' : 'scrub.kept').replace('{what}', what).replace('{names}', () => names);
+}
+
 // Web addresses in a message become links — built as elements, never markup,
 // and only for http(s). The visible text is the address itself, so a link
 // cannot say one place and go to another. No preview is ever fetched: that
@@ -1935,6 +1942,12 @@ class DeadDrop {
           return;
         }
         scrubNote = 'file.sentAsIs';
+      }
+      // Comments and tracked changes are what the document says, so they
+      // stay; but they are easy to forget, and carry their authors' names.
+      if (file.kept && !window.confirm(keptQuestion(file.kept))) {
+        this._renderSystem(t('file.notSent'));
+        return;
       }
     }
     if (file.size > MAX_FILE_SIZE) {

@@ -35,6 +35,10 @@
  * Pictures inside are cleaned too: a phone photo pasted into a document is
  * kept as the original JPEG, with where and when it was taken. See
  * imagemeta.js.
+ *
+ * Comments and tracked changes stay, but the copy comes back with a `kept`
+ * note of them, and of who made them, so the person can be asked first; see
+ * keptInside.
  */
 
 import { blankJpegMeta, jpegEnd, stripPngMeta } from './imagemeta.js';
@@ -167,8 +171,100 @@ export async function scrubDocument(file, type) {
   }
   const centralSize = central.reduce((n, c) => n + c.length, 0);
   out.push(...central, endRecord(entries.length, centralSize, offset));
-  return new File(out, file.name, { type, lastModified: 0 });
+  const cleaned = new File(out, file.name, { type, lastModified: 0 });
+  const kept = await keptInside(bytes, entries, odf);
+  return kept ? Object.assign(cleaned, { kept }) : cleaned;
 }
+
+/**
+ * Comments and tracked changes are what the document says, and are sent as
+ * they are; but they are easy to forget, and carry the names of whoever made
+ * them. This says whether any are left, and those names, or null.
+ */
+async function keptInside(bytes, entries, odf) {
+  let comments = false;
+  let changes = false;
+  const people = new Set();
+  // Comments that name their author by an ID in a list of people.
+  const authorIds = new Set();
+  const lists = [];
+  const read = async (entry) => {
+    try {
+      return new TextDecoder().decode(await partOf(bytes, entry));
+    } catch {
+      return '';
+    }
+  };
+  const named = (xml, pattern) => {
+    for (const m of xml.matchAll(pattern)) {
+      const name = unescapeXml(m[1]).trim().slice(0, 60);
+      // Excel's own stand-in for a threaded comment's author.
+      if (name && !/^tc=\{/.test(name)) people.add(name);
+    }
+  };
+  for (const entry of entries) {
+    const { name } = entry;
+    if (odf) {
+      if (name !== 'content.xml' && name !== 'styles.xml') continue;
+      const xml = await read(entry);
+      for (const [note] of xml.matchAll(/<office:annotation(?=[\s>])[\s\S]*?<\/office:annotation>/g)) {
+        comments = true;
+        named(note, /<dc:creator>([^<]*)<\/dc:creator>/g);
+      }
+      for (const [region] of xml.matchAll(/<text:changed-region\b[\s\S]*?<\/text:changed-region>/g)) {
+        changes = true;
+        named(region, /<dc:creator>([^<]*)<\/dc:creator>/g);
+      }
+    } else if (/^word\/comments\.xml$/.test(name)) {
+      const xml = await read(entry);
+      for (const [tag] of xml.matchAll(/<w:comment\b[^>]*>/g)) {
+        comments = true;
+        named(tag, /\sw:author="([^"]*)"/g);
+      }
+    } else if (/^word\/(?:document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(name)) {
+      const xml = await read(entry);
+      for (const [tag] of xml.matchAll(/<w:(?:ins|del|moveFrom|moveTo|cellIns|cellDel|[A-Za-z]*PrChange|numberingChange)\b[^>]*>/g)) {
+        changes = true;
+        named(tag, /\sw:author="([^"]*)"/g);
+      }
+    } else if (/^xl\/comments\d*\.xml$/.test(name)) {
+      const xml = await read(entry);
+      if (/<comment\b/.test(xml)) {
+        comments = true;
+        named(xml, /<author>([^<]*)<\/author>/g);
+      }
+    } else if (/^xl\/revisions\/revisionHeaders\.xml$/.test(name)) {
+      const xml = await read(entry);
+      if (/<header\b/.test(xml)) {
+        changes = true;
+        named(xml, /\suserName="([^"]*)"/g);
+      }
+    } else if (/^(?:xl\/threadedComments|ppt\/comments)\/[^/]+\.xml$/.test(name)) {
+      const xml = await read(entry);
+      for (const [tag] of xml.matchAll(/<(?:[\w.-]+:)?(?:threadedComment|cm|reply)\b[^>]*>/g)) {
+        comments = true;
+        const id = valueOf(tag, '(?:personId|authorId)');
+        if (id !== null) authorIds.add(id);
+      }
+    } else if (/^(?:xl\/persons\/[^/]+|ppt\/authors|ppt\/commentAuthors)\.xml$/.test(name)) {
+      lists.push(await read(entry));
+    }
+  }
+  for (const xml of lists) {
+    for (const [tag] of xml.matchAll(/<(?:[\w.-]+:)?(?:person|author|cmAuthor)\b[^>]*>/g)) {
+      if (!authorIds.has(valueOf(tag, 'id'))) continue;
+      named(tag, /\s(?:displayName|name)="([^"]*)"/g);
+    }
+  }
+  return comments || changes ? { comments, changes, people: [...people] } : null;
+}
+
+const character = (code) => (code <= 0x10ffff ? String.fromCodePoint(code) : '');
+const unescapeXml = (text) => text
+  .replace(/&#x([0-9A-Fa-f]{1,8});/g, (_, n) => character(parseInt(n, 16)))
+  .replace(/&#(\d{1,8});/g, (_, n) => character(Number(n)))
+  .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&amp;/g, '&');
 
 /** What a part becomes — a string or bytes — or null to copy it as it is. */
 async function replacementFor(bytes, entry, odf, ids) {
