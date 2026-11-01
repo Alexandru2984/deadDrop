@@ -20,6 +20,11 @@ compare rather than take a hash on trust.
   back into the bytes it had; the file keeps its length and every offset,
   and opens as before. One that cannot be written back — a stream with a
   predictor, or one that would not fit — is still put to the person.
+- **Search engines hear about a new release.** With `INDEXNOW_KEY` set, the
+  service answers the key file IndexNow asks for, and a deploy that changes
+  the home page or an about page tells Bing, Yandex and the others sharing
+  IndexNow, rather than leaving them to notice. `deaddrop indexnow` does it
+  by hand. Only the public pages' addresses are sent.
 
 ### Fixed
 

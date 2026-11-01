@@ -98,6 +98,9 @@ fi
 sudo mv -f "$STAGED" "$DEPLOYED"
 STAGED=""
 
+# What the public pages were before, as the running service serves them, so
+# search engines are told only about the ones this deploy changes.
+SERVED_BEFORE="$(curl -s --max-time 5 http://127.0.0.1:8100/SHA256SUMS || true)"
 echo "▸ restarting deaddrop.service…"
 if ! sudo systemctl restart deaddrop; then
   healthy=0
@@ -148,6 +151,24 @@ if [ "$healthy" != "1" ]; then
   fi
   sudo journalctl -u deaddrop -n 20 --no-pager
   exit 1
+fi
+
+
+changed=()
+for file in index.html about.html about.ro.html; do
+  before="$(printf '%s\n' "$SERVED_BEFORE" | awk -v f="$file" '$2 == f { print $1 }')"
+  after="$(awk -v f="$file" '$2 == f { print $1 }' web/SHA256SUMS)"
+  if [ "$before" != "$after" ]; then
+    if [ "$file" = index.html ]; then changed+=(/); else changed+=("/$file"); fi
+  fi
+done
+if [ "${#changed[@]}" -gt 0 ]; then
+  # Being found is not worth failing a healthy deploy over.
+  echo "▸ telling search engines what changed…"
+  if ! sudo /bin/bash -c 'set -a; . /etc/deaddrop.env; set +a; "$@"' \
+      _ "$DEPLOYED" indexnow "${changed[@]}"; then
+    echo "  ? IndexNow was not told; run: $DEPLOYED indexnow"
+  fi
 fi
 
 echo "✓ embedded client/server binary deployed and healthy; git was not pushed."

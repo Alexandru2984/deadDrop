@@ -238,6 +238,9 @@ func main() {
 		case "doctor":
 			runDoctor()
 			return
+		case "indexnow":
+			runIndexNow(os.Args[2:])
+			return
 		case "version":
 			// Both halves: the release, and the digest of the client this binary
 			// actually serves. The first names it; the second is what someone
@@ -419,6 +422,10 @@ func main() {
 	// The audited browser bundle is compiled into the binary. Files edited in
 	// the checkout after build time are never served by this process.
 	mux.Handle("/", embeddedWebHandler(appassets.WebFS()))
+	// The file IndexNow's search engines read to know a submission is ours.
+	if key, _ := indexNowKey(); key != "" {
+		mux.HandleFunc("/"+key+".txt", indexNowKeyHandler(key))
+	}
 
 	addr := listenAddress(host, port)
 	fmt.Println("┌─────────────────────────────────────────┐")
@@ -664,6 +671,9 @@ func validateRuntimeEnvironment(port int) ([]string, turn.Config, error) {
 	}
 	if os.Getenv("ENABLE_ADMIN_API") == "1" && len(strings.TrimSpace(os.Getenv("ADMIN_TOKEN"))) < 32 {
 		return nil, turn.Config{}, fmt.Errorf("ENABLE_ADMIN_API requires an ADMIN_TOKEN of at least 32 characters")
+	}
+	if _, err := indexNowKey(); err != nil {
+		return nil, turn.Config{}, err
 	}
 	origins, err := allowedOrigins(port)
 	if err != nil {

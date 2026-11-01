@@ -135,7 +135,7 @@ func TestRuntimeEnvironmentFailsClosed(t *testing.T) {
 	for _, name := range []string{
 		"ALLOWED_ORIGINS", "ALLOW_LOCAL_ORIGINS", "ALLOW_PUBLIC_BIND",
 		"ENABLE_ADMIN_API", "ADMIN_TOKEN", "OPEN_REGISTRATION",
-		"TRUST_PROXY_HEADERS", "TURN_SECRET", "TURN_URLS", "STUN_URLS",
+		"TRUST_PROXY_HEADERS", "TURN_SECRET", "TURN_URLS", "STUN_URLS", "INDEXNOW_KEY",
 	} {
 		t.Setenv(name, "")
 	}
@@ -156,6 +156,11 @@ func TestRuntimeEnvironmentFailsClosed(t *testing.T) {
 	t.Setenv("ENABLE_ADMIN_API", "maybe")
 	if _, _, err := validateRuntimeEnvironment(8088); err == nil {
 		t.Fatal("invalid boolean environment value was accepted")
+	}
+	t.Setenv("ENABLE_ADMIN_API", "")
+	t.Setenv("INDEXNOW_KEY", "../key")
+	if _, _, err := validateRuntimeEnvironment(8088); err == nil {
+		t.Fatal("an IndexNow key that is not a plain token was accepted")
 	}
 }
 

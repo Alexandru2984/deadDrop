@@ -61,10 +61,18 @@ STUN_URLS=stun:<PUBLIC_IP>:3478
 TURN_REALM=dead.micutu.com
 ALLOWED_ORIGINS=https://dead.micutu.com,http://<onion>.onion
 OPEN_REGISTRATION=0
+INDEXNOW_KEY=<openssl rand -hex 16>
 ```
 
 `TURN_SECRET` must match coturn's `static-auth-secret`. The app never sends it to
 the browser — it mints a short-lived `HMAC-SHA1` credential per `/api/turn` request.
+
+`INDEXNOW_KEY` is optional and not a secret: the service answers it at
+`/<key>.txt`, which is how Bing, Yandex and the other IndexNow engines know a
+submission comes from the site. `./scripts/deploy.sh` then tells them which of
+the three public pages a deploy changed; `deaddrop indexnow` tells them about
+all three by hand. What leaves is the public origin, those pages' addresses and
+the key. Unset, nothing is served and nothing is sent.
 
 ## 3. nginx vhost
 
