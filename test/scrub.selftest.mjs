@@ -347,6 +347,33 @@ try {
     && !stampedDeckSeen.parts['ppt/changesInfos/changesInfo1.xml'].includes(EMAIL),
     'the last client to save, and when, are gone, and the account behind a change');
 
+  // A document taken from SharePoint carries the library's record of it.
+  const SITE = 'https://example.sharepoint.com/sites/Finance/_layouts/15/DocIdRedir.aspx?ID=FIN-1234-56';
+  const spProps = (decl) => `${decl}<p:properties xmlns:p="http://schemas.microsoft.com/office/2006/metadata/properties" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">` +
+    `<documentManagement><_dlc_DocId xmlns="http://schemas.microsoft.com/sharepoint/v3">FIN-1234-56</_dlc_DocId><_dlc_DocIdUrl xmlns="http://schemas.microsoft.com/sharepoint/v3"><Url>${SITE}</Url><Description>FIN-1234-56</Description></_dlc_DocIdUrl>` +
+    `<SharedWithUsers xmlns="ab12cd34-0000-4000-8000-000000000000"><UserInfo><DisplayName>Bob Jones</DisplayName><AccountId>15</AccountId><AccountType/></UserInfo></SharedWithUsers></documentManagement></p:properties>`;
+  const BIBLIOGRAPHY = '<?xml version="1.0" standalone="yes"?><b:Sources xmlns:b="http://schemas.openxmlformats.org/officeDocument/2006/bibliography" SelectedStyle="/APA.XSL"><b:Source><b:Tag>Smi26</b:Tag></b:Source></b:Sources>';
+  const library = zip([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: BODY },
+    { name: 'customXml/item1.xml', data: spProps('<?xml version="1.0"?>') },
+    { name: 'customXml/item2.xml', data: Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(spProps('<?xml version="1.0" encoding="utf-16"?>'), 'utf16le')]) },
+    { name: 'customXml/item3.xml', data: '<?xml version="1.0" encoding="UTF-8"?><CoverPageProperties xmlns="http://schemas.microsoft.com/office/2006/coverPageProps">' +
+      '<PublishDate>2026-10-27</PublishDate><Abstract>Quarterly results</Abstract><CompanyAddress>Str. Example 1, Bucharest</CompanyAddress><CompanyPhone>+40 21 000 0000</CompanyPhone><CompanyFax/><CompanyEmail>office@example.ro</CompanyEmail></CoverPageProperties>' },
+    { name: 'customXml/item4.xml', data: BIBLIOGRAPHY },
+  ]);
+  const libraryOut = Buffer.from(await (await scrubFile(new File([library], 'Report.docx', { type: '' }))).arrayBuffer());
+  const librarySeen = inspect(libraryOut);
+  const items = JSON.stringify(librarySeen.parts);
+  ok(librarySeen.bad === null && librarySeen.malformed.length === 0 && !/sharepoint|FIN-1234|Bob Jones/.test(items)
+    && librarySeen.parts['customXml/item1.xml'].includes('<p:properties xmlns:p="http://schemas.microsoft.com/office/2006/metadata/properties"/>')
+    && librarySeen.parts['customXml/item2.xml'].includes('<p:properties xmlns:p="http://schemas.microsoft.com/office/2006/metadata/properties"/>'),
+    "SharePoint's record of a document — its address, ID, and whom it was shared with — is emptied, whether stored as UTF-8 or UTF-16");
+  const cover = librarySeen.parts['customXml/item3.xml'];
+  ok(!/Bucharest|\+40|office@|2026-10-27/.test(cover) && cover.includes('<Abstract>Quarterly results</Abstract>') && cover.includes('<CompanyFax/>'),
+    "a cover page's company address, phone, e-mail and date are emptied; its abstract is content, and stays");
+  ok(libraryOut.includes(deflateRawSync(Buffer.from(BIBLIOGRAPHY))), 'and a bibliography is carried as it was');
+
   const SETUP = Buffer.from('PRINT01 Floor3 alice JOB-1234').toString('base64');
   const odtPrinted = zip([
     { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', deflate: false },

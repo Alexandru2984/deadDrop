@@ -31,6 +31,12 @@ compare rather than take a hash on trust.
   replaced by new random IDs, the same wherever they appear, so threads and
   comments stay attached. PowerPoint's change log loses the account behind
   each change, as comment authors already did.
+- **A document from SharePoint or OneDrive no longer says where it came
+  from.** The library keeps its columns inside the file: the document's ID,
+  the address that finds it — which names the organisation and the site —
+  the people it was shared with, and its tags. They are emptied, whether the
+  file stores them as UTF-8 or UTF-16; a cover page loses the company's
+  address, phone, fax and e-mail. A bibliography and other custom data stay.
 - **Search engines hear about a new release.** With `INDEXNOW_KEY` set, the
   service answers the key file IndexNow asks for, and a deploy that changes
   the home page or an about page tells Bing, Yandex and the others sharing

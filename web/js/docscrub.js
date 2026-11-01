@@ -29,7 +29,8 @@
  *
  * And the identifiers Office stamps on a document and keeps through every
  * copy of it — see withoutFingerprints — which let a copy be matched to the
- * original on the author's disk.
+ * original on the author's disk; and, in one taken from SharePoint or
+ * OneDrive, the library's record of it — see withoutLibraryRecord.
  *
  * Pictures inside are cleaned too: a phone photo pasted into a document is
  * kept as the original JPEG, with where and when it was taken. See
@@ -98,6 +99,10 @@ const PRINTER = /^(?:word|xl|ppt)\/printerSettings\/[^/]+\.bin$/i;
 // Office's own parts, where it stamps the identifiers withoutFingerprints
 // takes out. Anything larger than MAX_PART_BYTES is left as it was.
 const STAMPED = /^(?:word|xl|ppt)\/.+\.xml$/;
+
+// Custom XML items: where SharePoint keeps its columns, a cover page its
+// company details, a bibliography its sources.
+const LIBRARY = /^customXml\/item\d+\.xml$/;
 
 // Office parts that name the person out of sight, each with what removes it.
 const HIDDEN = [
@@ -179,6 +184,7 @@ async function replacementFor(bytes, entry, odf, ids) {
     const hidden = HIDDEN.find(([pattern]) => pattern.test(name));
     if (hidden) return rewritten(bytes, entry, (xml) => withoutFingerprints(hidden[1](xml), ids));
     if (PRINTER.test(name)) return withoutPrinter(await partOf(bytes, entry));
+    if (LIBRARY.test(name)) return withoutLibraryRecord(await itemText(bytes, entry, name));
     if (STAMPED.test(name) && entry.size <= MAX_PART_BYTES) {
       return rewritten(bytes, entry, (xml) => withoutFingerprints(xml, ids));
     }
@@ -333,6 +339,45 @@ class Renumbering {
 async function deflated(data) {
   const stream = new Blob([data]).stream().pipeThrough(new CompressionStream('deflate-raw'));
   return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/**
+ * A document taken from SharePoint or OneDrive for work carries the
+ * library's columns for it: its document ID and the address that finds it —
+ * https://example.sharepoint.com/sites/Finance/…?ID=FIN-1234-56, which names
+ * the organisation and the site — the people it was shared with, and the
+ * library's tags. They go, leaving the item empty. A cover page's company
+ * address, phone, fax and e-mail, and its publish date, are emptied too.
+ * Other items, a bibliography's sources say, are content, and stay. Null
+ * when there is nothing to change.
+ */
+function withoutLibraryRecord(xml) {
+  const root = /<(?:([\w.-]+):)?(\w+)\b[^>]*>/.exec(xml.replace(/<\?[\s\S]*?\?>|<!--[\s\S]*?-->/g, ''));
+  if (!root) return null;
+  const [tag, prefix, local] = root;
+  const ns = valueOf(tag, prefix ? `xmlns:${prefix}` : 'xmlns');
+  let out = xml;
+  if (local === 'properties' && ns === 'http://schemas.microsoft.com/office/2006/metadata/properties') {
+    out = `${XML}<p:properties xmlns:p="${ns}"/>`;
+  } else if (local === 'CoverPageProperties' && ns === 'http://schemas.microsoft.com/office/2006/coverPageProps') {
+    out = xml.replace(/(<(?:[\w.-]+:)?(PublishDate|CompanyAddress|CompanyPhone|CompanyFax|CompanyEmail)\b[^>/]*>)[^<]*(?=<\/(?:[\w.-]+:)?\2>)/g, '$1')
+      .replace(/^(\s*<\?xml\b[^>]*?encoding\s*=\s*["'])[^"']*/, '$1UTF-8');
+  }
+  return out === xml ? null : out;
+}
+
+/**
+ * A custom XML item as text. SharePoint's may come as UTF-16, which is read
+ * as such; whatever replaces it is written as UTF-8.
+ */
+async function itemText(bytes, entry, name) {
+  const data = await partOf(bytes, entry);
+  const utf16 = data[0] === 0xff && data[1] === 0xfe ? 'utf-16le' : data[0] === 0xfe && data[1] === 0xff ? 'utf-16be' : 'utf-8';
+  try {
+    return new TextDecoder(utf16, { fatal: true }).decode(data);
+  } catch {
+    throw unreadable(`${name} is neither UTF-8 nor UTF-16`);
+  }
 }
 
 /** LibreOffice's record of the printer: its name, and its settings with the driver's own. */
