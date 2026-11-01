@@ -23,6 +23,11 @@ compare rather than take a hash on trust.
   tall for one line, because of the size of its ▾ button; it is now 45. On a
   short screen — a phone with the keyboard open, or turned sideways — the
   header, the bar and the composer tighten further.
+- **A voice call looks like one.** It said "Waiting for video…" for as long
+  as it lasted, in English whatever the language, with an empty camera
+  frame in the corner. It now says it is a voice call, with no frame; a
+  video call answered with voice only says so, and so does a camera the
+  other side switched off.
 - **A file's name keeps its extension.** On a phone a long name broke in
   the middle of it — "raport-trimestrial.p" over "df" — and now shortens
   before it instead: "raport-trimestr….pdf". The whole name is one hover

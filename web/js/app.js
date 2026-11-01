@@ -347,6 +347,7 @@ class DeadDrop {
       remoteVideo:   $('#remote-video'),
       localVideo:    $('#local-video'),
       remotePlaceholder: $('#remote-placeholder'),
+      placeholderText: $('#placeholder-text'),
       toggleMic:     $('#toggle-mic'),
       toggleCam:     $('#toggle-cam'),
       flipCam:       $('#flip-cam'),
@@ -2351,6 +2352,7 @@ class DeadDrop {
     });
     await this._sendBestEffort(this._callConn(), { type: 'call-req', video });
     this._showCallStatus(`📞 ${t('call.calling')}`);
+    this._showPlaceholder(video ? 'call.waitingVideo' : 'call.voice');
     this._toggleCallOverlay(true);
   }
 
@@ -2377,6 +2379,7 @@ class DeadDrop {
 
     this.el.localVideo.srcObject = this.localStream;
     this._syncCamButton();
+    this._showPlaceholder(this._callVideo ? 'call.waitingVideo' : 'call.voice');
     this._toggleCallOverlay(true);
     this._showCallStatus(`🔄 ${t('call.connecting')}`);
     await this._sendBestEffort(this._callConn(), { type: 'call-accept' });
@@ -2593,7 +2596,15 @@ class DeadDrop {
   _onCallMute(msg) {
     if (msg.video !== undefined) {
       this.el.remotePlaceholder.classList.toggle('hidden', msg.video);
+      if (!msg.video) this._showPlaceholder('call.cameraOff');
     }
+  }
+
+  /** What stands in for the other side's picture, in words that fit the call:
+   *  a voice call used to say "Waiting for video…" for as long as it lasted. */
+  _showPlaceholder(key) {
+    this.el.placeholderText.dataset.i18n = key;
+    this.el.placeholderText.textContent = t(key);
   }
 
   _endCall() {
@@ -2630,6 +2641,8 @@ class DeadDrop {
     this._toggleCallOverlay(false);
     this._showRinging(false);
     this.el.remotePlaceholder.classList.remove('hidden');
+    this._showPlaceholder('call.waitingVideo');
+    this.el.localVideo.classList.remove('hidden');
     this._updateCallBtn(false);
     this._showCallMenu(false);
     this._resetMuteButtons();
@@ -2639,8 +2652,11 @@ class DeadDrop {
   _onRemoteTrack(stream) {
     this.remoteStream = stream;
     this.el.remoteVideo.srcObject = stream;
-    // A voice call has no picture to show: keep the placeholder up.
-    this.el.remotePlaceholder.classList.toggle('hidden', stream.getVideoTracks().length > 0);
+    // A voice call has no picture to show: keep the placeholder up, and say
+    // why when a video call was answered without one.
+    const video = stream.getVideoTracks().length > 0;
+    this.el.remotePlaceholder.classList.toggle('hidden', video);
+    if (!video && this._callVideo) this._showPlaceholder('call.voiceOnly');
   }
 
   /** No camera in this call: the camera button has nothing to switch. */
@@ -2648,6 +2664,8 @@ class DeadDrop {
     const cam = this.localStream?.getVideoTracks()[0];
     this.el.toggleCam.disabled = !cam;
     this.el.flipCam.classList.add('hidden');
+    // Nor a preview: an empty frame sat in the corner of every voice call.
+    this.el.localVideo.classList.toggle('hidden', !cam);
     if (!cam) {
       this.el.toggleCam.classList.add('muted');
       this.el.toggleCam.textContent = '🚫';

@@ -390,8 +390,9 @@ const bView = await bob.eval(`({
   placeholder: !document.querySelector('#remote-placeholder').classList.contains('hidden'),
 })`);
 ok(bView.camDisabled && !bView.placeholder, `B has no camera to switch, and sees A (${JSON.stringify(bView)})`);
-const aView = await waitFor(() => alice.eval(`!document.querySelector('#remote-placeholder').classList.contains('hidden')`), { timeout: 5000 });
-ok(aView, 'A sees the placeholder, not a black frame');
+const aView = await waitFor(() => alice.eval(`!document.querySelector('#remote-placeholder').classList.contains('hidden')
+  && document.querySelector('#placeholder-text').textContent`), { timeout: 5000 });
+ok(/voice only/i.test(aView || ''), `A sees the placeholder, not a black frame, and why (${aView})`);
 await alice.endCall();
 ok(await waitFor(() => bob.mediaState().then((m) => m.local === null && !m.overlay), { timeout: 20000 }),
   'the voice-only call ends cleanly');
@@ -413,6 +414,12 @@ const voiceCall = await waitFor(async () => {
 }, { timeout: 45000 });
 ok(voiceCall && voiceCall.a.local.video === 0 && voiceCall.b.local.video === 0,
   `neither side's camera is on (${JSON.stringify(voiceCall && [voiceCall.a.local, voiceCall.b.local])})`);
+const voiceScreen = await Promise.all([alice, bob].map((p) => p.eval(`({
+  text: document.querySelector('#placeholder-text').textContent,
+  preview: !document.querySelector('#local-video').classList.contains('hidden'),
+})`)));
+ok(voiceScreen.every((v) => /voice call/i.test(v.text) && !v.preview),
+  `both screens say it is a voice call, with no empty camera preview (${JSON.stringify(voiceScreen)})`);
 await alice.endCall();
 await waitFor(() => bob.mediaState().then((m) => m.local === null), { timeout: 20000 });
 
