@@ -23,6 +23,10 @@ compare rather than take a hash on trust.
   tall for one line, because of the size of its ▾ button; it is now 45. On a
   short screen — a phone with the keyboard open, or turned sideways — the
   header, the bar and the composer tighten further.
+- **A file's name keeps its extension.** On a phone a long name broke in
+  the middle of it — "raport-trimestrial.p" over "df" — and now shortens
+  before it instead: "raport-trimestr….pdf". The whole name is one hover
+  away, and the file is saved under it.
 - **Opening the account panel on a phone no longer brings up the keyboard**
   over it. The panel takes focus there instead of its first password field;
   with a keyboard and mouse, the field still does.

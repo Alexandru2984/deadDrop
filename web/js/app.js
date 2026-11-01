@@ -2962,9 +2962,8 @@ class DeadDrop {
       preview && h('div', { class: 'file-content' }, preview),
       h('div', { class: 'file-details' },
         !preview && h('span', { class: 'file-icon', 'aria-hidden': 'true', text: '📄' }),
-        h('span', { class: 'file-name',
-          text: /^voice\.(webm|ogg|m4a)$/.test(meta.fileName) && meta.fileType.startsWith('audio/')
-            ? t('voice.label') : meta.fileName }),
+        this._fileName(/^voice\.(webm|ogg|m4a)$/.test(meta.fileName) && meta.fileType.startsWith('audio/')
+          ? t('voice.label') : meta.fileName),
         h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) }),
         h('a', {
           href: blobUrl, download: meta.fileName, class: 'file-download',
@@ -2986,6 +2985,19 @@ class DeadDrop {
     });
     // Long enough to open or save it, not just to see that it came.
     if (!mine) this._markSeen(key, 15_000);
+  }
+
+  /**
+   * A file's name on one line, its end cut short rather than its extension:
+   * on a phone "raport-trimestrial.pdf" broke as "raport-trimestrial.p / df".
+   * The whole name is the tooltip and what the file is saved as.
+   */
+  _fileName(name) {
+    const dot = name.lastIndexOf('.');
+    const split = dot > 0 && name.length - dot <= 8;
+    return h('span', { class: 'file-name', title: name },
+      h('span', { class: 'file-name-stem', text: split ? name.slice(0, dot) : name }),
+      split && h('span', { class: 'file-name-ext', text: name.slice(dot) }));
   }
 
   _renderFileProgress(id, received, total, peerId) {

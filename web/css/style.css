@@ -1137,12 +1137,19 @@ select { cursor: pointer; width: auto; }
 }
 
 .file-name {
+  display: flex;
   color: var(--text);
   font-weight: 500;
-  word-break: break-all;
   min-width: 0;
   flex: 1 1 8ch;
 }
+.file-name-stem {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.file-name-ext { flex-shrink: 0; white-space: nowrap; }
 
 .file-size { white-space: nowrap; }
 
