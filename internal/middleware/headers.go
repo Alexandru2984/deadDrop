@@ -4,6 +4,17 @@ import (
 	"net/http"
 )
 
+// indexable are the pages a search engine may list: the app, what it
+// protects and how, and the picture a shared link shows. Everything else is
+// marked noindex — the verifier, whose verdict means something only live;
+// the API; the code and assets behind the pages; and whatever is not found.
+var indexable = map[string]bool{
+	"/":              true,
+	"/about.html":    true,
+	"/about.ro.html": true,
+	"/og.png":        true,
+}
+
 // SecurityHeaders adds strict security headers to every response. The app owns
 // these headers exclusively — the nginx vhost must NOT also emit them, or the
 // browser sees duplicate/conflicting policies (it then enforces the most
@@ -88,6 +99,9 @@ func SecurityHeaders(next http.Handler, scriptHashes ...string) http.Handler {
 				"frame-ancestors 'none'")
 		// HSTS — 2 years, preload-eligible.
 		h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		if !indexable[r.URL.Path] {
+			h.Set("X-Robots-Tag", "noindex")
+		}
 		next.ServeHTTP(w, r)
 	})
 }

@@ -70,12 +70,15 @@ the browser — it mints a short-lived `HMAC-SHA1` credential per `/api/turn` re
 
 The app emits **all** security headers itself; the vhost must NOT include the
 shared `snippets/security-headers.conf` (it would duplicate/override them). One
-`add_header X-Robots-Tag ...` in the server block breaks inheritance of the
-http-level defaults. Proxy passes to `127.0.0.1:8100` with WebSocket upgrade.
+`add_header X-Robots-Tag "noarchive" always;` in the server block breaks
+inheritance of the http-level defaults. Keep it to `noarchive`: the app decides
+what search engines may index — the home page and the two about pages, nothing
+else — and a `noindex` added here hides the whole site from them. `doctor`
+warns when a public page arrives marked `noindex`. Proxy passes to
+`127.0.0.1:8100` with WebSocket upgrade.
 
-The enabled vhost is a real file (not a symlink); keep `sites-available` and
-`sites-enabled` copies in sync and never leave `*.bak` files in `sites-enabled`
-(nginx globs them).
+The enabled vhost is a symlink to the `sites-available` file; never leave
+`*.bak` files in `sites-enabled` (nginx globs them).
 
 ### Cloudflare-only HTTPS origin
 

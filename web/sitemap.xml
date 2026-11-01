@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
   <url>
     <loc>https://dead.micutu.com/</loc>
     <changefreq>weekly</changefreq>
@@ -7,11 +8,17 @@
   </url>
   <url>
     <loc>https://dead.micutu.com/about.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://dead.micutu.com/about.html" />
+    <xhtml:link rel="alternate" hreflang="ro" href="https://dead.micutu.com/about.ro.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://dead.micutu.com/about.html" />
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
   <url>
     <loc>https://dead.micutu.com/about.ro.html</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://dead.micutu.com/about.html" />
+    <xhtml:link rel="alternate" hreflang="ro" href="https://dead.micutu.com/about.ro.html" />
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://dead.micutu.com/about.html" />
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>

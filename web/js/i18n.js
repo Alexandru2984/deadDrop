@@ -104,6 +104,10 @@ const STRINGS = {
     'intro.nothingTitle': 'Nothing kept.',
     'intro.nothing': 'No email, no phone number, no message history, no password on the '
       + 'server — logging in proves the password without sending it. Registration needs an invite.',
+    'intro.filesTitle': 'Files without their history.',
+    'intro.files': 'Photos, videos, Word, Excel, PowerPoint and PDF files lose where they '
+      + 'were taken, who wrote them and on what device before they leave yours. Voice and '
+      + 'video calls travel the same encrypted way.',
     'intro.limits': 'It does not make you anonymous. The service can still see who '
       + 'connects, when, and to whom — and it says so plainly rather than leaving you to find out.',
     'msg.peerRemoved': 'The other side removed a message',
@@ -374,6 +378,10 @@ const STRINGS = {
     'intro.nothingTitle': 'Nimic păstrat.',
     'intro.nothing': 'Fără email, fără număr de telefon, fără istoric, fără parolă pe '
       + 'server — autentificarea dovedește parola fără s-o trimită. Înregistrarea cere o invitație.',
+    'intro.filesTitle': 'Fișiere fără istoric.',
+    'intro.files': 'Pozele, videoclipurile și fișierele Word, Excel, PowerPoint și PDF își '
+      + 'pierd locul unde au fost făcute, autorul și dispozitivul înainte să plece de pe al tău. '
+      + 'Apelurile audio și video merg pe aceeași cale criptată.',
     'intro.limits': 'Nu te face anonim. Serviciul tot poate vedea cine se conectează, '
       + 'când și cu cine — și o spune direct, în loc să te lase să afli singur.',
     'msg.peerRemoved': 'Interlocutorul a șters un mesaj',

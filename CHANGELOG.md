@@ -13,6 +13,13 @@ compare rather than take a hash on trust.
 
 ### Fixed
 
+- **Search engines can find the site.** The reverse proxy told them not to
+  index any page, so the home page and the about pages never showed up in a
+  search, whatever robots.txt and the sitemap said. The app now marks every
+  page but those three `noindex`, and `doctor` warns when something in front
+  of it hides them again. The sitemap names the English and Romanian about
+  pages as each other's translation, and the home page says what a file
+  leaves behind — to people, and in what it tells a search engine.
 - **The latest message stays in view.** A picture takes its height only
   once it is decoded, after the conversation had already scrolled to it, so
   half of every photo was left below the screen. Opening a phone's keyboard

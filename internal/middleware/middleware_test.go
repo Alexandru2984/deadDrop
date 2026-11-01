@@ -154,6 +154,30 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// The public pages may be indexed and nothing else: a proxy that marked the
+// whole site noindex kept it out of every search engine for months.
+func TestSecurityHeadersLeaveOnlyPublicPagesIndexable(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	for path, want := range map[string]string{
+		"/":               "",
+		"/about.html":     "",
+		"/about.ro.html":  "",
+		"/og.png":         "",
+		"/verify.html":    "noindex",
+		"/verify.ro.html": "noindex",
+		"/api/me":         "noindex",
+		"/js/app.js":      "noindex",
+		"/index.html":     "noindex",
+		"/missing":        "noindex",
+	} {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if got := w.Header().Get("X-Robots-Tag"); got != want {
+			t.Errorf("%s: X-Robots-Tag = %q, want %q", path, got, want)
+		}
+	}
+}
+
 func TestExtractIP(t *testing.T) {
 	tests := []struct {
 		name      string

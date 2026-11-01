@@ -50,6 +50,7 @@ func runDoctor() {
 		checkServiceLiveness,
 		checkDeployedBundle,
 		checkDeliveredBundle,
+		checkIndexable,
 		checkBackupFreshness,
 		checkRelayPrivacy,
 	}
@@ -279,6 +280,58 @@ func compareDelivery(client *http.Client, origin, public string, paths []string)
 	}
 	return finding{name: "delivered bundle", detail: fmt.Sprintf(
 		"%s serves exactly what this origin does (%d files%s)", public, len(paths), note)}
+}
+
+// checkIndexable asks whether search engines may list the public pages. The
+// nginx vhost marked every response noindex for months, while robots.txt,
+// the sitemap and the about pages all invited them in, and nothing noticed.
+// Being found is not a security matter, so this warns rather than fails a
+// deploy.
+func checkIndexable() finding {
+	public := publicOrigin()
+	if public == "" {
+		return finding{name: "search engines", warn: true,
+			err: errors.New("no public origin in ALLOWED_ORIGINS — nothing to ask")}
+	}
+	return indexability(&http.Client{Timeout: 20 * time.Second}, public)
+}
+
+func indexability(client *http.Client, public string) finding {
+	for _, path := range []string{"/", "/about.html", "/about.ro.html"} {
+		resp, err := client.Get(public + path)
+		if err != nil {
+			return finding{name: "search engines", warn: true,
+				err: fmt.Errorf("cannot reach %s%s from here: %v", public, path, err)}
+		}
+		_ = resp.Body.Close()
+		for _, value := range resp.Header.Values("X-Robots-Tag") {
+			if keepsOut(value) {
+				return finding{name: "search engines", warn: true, err: fmt.Errorf(
+					"%s%s arrives marked %q — something in front of the app keeps it out of search results",
+					public, path, value)}
+			}
+		}
+	}
+	return finding{name: "search engines", detail: "the public pages may be indexed"}
+}
+
+// keepsOut reports whether an X-Robots-Tag value forbids indexing, for every
+// crawler or a named one ("googlebot: noindex"). "max-image-preview:none"
+// limits a preview and is not one.
+func keepsOut(value string) bool {
+	for _, part := range strings.Split(strings.ToLower(value), ",") {
+		part = strings.TrimSpace(part)
+		if strings.HasPrefix(part, "max-") {
+			continue
+		}
+		if i := strings.LastIndex(part, ":"); i >= 0 {
+			part = strings.TrimSpace(part[i+1:])
+		}
+		if part == "noindex" || part == "none" {
+			return true
+		}
+	}
+	return false
 }
 
 // withoutCloudflareRobots returns robots.txt as the origin wrote it, when the

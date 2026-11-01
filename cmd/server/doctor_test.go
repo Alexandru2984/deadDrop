@@ -180,3 +180,28 @@ func TestDeliveryPathsCoverTheWholeManifest(t *testing.T) {
 		}
 	}
 }
+
+func TestIndexabilityNoticesAProxyThatHidesTheSite(t *testing.T) {
+	header := ""
+	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if header != "" {
+			w.Header().Add("X-Robots-Tag", header)
+		}
+	}))
+	defer edge.Close()
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	for _, allowed := range []string{"", "noarchive", "max-image-preview:none, nosnippet"} {
+		header = allowed
+		if f := indexability(client, edge.URL); f.err != nil {
+			t.Errorf("%q reported as keeping the site out: %v", allowed, f.err)
+		}
+	}
+	for _, hidden := range []string{"noindex, nofollow, noarchive", "none", "googlebot: noindex", "NoIndex"} {
+		header = hidden
+		f := indexability(client, edge.URL)
+		if f.err == nil || !f.warn {
+			t.Errorf("%q not noticed (or not a warning): %+v", hidden, f)
+		}
+	}
+}
