@@ -9,7 +9,21 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.7.0 — 2026-11-02
+
+**Update when you can.** Documents now leave without what ties a copy to
+its original: the identifiers Word, Excel, PowerPoint and LibreOffice stamp
+on every copy, SharePoint's record of where a file lives, and the
+properties PDF tools pack into a compressed stream. A document that still
+has comments, tracked changes or hidden parts — what LibreOffice hides
+included — says so, names whose names they carry, and offers to take them
+out before it goes. Search engines can find the site, with a new guide in
+English and Romanian to what a file gives away, and the first page shows
+sooner on a phone.
+
+No protocol change: a tab still on 0.6.0 talks to one on 0.7.0. Everything
+new happens on the sender's device, before encryption; reloading picks it
+up.
 
 ### Added
 
