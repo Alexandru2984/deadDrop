@@ -6,10 +6,9 @@ anonymous by default: the service and its network providers can observe metadata
 and deletion from another person's device can never be guaranteed.
 
 The landing page, the security model and the guide to what a file gives away
-are indexable; the live verifier and
-error pages are not. Nothing on any page is loaded from another origin — no
-analytics, no CDN font, no verification script — and `test/seo.selftest.mjs`
-fails the build if one appears. The preview card is rendered by
+are indexable; the live verifier and error pages are not. Nothing on any page
+is loaded from another origin — no analytics, no CDN font, no verification
+script — and `test/seo.selftest.mjs` fails the build if one appears. The preview card is rendered by
 `scripts/render-og-image.mjs` and served from here, so unfurling a link to Dead
 Drop involves no third party.
 

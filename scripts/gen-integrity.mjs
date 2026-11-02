@@ -36,7 +36,7 @@ function atomicWrite(path, data) {
 // into the HTML that references them. (ES-module imports beyond these entries
 // are not SRI-coverable; SHA256SUMS records them for independent verification.)
 const SRI_TARGETS = {
-  'index.html': ['css/style.css', 'js/app.js'],
+  'index.html': ['css/style.css', 'js/boot.js', 'js/app.js'],
   'about.html': ['css/style.css', 'css/about.css'],
   'about.ro.html': ['css/style.css', 'css/about.css'],
   'guide.html': ['css/style.css', 'css/about.css'],
@@ -160,7 +160,9 @@ function injectModulePreloads(check) {
     if (!re.test(content)) {
       throw new Error(`${page}: no <!-- modulepreload --><!-- /modulepreload --> placeholder after the import map`);
     }
-    const links = staticGraph(entry).map((rel) =>
+    // A module the page also loads with its own <script> is fetched by that.
+    const scripted = new Set([...content.matchAll(/<script type="module" src="([^"]+)"/g)].map((m) => m[1]));
+    const links = staticGraph(entry).filter((rel) => !scripted.has(rel)).map((rel) =>
       `<link rel="modulepreload" href="/${rel}" integrity="sha256-${sha256b64(readFileSync(join(WEB, rel)))}" />`);
     const block = `<!-- modulepreload -->\n  ${links.join('\n  ')}\n  <!-- /modulepreload -->`;
     const updated = content.replace(re, block);

@@ -142,16 +142,17 @@ async function run(check) {
  *   `missing` is fatal; `degraded` is worth telling the user about and no more.
  */
 export async function checkSupport() {
-  const missing = [];
-  for (const check of REQUIRED) {
-    const reason = await run(check);
-    if (reason) missing.push({ id: check.id, label: check.label, reason });
-  }
-
-  const degraded = [];
-  for (const check of OPTIONAL) {
-    if (await run(check)) degraded.push({ id: check.id, label: check.label, why: check.why });
-  }
-
+  // Each probe stands alone, so they run together: the first page waits for
+  // the slowest, not for the sum.
+  const [required, optional] = await Promise.all([
+    Promise.all(REQUIRED.map(run)),
+    Promise.all(OPTIONAL.map(run)),
+  ]);
+  const missing = REQUIRED
+    .map((check, i) => required[i] && { id: check.id, label: check.label, reason: required[i] })
+    .filter(Boolean);
+  const degraded = OPTIONAL
+    .filter((check, i) => optional[i])
+    .map((check) => ({ id: check.id, label: check.label, why: check.why }));
   return { ok: missing.length === 0, missing, degraded };
 }

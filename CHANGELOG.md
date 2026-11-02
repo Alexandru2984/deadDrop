@@ -74,6 +74,15 @@ compare rather than take a hash on trust.
 
 ### Fixed
 
+- **The first page shows sooner on a phone.** It waited for all of the
+  app's code, then asked the server whether the browser was signed in, then
+  ran its checks one after another. The question now goes out as the page
+  loads, while the code is still arriving; the checks run together; the
+  stylesheet is asked for before the code; and the code that cleans a file,
+  a sixth of the total, loads when a conversation opens instead of before
+  the first page. It is held to its hash like the rest, and a file is never
+  sent uncleaned because that code failed to arrive. The encryption code
+  still loads, and is checked, before the app starts.
 - **Search engines can find the site.** The reverse proxy told them not to
   index any page, so the home page and the about pages never showed up in a
   search, whatever robots.txt and the sitemap said. The app now marks every

@@ -69,6 +69,32 @@ try {
   ok(victim.logs.some((line) => /integrity/i.test(line)),
     `the browser names the integrity failure (${victim.logs.find((l) => /integrity/i.test(l)) || 'nothing logged'})`);
 
+  // The code that cleans a file loads only when a conversation opens, after
+  // the app has started; it is held to its hash all the same.
+  const late = await Peer.open(cdp, 'late');
+  await cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*/js/scrub.js*', requestStage: 'Response' }] },
+    late.sessionId);
+  let lateRewritten = 0;
+  cdp.on(async (msg) => {
+    if (msg.sessionId !== late.sessionId || msg.method !== 'Fetch.requestPaused') return;
+    const { requestId } = msg.params;
+    const { body, base64Encoded } = await cdp.send('Fetch.getResponseBody', { requestId }, late.sessionId);
+    const source = base64Encoded ? Buffer.from(body, 'base64').toString('utf8') : body;
+    lateRewritten++;
+    await cdp.send('Fetch.fulfillRequest', {
+      requestId,
+      responseCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'text/javascript' }],
+      body: Buffer.from(`${source}\nglobalThis.__exfiltrate = true;\n`).toString('base64'),
+    }, late.sessionId);
+  });
+  await late.goto(`${URL_BASE}/`);
+  ok(lateRewritten === 0 && await late.eval(`!document.querySelector('#auth').classList.contains('hidden')`),
+    'the app starts without the file cleaner, which it has not asked for yet');
+  const lateLoad = await late.eval(`import('/js/scrub.js').then(() => 'loaded', (err) => 'refused: ' + err.message)`);
+  ok(lateRewritten > 0 && /^refused/.test(lateLoad) && await late.eval(`globalThis.__exfiltrate !== true`),
+    `a rewritten file cleaner is refused when it is asked for, and never runs (${lateLoad})`);
+
   // The verifier: Cloudflare's managed robots.txt in front of ours passes and
   // says so; the same block with our part changed is still a mismatch.
   const MANAGED = '# As a condition of accessing this website, you agree to abide by the following\n' +

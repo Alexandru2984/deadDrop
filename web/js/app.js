@@ -22,8 +22,18 @@ import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig, passwordProblem, passphrase } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
-import { isScrubbable, scrubFile } from './scrub.js';
 import { getPref, setPref } from './prefs.js';
+import { firstAnswer } from './boot.js';
+
+// The code that cleans a file is a sixth of what the app loads and is needed
+// only to send one, so it is fetched when a conversation opens rather than
+// before the first page shows — held to its import-map hash like the rest. A
+// failed load is forgotten, so the next file tries again.
+let scrubbing = null;
+const scrubber = () => (scrubbing ??= import('./scrub.js').catch((err) => {
+  scrubbing = null;
+  throw err;
+}));
 
 const ROOM_CODE_RE = /^[0-9a-f]{24}$/;
 const MESSAGE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -580,7 +590,7 @@ class DeadDrop {
 
   async _checkAuth() {
     try {
-      const res = await fetch('/api/me');
+      const res = await (firstAnswer() ?? fetch('/api/me'));
       if (res.ok) {
         const data = await res.json();
         this.username = data.username;
@@ -1195,6 +1205,7 @@ class DeadDrop {
   }
 
   _enterChat(code) {
+    scrubber().catch(() => {});
     this._showPage('chat');
     this.el.roomCode.textContent = code;
     this.el.roomInfo.classList.remove('hidden');
@@ -1972,7 +1983,15 @@ class DeadDrop {
     // file this does not clean.
     let scrubNote = null;
     const original = file;
-    if (this.el.scrubToggle.checked && !recorded && isScrubbable(file)) {
+    // A file is never sent uncleaned because the code to clean it did not
+    // arrive, or arrived altered and was refused.
+    const scrub = this.el.scrubToggle.checked && !recorded ? await scrubber().catch(() => null) : undefined;
+    if (scrub === null) {
+      this._renderSystem(t('err.scrubFailed'));
+      return;
+    }
+    if (scrub?.isScrubbable(file)) {
+      const { scrubFile } = scrub;
       try {
         file = await scrubFile(file);
         scrubNote = 'file.cleaned';
