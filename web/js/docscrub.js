@@ -221,18 +221,27 @@ async function keptInside(bytes, entries, odf) {
       if (name && !/^tc=\{/.test(name)) people.add(name);
     }
   };
+  const odfParts = [];
   for (const entry of entries) {
     const { name } = entry;
     if (odf) {
       if (name !== 'content.xml' && name !== 'styles.xml') continue;
       const xml = await read(entry);
-      for (const [note] of xml.matchAll(/<office:annotation(?=[\s>])[\s\S]*?<\/office:annotation>/g)) {
+      odfParts.push(xml);
+      // Impress writes its comments in OpenOffice's own namespace.
+      for (const [note] of xml.matchAll(/<(office|officeooo):annotation(?=[\s>])[\s\S]*?<\/\1:annotation>/g)) {
         comments = true;
         named(note, /<dc:creator>([^<]*)<\/dc:creator>/g);
       }
       for (const [region] of xml.matchAll(/<text:changed-region\b[\s\S]*?<\/text:changed-region>/g)) {
         changes = true;
         named(region, /<dc:creator>([^<]*)<\/dc:creator>/g);
+      }
+      // Calc's record of changes, accepted and rejected ones included.
+      for (const [log] of xml.matchAll(/<table:tracked-changes(?=[\s>])[\s\S]*?<\/table:tracked-changes>/g)) {
+        if (!/<office:change-info\b/.test(log)) continue;
+        changes = fixed = true;
+        named(log, /<dc:creator>([^<]*)<\/dc:creator>/g);
       }
     } else if (/^word\/comments\.xml$/.test(name)) {
       const xml = await read(entry);
@@ -281,6 +290,17 @@ async function keptInside(bytes, entries, odf) {
       }
     } else if (/^(?:xl\/persons\/[^/]+|ppt\/authors|ppt\/commentAuthors)\.xml$/.test(name)) {
       lists.push(await read(entry));
+    }
+  }
+  if (odf) {
+    // Not taken out: what hides it is a style or a field that other text may
+    // share, and the sections and paragraphs it hides nest.
+    const hidden = odfHidden(odfParts.join('\n'));
+    if (hidden.text) hiddenText = fixed = true;
+    if (hidden.slides) hiddenSlides = fixed = true;
+    if (hidden.sheets.length) {
+      sheets.push(...hidden.sheets);
+      fixed = true;
     }
   }
   for (const xml of lists) {
@@ -527,6 +547,61 @@ const hiddenTextIn = (run) =>
   /<w:rPr\b[^>]*>(?:(?!<\/w:rPr>)[\s\S])*<w:vanish(?:\s+w:val="(?:1|true|on)")?\s*\/>/.test(run)
   && /<w:t\b[^>]*>[^<]*[^<\s]/.test(run);
 
+/**
+ * What LibreOffice keeps out of sight in a document's content and styles:
+ * text formatted hidden, by its own style or one it inherits, unless a style
+ * nearer it says shown; a section hidden, or shown only on a condition; a
+ * paragraph or a piece of text a field hides; sheets and slides hidden.
+ */
+function odfHidden(xml) {
+  // What each style says, if anything, and the style it inherits from.
+  const styles = new Map();
+  for (const [, tag, body = ''] of xml.matchAll(/<style:style(?=[\s/>])((?:[^>]*[^>/])?)(?:\/>|>([\s\S]*?)<\/style:style>)/g)) {
+    const family = valueOf(tag, 'style:family');
+    const text = /<style:text-properties\b[^>]*\stext:display="(\w+)"/.exec(body)?.[1];
+    const table = /<style:table-properties\b[^>]*\stable:display="(\w+)"/.exec(body)?.[1];
+    const page = /<style:drawing-page-properties\b[^>]*\spresentation:visibility="(\w+)"/.exec(body)?.[1];
+    const says = text ? text !== 'true' : table ? table === 'false' : page ? page === 'hidden' : undefined;
+    styles.set(`${family}\n${valueOf(tag, 'style:name')}`, { says, parent: valueOf(tag, 'style:parent-style-name') });
+  }
+  const hiddenBy = (family, name, depth = 0) => {
+    const style = styles.get(`${family}\n${name}`);
+    if (!style || depth > 32) return false;
+    return style.says ?? (style.parent !== null && hiddenBy(family, style.parent, depth + 1));
+  };
+  const hasText = (inner) => /\S/.test(unescapeXml(inner.replace(/<[^>]*>/g, '')));
+  // An element's start tag and what follows it up to the first end tag of
+  // its kind: matching only the start tag finds those nested in it too.
+  const content = (element) => new RegExp(`<${element}(?=[\\s>])((?:[^>]*[^>/])?)>(?=([\\s\\S]*?)<\\/${element}>)`, 'g');
+
+  let text = false;
+  for (const [, tag, inner] of xml.matchAll(content('text:span'))) {
+    text ||= hiddenBy('text', valueOf(tag, 'text:style-name')) && hasText(inner);
+  }
+  for (const element of ['text:p', 'text:h']) {
+    for (const [, tag, inner] of xml.matchAll(content(element))) {
+      const field = /<text:hidden-paragraph\b[^>]*>/.exec(inner)?.[0];
+      const byField = field !== undefined && valueOf(field, 'text:is-hidden') !== 'false';
+      text ||= (byField || hiddenBy('paragraph', valueOf(tag, 'text:style-name'))) && hasText(inner);
+    }
+  }
+  for (const [, tag, inner] of xml.matchAll(content('text:section'))) {
+    text ||= /^(?:none|condition)$/.test(valueOf(tag, 'text:display') ?? '') && hasText(inner);
+  }
+  for (const [tag] of xml.matchAll(/<text:hidden-text\b[^>]*>/g)) {
+    text ||= valueOf(tag, 'text:is-hidden') !== 'false' && /\S/.test(valueOf(tag, 'text:string-value') ?? '');
+  }
+  const sheets = [];
+  for (const [tag] of xml.matchAll(/<table:table(?=[\s>])[^>]*>/g)) {
+    if (hiddenBy('table', valueOf(tag, 'table:style-name'))) {
+      sheets.push(unescapeXml(valueOf(tag, 'table:name') ?? '').slice(0, 60));
+    }
+  }
+  const slides = [...xml.matchAll(/<draw:page(?=[\s>])[^>]*>/g)]
+    .some(([tag]) => hiddenBy('drawing-page', valueOf(tag, 'draw:style-name')));
+  return { text, sheets, slides };
+}
+
 // Word's records of a formatting change, each holding the formatting before.
 const FORMAT_CHANGES = 'rPrChange|pPrChange|sectPrChange|tblPrChange|tblPrExChange|trPrChange|tcPrChange|tblGridChange|numberingChange';
 
@@ -558,7 +633,7 @@ function withoutReview(xml) {
  */
 function withoutOdfReview(xml) {
   return xml
-    .replace(/<office:annotation(?=[\s>])[\s\S]*?<\/office:annotation>|<office:annotation-end\b[^>]*\/>/g, '')
+    .replace(/<(office|officeooo):annotation(?=[\s>])[\s\S]*?<\/\1:annotation>|<(?:office|officeooo):annotation-end\b[^>]*\/>/g, '')
     .replace(/(<text:tracked-changes\b(?:[^>]*[^>/])?)>[\s\S]*?<\/text:tracked-changes>/g, '$1/>')
     .replace(/<text:change(?:-start|-end)?\b[^>]*\/>/g, '');
 }

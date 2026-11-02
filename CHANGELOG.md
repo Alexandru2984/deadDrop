@@ -43,8 +43,11 @@ compare rather than take a hash on trust.
   they are easy to forget, comments and changes carry the name of whoever
   made them, and what is hidden is one click from whoever receives it. A
   Word, Excel, PowerPoint or LibreOffice file with comments or tracked
-  changes, hidden text in Word, hidden sheets in Excel (named), hidden
-  slides in PowerPoint, and a PDF with comments — notes, highlights,
+  changes; hidden text in Word, and in LibreOffice — formatted hidden,
+  directly or by a style, or in a hidden section, or behind a field that
+  hides a paragraph or a piece of text; hidden sheets in Excel and Calc
+  (named) and hidden slides in PowerPoint and Impress; and a PDF with
+  comments — notes, highlights,
   drawings, stamps, the name Acrobat puts on each — or with a redaction
   marked but never applied, the text still under it, now says so, and
   asks whether to take them out and send it, send it as it is, or not send
@@ -53,9 +56,10 @@ compare rather than take a hash on trust.
   LibreOffice, and drops Word's hidden text, so the document says what it
   showed on screen with the changes accepted; a PDF's comments are blanked
   and taken off their pages in place, the file keeping its length. A hidden
-  sheet or slide, a comment in Excel and an unapplied redaction are left to
-  the program that made them: taking them out would change what the
-  document is, so for those only the other two answers are offered.
+  sheet or slide, LibreOffice's hidden text, a comment in Excel, a
+  spreadsheet's tracked changes and an unapplied redaction are left to the
+  program that made them: taking them out would change what the document
+  is, so for those only the other two answers are offered.
 - **Search engines hear about a new release.** With `INDEXNOW_KEY` set, the
   service answers the key file IndexNow asks for, and a deploy that changes
   the home page or an about page tells Bing, Yandex and the others sharing

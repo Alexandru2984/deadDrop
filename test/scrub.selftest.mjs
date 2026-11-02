@@ -492,6 +492,68 @@ try {
   ], 'Pitch.pptx');
   ok(hiddenDeck?.hiddenSlides && !hiddenDeck.comments, 'and so are hidden slides');
 
+  // LibreOffice hides by style, by section and by field.
+  const odfKept = (mime, content, styles = '<office:document-styles/>') => keptOf([
+    { name: 'mimetype', data: `application/vnd.oasis.opendocument.${mime}`, deflate: false },
+    { name: 'content.xml', data: `<office:document-content>${content}</office:document-content>` },
+    { name: 'styles.xml', data: styles },
+  ], `notes.od${mime[0]}`);
+  const autoStyles = (...styles) => `<office:automatic-styles>${styles.join('')}</office:automatic-styles>`;
+  const textStyle = (name, props, parent = '') =>
+    `<style:style style:name="${name}" style:family="text"${parent && ` style:parent-style-name="${parent}"`}>${props && `<style:text-properties ${props}/>`}</style:style>`;
+  const odtText = (body) => `<office:body><office:text>${body}</office:text></office:body>`;
+  const hiddenSpan = await odfKept('text', autoStyles(textStyle('T1', 'fo:font-weight="bold" text:display="none"')) +
+    odtText('<text:p>Meet at six.<text:span text:style-name="T1"> Real budget: 2.4M</text:span></text:p>'));
+  ok(hiddenSpan?.hiddenText && !hiddenSpan.comments && hiddenSpan.removable === false,
+    `text LibreOffice formats hidden is noticed, and left to the person (${JSON.stringify(hiddenSpan)})`);
+  const secretStyle = '<office:document-styles><office:styles>' +
+    `${textStyle('Secret', 'text:display="none"')}<style:style style:name="Plain" style:family="paragraph"><style:text-properties text:display="none"/></style:style>` +
+    '</office:styles></office:document-styles>';
+  ok((await odfKept('text', autoStyles(textStyle('T2', 'fo:color="#000000"', 'Secret')) +
+    odtText('<text:p>Meet at six.<text:span text:style-name="T2">2.4M</text:span></text:p>'), secretStyle))?.hiddenText,
+    'so is text whose style inherits hidden from a named one');
+  ok((await odfKept('text', autoStyles(textStyle('T3', 'text:display="true"', 'Secret')) +
+    odtText('<text:p>Meet <text:span text:style-name="T3">at six.</text:span><text:span text:style-name="Secret"> </text:span></text:p>' +
+      '<text:p text:style-name="Other">Shown</text:p><text:p text:style-name="Plain"/>'), secretStyle)) === null,
+    'but not text a nearer style shows, a hidden space, or a hidden paragraph with nothing in it');
+  ok((await odfKept('text', autoStyles(textStyle('T1', 'text:display="none"')) +
+    odtText('<text:p><text:span text:style-name="Bold">Meet <text:span text:style-name="T1">secretly</text:span> at six.</text:span></text:p>')))?.hiddenText,
+    'hidden text inside a span that is not is noticed');
+  ok((await odfKept('text', odtText('<text:section text:name="Old" text:display="none"><text:p>Last year’s offer</text:p></text:section>')))?.hiddenText
+    && (await odfKept('text', odtText('<text:section text:name="Draft" text:display="condition" text:condition="ooow:1"><text:p>Draft terms</text:p></text:section>')))?.hiddenText,
+    'so is a hidden section, and one shown only on a condition');
+  ok((await odfKept('text', odtText('<text:p><text:hidden-paragraph text:condition="ooow:1"/>Internal only</text:p>')))?.hiddenText
+    && (await odfKept('text', odtText('<text:p>Price: <text:hidden-text text:condition="ooow:1" text:string-value="cost 40, margin 60"/></text:p>')))?.hiddenText,
+    'and a paragraph or text a field hides');
+  ok(await odfKept('text', odtText('<text:section text:name="Empty" text:display="none"><text:p/></text:section>' +
+    '<text:p><text:hidden-paragraph text:condition="ooow:0" text:is-hidden="false"/>Shown</text:p>' +
+    '<text:p><text:hidden-text text:condition="ooow:0" text:string-value="shown" text:is-hidden="false"/></text:p>')) === null,
+    'but not an empty hidden section, or a field that shows what it holds');
+  const odsHidden = await odfKept('spreadsheet', autoStyles(
+    '<style:style style:name="ta1" style:family="table"><style:table-properties table:display="true"/></style:style>',
+    '<style:style style:name="ta2" style:family="table"><style:table-properties table:display="false"/></style:style>') +
+    '<office:body><office:spreadsheet><table:table table:name="Budget" table:style-name="ta1"><table:table-row table:style-name="ta2"/></table:table>' +
+    '<table:table table:name="Salaries &amp; bonuses" table:style-name="ta2"/></office:spreadsheet></office:body>');
+  ok(odsHidden?.sheets.join('|') === 'Salaries & bonuses' && odsHidden.removable === false,
+    `a hidden sheet in LibreOffice is noticed by name (${JSON.stringify(odsHidden)})`);
+  const odpHidden = await odfKept('presentation', autoStyles(
+    '<style:style style:family="drawing-page" style:name="dp1"><style:drawing-page-properties presentation:visibility="visible"/></style:style>',
+    '<style:style style:family="drawing-page" style:name="dp2"><style:drawing-page-properties presentation:visibility="hidden"/></style:style>') +
+    '<office:body><office:presentation><draw:page draw:name="page1" draw:style-name="dp1"/><draw:page draw:name="page2" draw:style-name="dp2"/></office:presentation></office:body>');
+  ok(odpHidden?.hiddenSlides && odpHidden.removable === false, `and so is a hidden slide (${JSON.stringify(odpHidden)})`);
+  const odsChanges = await odfKept('spreadsheet', '<office:body><office:spreadsheet><table:tracked-changes><table:cell-content-change table:id="ct1">' +
+    '<table:cell-address table:column="0" table:row="0" table:table="0"/><office:change-info><dc:creator>Liam Accounts</dc:creator><dc:date>2026-10-27T14:32:00</dc:date></office:change-info>' +
+    '<table:previous><table:change-track-table-cell office:value-type="float" office:value="40"/></table:previous></table:cell-content-change></table:tracked-changes>' +
+    '<table:table table:name="Budget"/></office:spreadsheet></office:body>');
+  ok(odsChanges?.changes && odsChanges.people.join('|') === 'Liam Accounts' && odsChanges.removable === false,
+    `Calc's tracked changes are noticed, named, and left to the person (${JSON.stringify(odsChanges)})`);
+  const impressNote = '<office:body><office:presentation><draw:page draw:name="page1">' +
+    '<officeooo:annotation svg:x="1cm" svg:y="1cm"><dc:creator>Mona Speaker</dc:creator><dc:date>2026-10-27T14:32:00</dc:date><text:p>Cut this?</text:p></officeooo:annotation>' +
+    '</draw:page></office:presentation></office:body>';
+  const odpNote = await odfKept('presentation', impressNote);
+  ok(odpNote?.comments && odpNote.people.join('|') === 'Mona Speaker' && odpNote.removable === true,
+    `Impress's comments, in their own namespace, are noticed (${JSON.stringify(odpNote)})`);
+
   // Asked to, it takes them out: changes accepted, comments and hidden text gone.
   const removed = async (entries, name) => {
     const out = await scrubFile(new File([zip(entries)], name, { type: '' }), { removeKept: true });
@@ -542,6 +604,13 @@ try {
   ok(odtRemoved.kept === null && odtRemoved.seen.malformed.length === 0 && !/Judy|Ivan|old words|Source\?|text:change/.test(odtContent)
     && odtContent.includes('<text:tracked-changes text:track-changes="true"/>') && odtContent.includes('<text:p>Meet at six.!</text:p>'),
     `and LibreOffice's: changes accepted, comments gone, whether changes are recorded kept`);
+  const odpRemoved = await removed([
+    { name: 'mimetype', data: 'application/vnd.oasis.opendocument.presentation', deflate: false },
+    { name: 'content.xml', data: `<office:document-content>${impressNote}</office:document-content>` },
+  ], 'talk.odp');
+  ok(odpRemoved.kept === null && odpRemoved.seen.malformed.length === 0 && !/Mona|Cut this|annotation/.test(odpRemoved.seen.parts['content.xml'])
+    && odpRemoved.seen.parts['content.xml'].includes('<draw:page draw:name="page1"></draw:page>'),
+    "and Impress's");
 
   const deckOut = await removed([
     { name: '[Content_Types].xml', data: '<Types/>' },
