@@ -824,6 +824,17 @@ await pickReviewed('Review final.docx');
 ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'Review final.docx'), { timeout: 20000 }),
   'and goes, cleaned, when the person agrees');
 
+// A PDF's comments, and a redaction never applied, are put the same way.
+await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
+await pick(alice, `async () => new Blob(['%PDF-1.7\\n1 0 obj << /Type /Annot /Subtype /Highlight /T (alice) >> endobj\\n2 0 obj << /Subtype /Redact /T (Legal) >> endobj\\n%%EOF\\n'])`,
+  'Annotated.pdf', 'application/pdf');
+await sleep(1500);
+const pdfAsk = await alice.eval(`window.__asked`);
+ok(pdfAsk.length === 1 && /comments and redactions that were marked but never applied/.test(pdfAsk[0]) && /alice, Legal|Legal, alice/.test(pdfAsk[0])
+  && !(await bob.receivedFiles()).some((f) => f.name === 'Annotated.pdf'),
+  `a PDF with comments and an unapplied redaction asks first (${pdfAsk[0]})`);
+await alice.eval(`window.confirm = () => true; true`);
+
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.
 const nastyName = '<img src=x onerror=alert(1)>.txt';

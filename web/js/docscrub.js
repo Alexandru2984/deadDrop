@@ -36,9 +36,9 @@
  * kept as the original JPEG, with where and when it was taken. See
  * imagemeta.js.
  *
- * Comments and tracked changes stay, but the copy comes back with a `kept`
- * note of them, and of who made them, so the person can be asked first; see
- * keptInside.
+ * Comments and tracked changes stay, and so does what is hidden — text,
+ * sheets, slides — but the copy comes back with a `kept` note of them, and
+ * of who made them, so the person can be asked first; see keptInside.
  */
 
 import { blankJpegMeta, jpegEnd, stripPngMeta } from './imagemeta.js';
@@ -179,11 +179,16 @@ export async function scrubDocument(file, type) {
 /**
  * Comments and tracked changes are what the document says, and are sent as
  * they are; but they are easy to forget, and carry the names of whoever made
- * them. This says whether any are left, and those names, or null.
+ * them. Hidden text, sheets and slides are easier still to forget, and one
+ * click shows them to whoever receives the file. This says which are left,
+ * and those names, or null.
  */
 async function keptInside(bytes, entries, odf) {
   let comments = false;
   let changes = false;
+  let hiddenText = false;
+  let hiddenSlides = false;
+  const sheets = [];
   const people = new Set();
   // Comments that name their author by an ID in a list of people.
   const authorIds = new Set();
@@ -227,6 +232,18 @@ async function keptInside(bytes, entries, odf) {
         changes = true;
         named(tag, /\sw:author="([^"]*)"/g);
       }
+      // A run formatted hidden that holds text; a hidden paragraph mark alone
+      // hides nothing.
+      hiddenText ||= [...xml.matchAll(/<w:r\b[^>]*>([\s\S]*?)<\/w:r>/g)].some(([, run]) =>
+        /<w:rPr\b[^>]*>(?:(?!<\/w:rPr>)[\s\S])*<w:vanish(?:\s+w:val="(?:1|true|on)")?\s*\/>/.test(run)
+        && /<w:t\b[^>]*>[^<]*[^<\s]/.test(run));
+    } else if (name === 'xl/workbook.xml') {
+      const xml = await read(entry);
+      for (const [tag] of xml.matchAll(/<sheet\b[^>]*>/g)) {
+        if (/^(?:hidden|veryHidden)$/.test(valueOf(tag, 'state') ?? '')) sheets.push(unescapeXml(valueOf(tag, 'name') ?? '').slice(0, 60));
+      }
+    } else if (/^ppt\/slides\/slide\d+\.xml$/.test(name)) {
+      hiddenSlides ||= /<p:sld\b[^>]*\sshow="(?:0|false)"/.test(await read(entry));
     } else if (/^xl\/comments\d*\.xml$/.test(name)) {
       const xml = await read(entry);
       if (/<comment\b/.test(xml)) {
@@ -256,7 +273,9 @@ async function keptInside(bytes, entries, odf) {
       named(tag, /\s(?:displayName|name)="([^"]*)"/g);
     }
   }
-  return comments || changes ? { comments, changes, people: [...people] } : null;
+  return comments || changes || hiddenText || hiddenSlides || sheets.length
+    ? { comments, changes, hiddenText, hiddenSlides, sheets, people: [...people] }
+    : null;
 }
 
 const character = (code) => (code <= 0x10ffff ? String.fromCodePoint(code) : '');

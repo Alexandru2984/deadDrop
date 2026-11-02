@@ -184,8 +184,10 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   document ID, the address naming the organisation and site, the people it
   was shared with — and a cover page its company address, phone and e-mail.
   The content, including comments and tracked changes with their authors,
-  is left as written; a document that still has either is sent only once the
-  person confirms, after being told whose names they carry. A PDF's information
+  is left as written; a document that still has either — or hidden text,
+  sheets or slides, or a PDF with comments or a redaction never applied — is
+  sent only once the person confirms, after being told whose names they
+  carry. A PDF's information
   dictionary (in every revision) and XMP streams become spaces in place, so
   the file keeps its length and every offset. Photos inside documents and
   PDFs — kept as the original JPEG, GPS included — have their EXIF, XMP, IPTC

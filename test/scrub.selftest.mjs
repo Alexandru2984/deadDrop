@@ -466,6 +466,32 @@ try {
   ok(odtNotes?.comments && odtNotes.changes && [...odtNotes.people].sort().join('|') === 'Ivan Lector|Judy Editor',
     `and LibreOffice's (${JSON.stringify(odtNotes)})`);
 
+  // What is hidden is one click from whoever receives it.
+  const hiddenDoc = await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: `<w:document ${W}><w:body><w:p><w:r><w:t>Meet at six.</w:t></w:r>` +
+      '<w:r><w:rPr><w:b/><w:vanish/></w:rPr><w:t xml:space="preserve">Real budget: 2.4M</w:t></w:r></w:p></w:body></w:document>' },
+  ], 'Hidden.docx');
+  ok(hiddenDoc?.hiddenText && !hiddenDoc.comments && !hiddenDoc.changes, 'hidden text in a Word document is noticed');
+  ok(await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: `<w:document ${W}><w:body><w:p><w:pPr><w:rPr><w:vanish/></w:rPr></w:pPr><w:r><w:t>Shown</w:t></w:r>` +
+      '<w:r><w:rPr><w:vanish w:val="0"/></w:rPr><w:t>Also shown</w:t></w:r><w:r><w:rPr><w:vanish/></w:rPr><w:t xml:space="preserve"> </w:t></w:r></w:p></w:body></w:document>' },
+  ], 'Shown.docx') === null, 'but not a hidden paragraph mark, text marked not hidden, or a hidden space');
+  const hiddenBook = await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+      '<sheet name="Budget" sheetId="1" r:id="rId1"/><sheet name="Salaries &amp; bonuses" sheetId="2" state="hidden" r:id="rId2"/>' +
+      '<sheet name="Lists" sheetId="3" state="veryHidden" r:id="rId3"/><sheet name="Notes" sheetId="4" state="visible" r:id="rId4"/></sheets></workbook>' },
+  ], 'Budget.xlsx');
+  ok(hiddenBook?.sheets.join('|') === 'Salaries & bonuses|Lists', `hidden sheets are noticed by name, very hidden ones too (${JSON.stringify(hiddenBook)})`);
+  const hiddenDeck = await keptOf([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'ppt/slides/slide1.xml', data: '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>' },
+    { name: 'ppt/slides/slide2.xml', data: '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" show="0"/>' },
+  ], 'Pitch.pptx');
+  ok(hiddenDeck?.hiddenSlides && !hiddenDeck.comments, 'and so are hidden slides');
+
   const untraced = zip([
     { name: '[Content_Types].xml', data: '<Types/>' },
     { name: 'xl/workbook.xml', data: '<workbook><sheets/></workbook>' },
@@ -845,6 +871,27 @@ const predicted = objStm([[5, `<< /Author (${AUTHOR}) >>`]]);
 ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [3, predicted.entry.replace('/Filter /FlateDecode', '/Filter /FlateDecode /DecodeParms << /Predictor 12 >>')]])) === 'scrub.cannotReadDoc',
   'one whose object stream could not be written back is put to the person');
 ok(await pdfAsked(Buffer.from('just text, not a PDF')) === 'scrub.cannotReadDoc', 'and something that is not a PDF at all');
+
+// Comments on a PDF stay, but the person is asked first, told the names on
+// them; and a redaction never applied leaves its text in the file.
+const pdfKept = async (bytes) => (await scrubFile(new File([bytes], 'r.pdf', { type: 'application/pdf' }))).kept ?? null;
+ok(pdfOut.kept === undefined, 'a PDF without comments is sent without asking');
+const utf16Hex = (text) => 'FEFF' + Buffer.from(text, 'utf16le').swap16().toString('hex').toUpperCase();
+const commented = await pdfKept(pdf([[1, '<< /Type /Catalog >>'],
+  [3, `<< /Type /Annot /Subtype /Highlight /Rect [0 0 10 10] /T (alice\\(laptop\\)) /Contents (Is this right?) /Popup 4 0 R >>`],
+  [4, '<< /Type /Annot /Subtype /Popup /Parent 3 0 R /T (Popup owner) >>'],
+  [6, `<< /Subtype /Text /T <${utf16Hex('Ștefan')}> /AP << /N 7 0 R >> >>`],
+  [8, '<< /Type /Annot /Subtype /Link /T (Linker) /A << /S /URI /URI (https://example.com) >> >>'],
+  [5, '<< >>']]));
+ok(commented?.comments && !commented.redactions && [...commented.people].sort().join('|') === 'alice(laptop)|Ștefan',
+  `comments are noticed with the names on them, literal or UTF-16; links and pop-ups are not comments (${JSON.stringify(commented)})`);
+ok(await pdfKept(pdf([[1, '<< /Type /Catalog >>'], [3, '<< /Type /Annot /Subtype /Link /Rect [0 0 1 1] >>'], [4, '<< /FT /Tx /Subtype /Widget /T (name_field) >>'], [5, '<< >>']])) === null,
+  'and a PDF with only links and form fields is not asked about');
+const unredacted = await pdfKept(pdf([[1, '<< /Type /Catalog >>'], [3, '<< /Type /Annot /Subtype /Redact /QuadPoints [0 0 1 1 0 1 1 0] /T (Legal) >>'], [5, '<< >>']]));
+ok(unredacted?.redactions && !unredacted.comments, 'a redaction marked but never applied is noticed');
+const packedNote = objStm([[5, '<< /Producer (x) >>'], [9, '<< /Type /Annot /Subtype /Text /T (Bob Packed) /Contents (secret) >>']]);
+const packedKept = await pdfKept(pdf([[1, '<< /Type /Catalog >>'], [3, packedNote.entry]]));
+ok(packedKept?.comments && packedKept.people.join('|') === 'Bob Packed', 'and so is a comment kept in a compressed object stream');
 const bare = pdf([[1, '<< /Type /Catalog >>'], [5, '<< >>']]);
 ok(Buffer.from(await (await scrubFile(new File([bare], 'b.pdf', { type: 'application/pdf' }))).arrayBuffer()).equals(bare),
   'a PDF with nothing to remove goes unchanged');

@@ -22,6 +22,11 @@
  * what it no longer needs is left as whitespace before `endstream`, and its
  * length says so, so every offset in the file still holds.
  *
+ * Comments — notes, highlights, drawings, stamps — are what the document
+ * says, and stay, but the copy comes back with a `kept` note of them and the
+ * names on them, so the person can be asked first; so does a redaction that
+ * was marked but never applied, with the text still under it.
+ *
  * Some PDFs cannot be cleaned this way: an encrypted one, one whose object
  * stream is compressed in a way this cannot write back, and one that is
  * digitally signed, where any change breaks the signature. Those are put to
@@ -123,7 +128,82 @@ export async function scrubPdf(file) {
     blank(match.index, end + 2);
   }
 
-  return new File([bytes], file.name, { type: 'application/pdf', lastModified: 0 });
+  const out = new File([bytes], file.name, { type: 'application/pdf', lastModified: 0 });
+  const kept = await annotationsIn(text, packed);
+  return kept ? Object.assign(out, { kept }) : out;
+}
+
+// Annotations a reviewer leaves, and a redaction still waiting to be
+// applied. Links, form fields and the pop-ups notes open in are not.
+const MARKUP = /\/Subtype\s*\/(Text|FreeText|Line|Square|Circle|Polygon|PolyLine|Highlight|Underline|Squiggly|StrikeOut|Stamp|Caret|Ink|FileAttachment|Sound|Redact)(?![A-Za-z0-9#])/g;
+
+/**
+ * Whether the file holds comments or unapplied redactions, in plain objects
+ * or in object streams, and the names on them (an annotation's /T, which
+ * Acrobat fills with the user's name). Every revision counts: a comment
+ * deleted by an incremental save is still in the file. Null when none.
+ */
+async function annotationsIn(text, packed) {
+  let comments = false;
+  let redactions = false;
+  const people = new Set();
+  const look = (source, start) => {
+    const end = dictEndOf(source, start);
+    if (end < 0) return;
+    const dict = source.slice(start, end);
+    let marked = false;
+    for (const [, subtype] of dict.matchAll(MARKUP)) {
+      marked = true;
+      if (subtype === 'Redact') redactions = true;
+      else comments = true;
+    }
+    if (!marked) return;
+    for (const match of dict.matchAll(/\/T\s*(?=[(<])/g)) {
+      const at = match.index + match[0].length;
+      if (dict[at + 1] === '<') continue;
+      const name = pdfString(dict.slice(at, stringEnd(dict, at))).trim().slice(0, 60);
+      if (name) people.add(name);
+    }
+  };
+  for (const match of text.matchAll(/\d+\s+\d+\s+obj\s*<</g)) look(text, match.index + match[0].length - 2);
+  for (const [view, at] of await packed.objects()) {
+    let i = at;
+    while (/\s/.test(view[i] ?? '')) i++;
+    if (view.startsWith('<<', i)) look(view, i);
+  }
+  return comments || redactions ? { comments, redactions, people: [...people] } : null;
+}
+
+/** A PDF string's text: literal or hex, in UTF-16, UTF-8 or PDFDocEncoding. */
+function pdfString(raw) {
+  const bytes = [];
+  if (raw[0] === '<') {
+    const hex = raw.slice(1, -1).replace(/[^0-9A-Fa-f]/g, '');
+    for (let i = 0; i < hex.length; i += 2) bytes.push(parseInt(hex.slice(i, i + 2).padEnd(2, '0'), 16));
+  } else {
+    const ESCAPES = { n: 10, r: 13, t: 9, b: 8, f: 12 };
+    for (let i = 1; i < raw.length - 1; i++) {
+      const c = raw[i];
+      if (c !== '\\') {
+        bytes.push(c.charCodeAt(0) & 0xff);
+        continue;
+      }
+      const next = raw[++i];
+      const octal = /^[0-7]{1,3}/.exec(raw.slice(i, i + 3));
+      if (octal) {
+        bytes.push(parseInt(octal[0], 8) & 0xff);
+        i += octal[0].length - 1;
+      } else if (next === '\r' || next === '\n') {
+        if (next === '\r' && raw[i + 1] === '\n') i++;
+      } else {
+        bytes.push(ESCAPES[next] ?? next.charCodeAt(0) & 0xff);
+      }
+    }
+  }
+  const data = Uint8Array.from(bytes);
+  if (data[0] === 0xfe && data[1] === 0xff) return new TextDecoder('utf-16be').decode(data.subarray(2));
+  if (data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf) return new TextDecoder().decode(data.subarray(3));
+  return new TextDecoder('latin1').decode(data);
 }
 
 /**
@@ -220,6 +300,16 @@ class ObjectStreams {
       else if (view[i] === '(' || (view[i] === '<' && view[i + 1] !== '<')) blankString(i, stringEnd(view, i));
     }
     return found && !unread;
+  }
+
+  /** Every object in every stream that can be read: its stream's text, and where it starts. */
+  async objects() {
+    const found = [];
+    for (const stream of this._list()) {
+      if (!await this._open(stream)) continue;
+      for (const at of stream.starts.values()) found.push([stream.view, at]);
+    }
+    return found;
   }
 
   /** Compress every changed stream back into its place. */

@@ -104,11 +104,20 @@ function serverMessage(text, fallbackKey) {
   return key ? t(key) : text;
 }
 
-/** What to ask before a document goes with its comments or tracked changes. */
-function keptQuestion({ comments, changes, people }) {
-  const what = t(comments && changes ? 'scrub.keptBoth' : comments ? 'scrub.keptComments' : 'scrub.keptChanges');
-  const names = people.slice(0, 5).join(', ') + (people.length > 5 ? ` +${people.length - 5}` : '');
-  return t(people.length ? 'scrub.keptNamed' : 'scrub.kept').replace('{what}', what).replace('{names}', () => names);
+/** What to ask before a document goes with comments, changes or hidden parts left in it. */
+function keptQuestion(kept) {
+  const listed = (items) => items.slice(0, 5).join(', ') + (items.length > 5 ? ` +${items.length - 5}` : '');
+  const parts = [
+    kept.comments && t('scrub.keptComments'),
+    kept.changes && t('scrub.keptChanges'),
+    kept.hiddenText && t('scrub.keptHiddenText'),
+    kept.hiddenSlides && t('scrub.keptHiddenSlides'),
+    kept.sheets?.length && t('scrub.keptHiddenSheets').replace('{sheets}', () => listed(kept.sheets)),
+    kept.redactions && t('scrub.keptRedactions'),
+  ].filter(Boolean);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} ${t('scrub.and')} ${parts.at(-1)}` : parts[0];
+  const people = kept.people ?? [];
+  return t(people.length ? 'scrub.keptNamed' : 'scrub.kept').replace('{what}', () => what).replace('{names}', () => listed(people));
 }
 
 // Web addresses in a message become links — built as elements, never markup,
@@ -1943,8 +1952,8 @@ class DeadDrop {
         }
         scrubNote = 'file.sentAsIs';
       }
-      // Comments and tracked changes are what the document says, so they
-      // stay; but they are easy to forget, and carry their authors' names.
+      // Comments, tracked changes and hidden parts are what the document
+      // says, so they stay; but they are easy to forget, and carry names.
       if (file.kept && !window.confirm(keptQuestion(file.kept))) {
         this._renderSystem(t('file.notSent'));
         return;

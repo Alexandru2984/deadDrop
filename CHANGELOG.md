@@ -38,12 +38,16 @@ compare rather than take a hash on trust.
   the people it was shared with, and its tags. They are emptied, whether the
   file stores them as UTF-8 or UTF-16; a cover page loses the company's
   address, phone, fax and e-mail. A bibliography and other custom data stay.
-- **A document with comments or tracked changes asks before it goes.**
-  They are part of what the document says, so they are sent; but they are
-  easy to forget, and each carries the name of whoever made it. A Word,
-  Excel, PowerPoint or LibreOffice file that still has any now names them
-  and their authors and waits for a yes; on a no, it says how to send the
-  document without them.
+- **A document with comments, tracked changes or hidden parts asks before
+  it goes.** They are part of what the document says, so they are sent; but
+  they are easy to forget, comments and changes carry the name of whoever
+  made them, and what is hidden is one click from whoever receives it. A
+  Word, Excel, PowerPoint or LibreOffice file with comments or tracked
+  changes, hidden text in Word, hidden sheets in Excel (named), hidden
+  slides in PowerPoint, and a PDF with comments — notes, highlights,
+  drawings, stamps, the name Acrobat puts on each — or with a redaction
+  marked but never applied, the text still under it, now says so and waits
+  for a yes; on a no, it says how to send the document without them.
 - **Search engines hear about a new release.** With `INDEXNOW_KEY` set, the
   service answers the key file IndexNow asks for, and a deploy that changes
   the home page or an about page tells Bing, Yandex and the others sharing
