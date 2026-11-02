@@ -297,7 +297,7 @@ func checkIndexable() finding {
 }
 
 func indexability(client *http.Client, public string) finding {
-	for _, path := range []string{"/", "/about.html", "/about.ro.html"} {
+	for _, path := range publicPages {
 		resp, err := client.Get(public + path)
 		if err != nil {
 			return finding{name: "search engines", warn: true,

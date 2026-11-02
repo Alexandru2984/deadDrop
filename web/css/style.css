@@ -1721,6 +1721,7 @@ select { cursor: pointer; width: auto; }
 .intro ul { margin: 0 0 12px; padding-left: 1.1em; }
 .intro li { margin: 0 0 8px; }
 .intro strong { color: var(--fg); font-weight: 600; }
+.intro a { color: var(--accent); }
 .intro-limits {
   border-left: 2px solid var(--danger, #c8102e);
   padding-left: 10px;

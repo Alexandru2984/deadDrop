@@ -155,7 +155,7 @@ fi
 
 
 changed=()
-for file in index.html about.html about.ro.html; do
+for file in index.html about.html about.ro.html guide.html guide.ro.html; do
   before="$(printf '%s\n' "$SERVED_BEFORE" | awk -v f="$file" '$2 == f { print $1 }')"
   after="$(awk -v f="$file" '$2 == f { print $1 }' web/SHA256SUMS)"
   if [ "$before" != "$after" ]; then

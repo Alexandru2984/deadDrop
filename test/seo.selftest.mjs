@@ -48,7 +48,7 @@ for (const page of pages) {
 
 console.log('\nwhat is meant to be found, and what is not');
 
-const indexable = { 'index.html': true, 'about.html': true, 'about.ro.html': true, 'verify.html': false, 'verify.ro.html': false, '404.html': false };
+const indexable = { 'index.html': true, 'about.html': true, 'about.ro.html': true, 'guide.html': true, 'guide.ro.html': true, 'verify.html': false, 'verify.ro.html': false, '404.html': false };
 for (const [page, wanted] of Object.entries(indexable)) {
   const html = read(page);
   const blocked = /<meta\s+name="robots"[^>]*content="[^"]*noindex/i.test(html);
@@ -56,7 +56,7 @@ for (const [page, wanted] of Object.entries(indexable)) {
     `${page} is ${wanted ? 'indexable' : 'kept out of search'}`);
 }
 
-for (const page of ['index.html', 'about.html', 'about.ro.html']) {
+for (const page of ['index.html', 'about.html', 'about.ro.html', 'guide.html', 'guide.ro.html']) {
   const html = read(page);
   const desc = /<meta\s+name="description"\s+content="([^"]+)"/.exec(html)?.[1] ?? '';
   ok(desc.length >= 80 && desc.length <= 320,
@@ -88,6 +88,16 @@ console.log('\nthe security page in both languages');
     `both versions carry the same sections and points (${count(en, 'h2')}/${count(ro, 'h2')} sections, ${count(en, 'li')}/${count(ro, 'li')} points)`);
   ok(count(ven, 'h2') === count(vro, 'h2') && count(ven, 'li') === count(vro, 'li') && count(ven, 'p') === count(vro, 'p'),
     'the verifier carries the same steps and caveats in both languages');
+  const gen = read('guide.html'), gro = read('guide.ro.html');
+  ok(alt(gen, 'ro', OURS + '/guide.ro.html') && alt(gro, 'en', OURS + '/guide.html')
+    && /<html lang="ro">/.test(gro) && /og:locale" content="ro"/.test(gro),
+    'so does the guide to what files give away, the Romanian one saying it is Romanian');
+  ok(count(gen, 'h2') === count(gro, 'h2') && count(gen, 'li') === count(gro, 'li') && count(gen, 'p') === count(gro, 'p'),
+    `and it carries the same sections, points and steps in both (${count(gen, 'h2')}/${count(gro, 'h2')}, ${count(gen, 'li')}/${count(gro, 'li')}, ${count(gen, 'p')}/${count(gro, 'p')})`);
+  // Each guide is reached from the app and from the security page in its language.
+  const index = read('index.html');
+  ok(/href="\/guide\.html"[^>]*data-i18n-href="guide\.href"/.test(index) && /href="\/guide\.html"/.test(en) && /href="\/guide\.ro\.html"/.test(ro),
+    'the home page and both security pages link to the guide');
   // The Romanian verifier must run the same check: same script, same ids.
   const ids = (html) => [...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]).sort().join();
   ok(ids(ven) === ids(vro) && /src="js\/verify\.js"/.test(vro), 'and runs the same script against the same elements');

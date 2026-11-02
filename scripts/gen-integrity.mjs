@@ -39,6 +39,8 @@ const SRI_TARGETS = {
   'index.html': ['css/style.css', 'js/app.js'],
   'about.html': ['css/style.css', 'css/about.css'],
   'about.ro.html': ['css/style.css', 'css/about.css'],
+  'guide.html': ['css/style.css', 'css/about.css'],
+  'guide.ro.html': ['css/style.css', 'css/about.css'],
   'verify.html': ['css/style.css', 'css/about.css', 'js/verify.js'],
   'verify.ro.html': ['css/style.css', 'css/about.css', 'js/verify.js'],
 };

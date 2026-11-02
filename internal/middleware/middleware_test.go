@@ -162,6 +162,8 @@ func TestSecurityHeadersLeaveOnlyPublicPagesIndexable(t *testing.T) {
 		"/":               "",
 		"/about.html":     "",
 		"/about.ro.html":  "",
+		"/guide.html":     "",
+		"/guide.ro.html":  "",
 		"/og.png":         "",
 		"/verify.html":    "noindex",
 		"/verify.ro.html": "noindex",

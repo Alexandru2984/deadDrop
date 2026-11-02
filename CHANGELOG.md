@@ -62,9 +62,15 @@ compare rather than take a hash on trust.
   is, so for those only the other two answers are offered.
 - **Search engines hear about a new release.** With `INDEXNOW_KEY` set, the
   service answers the key file IndexNow asks for, and a deploy that changes
-  the home page or an about page tells Bing, Yandex and the others sharing
-  IndexNow, rather than leaving them to notice. `deaddrop indexnow` does it
-  by hand. Only the public pages' addresses are sent.
+  a public page tells Bing, Yandex and the others sharing IndexNow, rather
+  than leaving them to notice. `deaddrop indexnow` does it by hand. Only the
+  public pages' addresses are sent.
+- **A guide to what a file gives away**, in English and Romanian
+  (`/guide.html`, `/guide.ro.html`): what photos, videos, Office,
+  LibreOffice and PDF files carry besides what is seen in them, how to take
+  it out by hand in each program, what Dead Drop takes out on its own, and
+  what no tool can. The home page and the security pages link to it, and it
+  is in the sitemap and open to search engines like them.
 
 ### Fixed
 

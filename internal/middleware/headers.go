@@ -5,13 +5,16 @@ import (
 )
 
 // indexable are the pages a search engine may list: the app, what it
-// protects and how, and the picture a shared link shows. Everything else is
+// protects and how, what a file gives away, and the picture a shared link
+// shows. Everything else is
 // marked noindex — the verifier, whose verdict means something only live;
 // the API; the code and assets behind the pages; and whatever is not found.
 var indexable = map[string]bool{
 	"/":              true,
 	"/about.html":    true,
 	"/about.ro.html": true,
+	"/guide.html":    true,
+	"/guide.ro.html": true,
 	"/og.png":        true,
 }
 

@@ -29,7 +29,7 @@ import (
 const indexNowEndpoint = "https://api.indexnow.org/indexnow"
 
 // The pages robots.txt and the sitemap invite in; nothing else is worth naming.
-var publicPages = []string{"/", "/about.html", "/about.ro.html"}
+var publicPages = []string{"/", "/about.html", "/about.ro.html", "/guide.html", "/guide.ro.html"}
 
 var indexNowKeyPattern = regexp.MustCompile(`^[A-Za-z0-9-]{8,128}$`)
 
