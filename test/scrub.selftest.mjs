@@ -492,6 +492,67 @@ try {
   ], 'Pitch.pptx');
   ok(hiddenDeck?.hiddenSlides && !hiddenDeck.comments, 'and so are hidden slides');
 
+  // Asked to, it takes them out: changes accepted, comments and hidden text gone.
+  const removed = async (entries, name) => {
+    const out = await scrubFile(new File([zip(entries)], name, { type: '' }), { removeKept: true });
+    return { kept: out.kept ?? null, seen: inspect(Buffer.from(await out.arrayBuffer())) };
+  };
+  const reviewBody = `<w:document ${W}><w:body>` +
+    '<w:p><w:pPr><w:rPr><w:ins w:id="9" w:author="Carol"/></w:rPr></w:pPr>' +
+    '<w:commentRangeStart w:id="0"/><w:r><w:t xml:space="preserve">Meet at </w:t></w:r>' +
+    '<w:ins w:id="1" w:author="Carol"><w:r><w:t>six</w:t></w:r></w:ins>' +
+    '<w:del w:id="2" w:author="Carol"><w:r><w:delText>five</w:delText></w:r></w:del>' +
+    '<w:r><w:rPr><w:b/><w:rPrChange w:id="3" w:author="Carol"><w:rPr/></w:rPrChange></w:rPr><w:t>.</w:t></w:r>' +
+    '<w:commentRangeEnd w:id="0"/><w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="0"/></w:r>' +
+    '<w:r><w:rPr><w:vanish/></w:rPr><w:t xml:space="preserve"> Real budget: 2.4M</w:t></w:r></w:p>' +
+    '<w:moveFromRangeStart w:id="4" w:name="m1"/><w:p><w:moveFrom w:id="5" w:author="Carol"><w:r><w:t>Moved line</w:t></w:r></w:moveFrom></w:p><w:moveFromRangeEnd w:id="4"/>' +
+    '<w:moveToRangeStart w:id="6" w:name="m1"/><w:p><w:moveTo w:id="7" w:author="Carol"><w:r><w:t>Moved line</w:t></w:r></w:moveTo></w:p><w:moveToRangeEnd w:id="6"/>' +
+    '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>kept row</w:t></w:r></w:p></w:tc></w:tr>' +
+    '<w:tr><w:trPr><w:del w:id="8" w:author="Carol"/></w:trPr><w:tc><w:p><w:del w:id="10" w:author="Carol"><w:r><w:delText>gone row</w:delText></w:r></w:del></w:p></w:tc></w:tr></w:tbl>' +
+    '<w:p><w:r><w:drawing><wps:txbx><w:txbxContent><w:p><w:r><w:t>In a box</w:t></w:r></w:p></w:txbxContent></wps:txbx></w:drawing></w:r></w:p>' +
+    '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>';
+  const wordOut = await removed([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'word/document.xml', data: reviewBody },
+    { name: 'word/comments.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n<w:comments ${W}><w:comment w:id="0" w:author="Bob Jones"><w:p><w:r><w:t>Check this</w:t></w:r></w:p></w:comment></w:comments>` },
+    { name: 'word/people.xml', data: `<w15:people ${W}><w15:person w15:author="Bob Jones"/></w15:people>` },
+  ], 'Plan.docx');
+  const wordBody = wordOut.seen.parts['word/document.xml'];
+  const wordText = [...wordBody.matchAll(/<w:t\b[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join('|');
+  ok(wordOut.kept === null && wordOut.seen.bad === null && wordOut.seen.malformed.length === 0,
+    `asked to, it takes a Word document's comments, changes and hidden text out, and says nothing is left (${JSON.stringify(wordOut.kept)})`);
+  ok(wordText === 'Meet at |six|.|Moved line|kept row|In a box',
+    `inserted text stays, deleted and moved-away text goes, a deleted row goes, a text box stays (${wordText})`);
+  ok(!/w:ins\b|w:del\b|w:moveFrom|w:moveTo|rPrChange|commentR|Real budget|Carol/.test(wordBody) && wordBody.includes('<w:rPr><w:b/></w:rPr>')
+    && wordBody.includes('<w:sectPr>'),
+    'with no mark of who changed what, the new formatting kept, the layout left');
+  ok(!/Bob Jones|Check this/.test(JSON.stringify(wordOut.seen.parts)) && /<w:comments [^>]*\/>$/.test(wordOut.seen.parts['word/comments.xml']),
+    "and the comments' own parts are emptied, their names with them");
+
+  const odtRemoved = await removed([
+    { name: 'mimetype', data: 'application/vnd.oasis.opendocument.text', deflate: false },
+    { name: 'content.xml', data: '<office:document-content><office:body><office:text><text:tracked-changes text:track-changes="true">' +
+      '<text:changed-region text:id="ct1"><text:insertion><office:change-info><dc:creator>Judy Editor</dc:creator></office:change-info></text:insertion></text:changed-region>' +
+      '<text:changed-region text:id="ct2"><text:deletion><office:change-info><dc:creator>Judy Editor</dc:creator></office:change-info><text:p>old words</text:p></text:deletion></text:changed-region></text:tracked-changes>' +
+      '<text:p>Meet at <text:change-start text:change-id="ct1"/>six<text:change-end text:change-id="ct1"/><text:change text:change-id="ct2"/>.' +
+      '<office:annotation office:name="n1"><dc:creator>Ivan Lector</dc:creator><text:p>Source?</text:p></office:annotation>!<office:annotation-end office:name="n1"/></text:p>' +
+      '</office:text></office:body></office:document-content>' },
+  ], 'notes.odt');
+  const odtContent = odtRemoved.seen.parts['content.xml'];
+  ok(odtRemoved.kept === null && odtRemoved.seen.malformed.length === 0 && !/Judy|Ivan|old words|Source\?|text:change/.test(odtContent)
+    && odtContent.includes('<text:tracked-changes text:track-changes="true"/>') && odtContent.includes('<text:p>Meet at six.!</text:p>'),
+    `and LibreOffice's: changes accepted, comments gone, whether changes are recorded kept`);
+
+  const deckOut = await removed([
+    { name: '[Content_Types].xml', data: '<Types/>' },
+    { name: 'ppt/comments/modernComment_100_1.xml', data: '<p188:cmLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:cm id="{CCCCCCCC-0000-4000-8000-000000000001}" authorId="{DDDDDDDD-0000-4000-8000-000000000001}"><p188:txBody/></p188:cm></p188:cmLst>' },
+    { name: 'ppt/authors.xml', data: '<p188:authorLst xmlns:p188="http://schemas.microsoft.com/office/powerpoint/2018/8/main"><p188:author id="{DDDDDDDD-0000-4000-8000-000000000001}" name="Grace Designer" initials="GD" userId="Grace Designer" providerId="None"/></p188:authorLst>' },
+  ], 'Pitch.pptx');
+  ok(deckOut.kept === null && !JSON.stringify(deckOut.seen.parts).includes('Grace') && deckOut.seen.malformed.length === 0,
+    "and PowerPoint's comments, with their authors");
+  ok(sheetNotes.removable === false && hiddenBook.removable === false && hiddenDeck.removable === false && reviewed.removable === true,
+    "Excel's comments, hidden sheets and hidden slides are left to the person: removing them could break the file");
+
   const untraced = zip([
     { name: '[Content_Types].xml', data: '<Types/>' },
     { name: 'xl/workbook.xml', data: '<workbook><sheets/></workbook>' },
@@ -892,6 +953,37 @@ ok(unredacted?.redactions && !unredacted.comments, 'a redaction marked but never
 const packedNote = objStm([[5, '<< /Producer (x) >>'], [9, '<< /Type /Annot /Subtype /Text /T (Bob Packed) /Contents (secret) >>']]);
 const packedKept = await pdfKept(pdf([[1, '<< /Type /Catalog >>'], [3, packedNote.entry]]));
 ok(packedKept?.comments && packedKept.people.join('|') === 'Bob Packed', 'and so is a comment kept in a compressed object stream');
+
+// Asked to, the comments go: out of every page's list, their text, author,
+// appearance and attached file blanked where they lie. A redaction stays.
+const AP_TEXT = 'BT /F1 9 Tf (Real budget 2.4M) Tj ET';
+const SECRET = 'salaries.csv: alice 9000';
+const reviewedPdf = pdf([
+  [1, '<< /Type /Catalog /Pages 2 0 R >>'],
+  [2, '<< /Type /Pages /Kids [3 0 R 14 0 R] /Count 2 >>'],
+  [3, '<< /Type /Page /Parent 2 0 R /Annots [6 0 R 7 0 R 8 0 R 12 0 R] >>'],
+  [5, '<< >>'],
+  [6, `<< /Type /Annot /Subtype /FreeText /T (${AUTHOR}) /Contents (Real budget 2.4M) /AP << /N 9 0 R >> /Popup 7 0 R /P 3 0 R >>`],
+  [7, '<< /Type /Annot /Subtype /Popup /Parent 6 0 R >>'],
+  [8, '<< /Type /Annot /Subtype /Link /A << /S /URI /URI (https://example.com) >> >>'],
+  [9, `<< /Type /XObject /Subtype /Form /Length ${AP_TEXT.length} >>\nstream\n${AP_TEXT}\nendstream`],
+  [10, '<< /Type /Annot /Subtype /FileAttachment /T (Bob Jones) /FS << /Type /Filespec /F (salaries.csv) /EF << /F 11 0 R >> >> >>'],
+  [11, `<< /Type /EmbeddedFile /Length ${SECRET.length} >>\nstream\n${SECRET}\nendstream`],
+  [12, '<< /Type /Annot /Subtype /Redact /T (Legal) >>'],
+  [13, '[10 0 R]'],
+  [14, '<< /Type /Page /Parent 2 0 R /Annots 13 0 R >>'],
+]);
+const reviewedPdfOut = await scrubFile(new File([reviewedPdf], 'r.pdf', { type: 'application/pdf' }), { removeKept: true });
+const reviewedPdfText = Buffer.from(await reviewedPdfOut.arrayBuffer()).toString('latin1');
+ok(reviewedPdfText.length === reviewedPdf.length && offsetsLand(reviewedPdfText, 13),
+  'asked to, it takes the comments out of a PDF without moving a byte');
+ok(!reviewedPdfText.includes(AUTHOR) && !/Real budget|salaries|Bob Jones|alice 9000/.test(reviewedPdfText),
+  'their text, author, drawn appearance and attached file are gone');
+ok(/\/Annots \[ +8 0 R 12 0 R\]/.test(reviewedPdfText) && /13 0 obj\n\[ +\]/.test(reviewedPdfText) && reviewedPdfText.includes('(https://example.com)'),
+  `they leave every page's list, direct or an object of its own; a link and a redaction stay (${/\/Annots \[[^\]]*\]/.exec(reviewedPdfText)?.[0]})`);
+ok(reviewedPdfOut.kept?.redactions && !reviewedPdfOut.kept.comments && reviewedPdfOut.kept.removable === false,
+  'and what is left — a redaction never applied — is still said, and left to the person');
+
 const bare = pdf([[1, '<< /Type /Catalog >>'], [5, '<< >>']]);
 ok(Buffer.from(await (await scrubFile(new File([bare], 'b.pdf', { type: 'application/pdf' }))).arrayBuffer()).equals(bare),
   'a PDF with nothing to remove goes unchanged');

@@ -187,7 +187,11 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   is left as written; a document that still has either — or hidden text,
   sheets or slides, or a PDF with comments or a redaction never applied — is
   sent only once the person confirms, after being told whose names they
-  carry. A PDF's information
+  carry, or has them taken out: comments go from Word, PowerPoint,
+  LibreOffice and PDF files, tracked changes in Word and LibreOffice are
+  accepted, Word's hidden text dropped, and a PDF's comments blanked and
+  unlisted in place. Hidden sheets and slides, Excel comments and unapplied
+  redactions are only ever sent as they are, or not at all. A PDF's information
   dictionary (in every revision) and XMP streams become spaces in place, so
   the file keeps its length and every offset. Photos inside documents and
   PDFs — kept as the original JPEG, GPS included — have their EXIF, XMP, IPTC

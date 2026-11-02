@@ -352,6 +352,12 @@ class DeadDrop {
       qrVerifyVideo:  $('#qr-verify-video'),
       qrVerifyStatus: $('#qr-verify-status'),
       qrVerifyClose:  $('#qr-verify-close'),
+      keptAsk:        $('#kept-ask'),
+      keptText:       $('#kept-ask-text'),
+      keptNote:       $('#kept-ask-note'),
+      keptRemove:     $('#kept-remove'),
+      keptAsIs:       $('#kept-asis'),
+      keptCancel:     $('#kept-cancel'),
       // Call
       callBtn:       $('#call-btn'),
       incomingCall:  $('#incoming-call'),
@@ -412,6 +418,9 @@ class DeadDrop {
     this.el.joinBtn.addEventListener('click', () => this.joinRoom());
     this.el.copyBtn.addEventListener('click', () => this._copyCode());
     this.el.qrVerifyClose.addEventListener('click', () => this._closeQrVerify());
+    this.el.keptRemove.addEventListener('click', () => this._answerKept('remove'));
+    this.el.keptAsIs.addEventListener('click', () => this._answerKept('asIs'));
+    this.el.keptCancel.addEventListener('click', () => this._answerKept(null));
     // Remembered switches. The markup's defaults are the safe ones; a stored
     // preference only ever changes them because the user did.
     this.el.relayToggle.checked = this._relayOnly;
@@ -1894,6 +1903,32 @@ class DeadDrop {
     this.el.qrVerifyVideo.srcObject = null;
   }
 
+  /**
+   * Ask what to do with a document that still has comments, changes or hidden
+   * parts: take them out and send, send as it is, or not send. Resolves to
+   * 'remove', 'asIs' or null.
+   */
+  _askKept(kept) {
+    this._answerKept(null);
+    this.el.keptText.textContent = keptQuestion(kept);
+    this.el.keptRemove.classList.toggle('hidden', !kept.removable);
+    this.el.keptNote.classList.toggle('hidden', !!kept.removable);
+    this.el.keptAsk.classList.remove('hidden');
+    this._makeModal(this.el.keptAsk);
+    this._captureFocus(this.el.keptAsk);
+    return new Promise((resolve) => { this._keptAnswer = resolve; });
+  }
+
+  _answerKept(choice) {
+    const resolve = this._keptAnswer;
+    if (!resolve) return;
+    this._keptAnswer = null;
+    this.el.keptAsk.classList.add('hidden');
+    this._makeModal(null);
+    this._restoreFocus();
+    resolve(choice);
+  }
+
   _closeQrVerify() {
     this._stopQrScan();
     this.el.qrVerify.classList.add('hidden');
@@ -1936,6 +1971,7 @@ class DeadDrop {
     // that they chose to send it as it was. Nothing is claimed for a kind of
     // file this does not clean.
     let scrubNote = null;
+    const original = file;
     if (this.el.scrubToggle.checked && !recorded && isScrubbable(file)) {
       try {
         file = await scrubFile(file);
@@ -1953,10 +1989,27 @@ class DeadDrop {
         scrubNote = 'file.sentAsIs';
       }
       // Comments, tracked changes and hidden parts are what the document
-      // says, so they stay; but they are easy to forget, and carry names.
-      if (file.kept && !window.confirm(keptQuestion(file.kept))) {
-        this._renderSystem(t('file.notSent'));
-        return;
+      // says, so they stay unless the person says otherwise; but they are easy
+      // to forget, and carry names.
+      if (file.kept) {
+        const choice = await this._askKept(file.kept);
+        if (choice === 'remove') {
+          try {
+            file = await scrubFile(original, { removeKept: true });
+          } catch (err) {
+            console.warn('removing comments failed:', err?.message);
+            file = null;
+          }
+          if (!file || file.kept) {
+            this._renderSystem(t('err.scrubFailed'));
+            return;
+          }
+          scrubNote = 'file.cleanedAll';
+        } else if (choice !== 'asIs') {
+          this._renderSystem(t('file.notSent'));
+          return;
+        }
+        if (!this.encrypted) return;
       }
     }
     if (file.size > MAX_FILE_SIZE) {
@@ -3635,6 +3688,7 @@ class DeadDrop {
     const open = [
       [this.el.imageViewer, () => this._closeImage()],
       [this.el.callMenu, () => this._showCallMenu(false)],
+      [this.el.keptAsk, () => this._answerKept(null)],
       [this.el.qrVerify, () => this._closeQrVerify()],
       [this.el.callOverlay, () => this._toggleCallOverlay(false)],
       [this.el.accountPanel, () => this.el.accountPanel.classList.add('hidden')],

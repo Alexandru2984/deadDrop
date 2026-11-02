@@ -801,39 +801,64 @@ ok(signedAsk.length === 1 && /signed/i.test(signedAsk[0]) && !(await bob.receive
   `a signed PDF asks before its signature is broken, and stays when declined (${signedAsk[0]})`);
 await alice.eval(`window.confirm = () => true; true`);
 
-// Comments and tracked changes are content and go, but not before the person
-// is told they are there, and by whom.
+// Comments and tracked changes are content, but a document that still has
+// them waits for the person: take them out and send, send as it is, or not.
 const reviewedDoc = zip([
   { name: '[Content_Types].xml', data: '<Types/>' },
-  { name: 'word/document.xml', data: '<w:document><w:body><w:p><w:ins w:id="1" w:author="Carol Reviewer"><w:r><w:t>six</w:t></w:r></w:ins></w:p></w:body></w:document>' },
+  { name: 'word/document.xml', data: '<w:document><w:body><w:p><w:r><w:t xml:space="preserve">Meet at </w:t></w:r><w:ins w:id="1" w:author="Carol Reviewer"><w:r><w:t>six</w:t></w:r></w:ins>' +
+    '<w:del w:id="2" w:author="Carol Reviewer"><w:r><w:delText>five</w:delText></w:r></w:del></w:p></w:body></w:document>' },
   { name: 'word/comments.xml', data: '<w:comments><w:comment w:id="0" w:author="Bob $&amp; Jones"><w:p/></w:comment></w:comments>' },
 ]);
+const reviewedClean = await scrubFile(new File([reviewedDoc], 'r.docx', { type: '' }), { removeKept: true });
+const reviewedAsIs = await scrubFile(new File([reviewedDoc], 'r.docx', { type: '' }));
 const pickReviewed = (name) => pick(alice, `async () => new Blob([Uint8Array.from(atob(${JSON.stringify(reviewedDoc.toString('base64'))}), (c) => c.charCodeAt(0))])`,
   name, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
-await pickReviewed('Review draft.docx');
-await sleep(1500);
-const reviewAsk = await alice.eval(`window.__asked`);
-ok(reviewAsk.length === 1 && /comments and tracked changes/.test(reviewAsk[0]) && reviewAsk[0].includes('Bob $& Jones') && reviewAsk[0].includes('Carol Reviewer')
-  && !(await bob.receivedFiles()).some((f) => f.name === 'Review draft.docx'),
-  `a document with comments and tracked changes asks first, naming who made them, and stays when declined (${reviewAsk[0]})`);
-ok(await alice.eval(`[...document.querySelectorAll('.msg.system')].some((m) => /Not sent/.test(m.textContent))`),
-  'and the sender is told how to send it without them');
-await alice.eval(`window.confirm = () => true; true`);
-await pickReviewed('Review final.docx');
-ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'Review final.docx'), { timeout: 20000 }),
-  'and goes, cleaned, when the person agrees');
+const keptShown = () => waitFor(() => alice.eval(`(() => {
+  const box = document.querySelector('#kept-ask');
+  return box && !box.classList.contains('hidden') && {
+    text: document.querySelector('#kept-ask-text').textContent,
+    remove: !document.querySelector('#kept-remove').classList.contains('hidden'),
+    focused: box.contains(document.activeElement),
+  };
+})()`), { timeout: 10000 });
+const answerKept = (id) => alice.eval(`document.querySelector('#${id}').click(), true`);
+const sizeOf = async (name) => (await waitFor(async () => (await bob.receivedFiles()).find((f) => f.name === name) || false, { timeout: 20000 }))?.size;
 
-// A PDF's comments, and a redaction never applied, are put the same way.
-await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
+await pickReviewed('Review draft.docx');
+const asked = await keptShown();
+ok(asked && /comments and tracked changes/.test(asked.text) && asked.text.includes('Bob $& Jones') && asked.text.includes('Carol Reviewer')
+  && asked.remove && asked.focused,
+  `a document with comments and tracked changes waits, naming who made them, with focus in the question (${asked?.text})`);
+await answerKept('kept-cancel');
+await sleep(1000);
+ok(!(await bob.receivedFiles()).some((f) => f.name === 'Review draft.docx')
+  && await alice.eval(`[...document.querySelectorAll('.msg.system')].some((m) => /Not sent/.test(m.textContent))`),
+  'on "Don’t send" it stays, and the sender is told how to send it without them');
+
+await pickReviewed('Review clean.docx');
+await keptShown();
+await answerKept('kept-remove');
+ok(await sizeOf('Review clean.docx') === `${reviewedClean.size} B` && reviewedClean.kept === undefined && reviewedClean.size !== reviewedAsIs.size,
+  'on "Remove them and send" it goes with them taken out');
+ok(/comments, tracked changes or hidden text/.test(await noteOf(alice, 'Review clean.docx') || ''),
+  'and the sender is told so under their copy');
+
+await pickReviewed('Review as is.docx');
+await keptShown();
+await answerKept('kept-asis');
+ok(await sizeOf('Review as is.docx') === `${reviewedAsIs.size} B`, 'on "Send as it is" it goes cleaned of metadata, with them left in');
+
+// A PDF's comments and a redaction never applied are put the same way; a
+// redaction cannot be taken out here, so that choice is not offered.
 await pick(alice, `async () => new Blob(['%PDF-1.7\\n1 0 obj << /Type /Annot /Subtype /Highlight /T (alice) >> endobj\\n2 0 obj << /Subtype /Redact /T (Legal) >> endobj\\n%%EOF\\n'])`,
   'Annotated.pdf', 'application/pdf');
-await sleep(1500);
-const pdfAsk = await alice.eval(`window.__asked`);
-ok(pdfAsk.length === 1 && /comments and redactions that were marked but never applied/.test(pdfAsk[0]) && /alice, Legal|Legal, alice/.test(pdfAsk[0])
-  && !(await bob.receivedFiles()).some((f) => f.name === 'Annotated.pdf'),
-  `a PDF with comments and an unapplied redaction asks first (${pdfAsk[0]})`);
-await alice.eval(`window.confirm = () => true; true`);
+const pdfAsked2 = await keptShown();
+ok(pdfAsked2 && /comments and redactions that were marked but never applied/.test(pdfAsked2.text) && /alice, Legal|Legal, alice/.test(pdfAsked2.text) && !pdfAsked2.remove,
+  `a PDF with comments and an unapplied redaction waits, without offering to remove what it cannot (${pdfAsked2?.text})`);
+await alice.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })), true`);
+await sleep(1000);
+ok(await alice.eval(`document.querySelector('#kept-ask').classList.contains('hidden')`) && !(await bob.receivedFiles()).some((f) => f.name === 'Annotated.pdf'),
+  'and Escape closes the question without sending');
 
 // The name is peer-controlled text and reaches the DOM. Under Trusted Types a
 // markup-shaped name must arrive as literal characters, not as elements.

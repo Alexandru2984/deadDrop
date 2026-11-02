@@ -38,7 +38,10 @@
  *
  * Comments and tracked changes stay, and so does what is hidden — text,
  * sheets, slides — but the copy comes back with a `kept` note of them, and
- * of who made them, so the person can be asked first; see keptInside.
+ * of who made them, so the person can be asked first; see keptInside. Asked
+ * to (`removeKept`), it takes out what it safely can: Word's and
+ * LibreOffice's comments, tracked changes (accepted) and Word's hidden text,
+ * and PowerPoint's comments. See withoutReview.
  */
 
 import { blankJpegMeta, jpegEnd, stripPngMeta } from './imagemeta.js';
@@ -118,6 +121,13 @@ const HIDDEN = [
     '<p1510:revInfo xmlns:p1510="http://schemas.microsoft.com/office/powerpoint/2015/10/main"/>'],
 ];
 
+// What removeKept takes out, part by part.
+const REVIEW = [
+  [/^word\/(?:document|header\d*|footer\d*|footnotes|endnotes)\.xml$/, withoutReview],
+  [/^word\/(?:comments|commentsExtended|commentsIds|commentsExtensible|people)\.xml$/, emptied],
+  [/^ppt\/(?:comments\/[^/]+|authors|commentAuthors)\.xml$/, emptied],
+];
+
 /** Thrown for anything that is not a plain, readable document archive. */
 function unreadable(why) {
   // A password-protected Office file is not a ZIP at all. The person is asked
@@ -126,7 +136,7 @@ function unreadable(why) {
 }
 
 /** A copy of `file` with its property parts emptied; see above. */
-export async function scrubDocument(file, type) {
+export async function scrubDocument(file, type, { removeKept = false } = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const entries = readArchive(bytes);
   const names = new Set(entries.map((e) => e.name));
@@ -142,7 +152,7 @@ export async function scrubDocument(file, type) {
   let offset = 0;
   const ids = new Renumbering();
   for (const entry of entries) {
-    const replacement = await replacementFor(bytes, entry, odf, ids);
+    const replacement = await replacementFor(bytes, entry, odf, ids, removeKept);
     let data;
     let method = entry.method;
     let crc = entry.crc;
@@ -172,7 +182,9 @@ export async function scrubDocument(file, type) {
   const centralSize = central.reduce((n, c) => n + c.length, 0);
   out.push(...central, endRecord(entries.length, centralSize, offset));
   const cleaned = new File(out, file.name, { type, lastModified: 0 });
-  const kept = await keptInside(bytes, entries, odf);
+  // Read from what leaves, so what was taken out is not reported.
+  const sent = new Uint8Array(await cleaned.arrayBuffer());
+  const kept = await keptInside(sent, readArchive(sent), odf);
   return kept ? Object.assign(cleaned, { kept }) : cleaned;
 }
 
@@ -188,6 +200,8 @@ async function keptInside(bytes, entries, odf) {
   let changes = false;
   let hiddenText = false;
   let hiddenSlides = false;
+  // Found something removeKept leaves alone.
+  let fixed = false;
   const sheets = [];
   const people = new Set();
   // Comments that name their author by an ID in a list of people.
@@ -234,32 +248,34 @@ async function keptInside(bytes, entries, odf) {
       }
       // A run formatted hidden that holds text; a hidden paragraph mark alone
       // hides nothing.
-      hiddenText ||= [...xml.matchAll(/<w:r\b[^>]*>([\s\S]*?)<\/w:r>/g)].some(([, run]) =>
-        /<w:rPr\b[^>]*>(?:(?!<\/w:rPr>)[\s\S])*<w:vanish(?:\s+w:val="(?:1|true|on)")?\s*\/>/.test(run)
-        && /<w:t\b[^>]*>[^<]*[^<\s]/.test(run));
+      hiddenText ||= [...xml.matchAll(RUN)].some(([run]) => hiddenTextIn(run));
     } else if (name === 'xl/workbook.xml') {
       const xml = await read(entry);
       for (const [tag] of xml.matchAll(/<sheet\b[^>]*>/g)) {
-        if (/^(?:hidden|veryHidden)$/.test(valueOf(tag, 'state') ?? '')) sheets.push(unescapeXml(valueOf(tag, 'name') ?? '').slice(0, 60));
+        if (/^(?:hidden|veryHidden)$/.test(valueOf(tag, 'state') ?? '')) {
+          sheets.push(unescapeXml(valueOf(tag, 'name') ?? '').slice(0, 60));
+          fixed = true;
+        }
       }
     } else if (/^ppt\/slides\/slide\d+\.xml$/.test(name)) {
-      hiddenSlides ||= /<p:sld\b[^>]*\sshow="(?:0|false)"/.test(await read(entry));
+      if (/<p:sld\b[^>]*\sshow="(?:0|false)"/.test(await read(entry))) hiddenSlides = fixed = true;
     } else if (/^xl\/comments\d*\.xml$/.test(name)) {
       const xml = await read(entry);
       if (/<comment\b/.test(xml)) {
-        comments = true;
+        comments = fixed = true;
         named(xml, /<author>([^<]*)<\/author>/g);
       }
     } else if (/^xl\/revisions\/revisionHeaders\.xml$/.test(name)) {
       const xml = await read(entry);
       if (/<header\b/.test(xml)) {
-        changes = true;
+        changes = fixed = true;
         named(xml, /\suserName="([^"]*)"/g);
       }
     } else if (/^(?:xl\/threadedComments|ppt\/comments)\/[^/]+\.xml$/.test(name)) {
       const xml = await read(entry);
       for (const [tag] of xml.matchAll(/<(?:[\w.-]+:)?(?:threadedComment|cm|reply)\b[^>]*>/g)) {
         comments = true;
+        if (name.startsWith('xl/')) fixed = true;
         const id = valueOf(tag, '(?:personId|authorId)');
         if (id !== null) authorIds.add(id);
       }
@@ -274,7 +290,7 @@ async function keptInside(bytes, entries, odf) {
     }
   }
   return comments || changes || hiddenText || hiddenSlides || sheets.length
-    ? { comments, changes, hiddenText, hiddenSlides, sheets, people: [...people] }
+    ? { comments, changes, hiddenText, hiddenSlides, sheets, people: [...people], removable: !fixed }
     : null;
 }
 
@@ -286,9 +302,12 @@ const unescapeXml = (text) => text
   .replace(/&amp;/g, '&');
 
 /** What a part becomes — a string or bytes — or null to copy it as it is. */
-async function replacementFor(bytes, entry, odf, ids) {
+async function replacementFor(bytes, entry, odf, ids, removeKept) {
   const { name } = entry;
   if (odf) {
+    if (removeKept && (name === 'content.xml' || name === 'styles.xml')) {
+      return rewritten(bytes, entry, (xml) => withoutOdfSessions(withoutOdfReview(xml)));
+    }
     if (name === 'meta.xml') {
       const text = new TextDecoder().decode(await contentOf(bytes, entry, MAX_META_BYTES));
       return odfMeta(/office:version="([0-9.]{1,8})"/.exec(text)?.[1]);
@@ -299,6 +318,8 @@ async function replacementFor(bytes, entry, odf, ids) {
     }
   } else {
     if (OOXML_EMPTY.has(name)) return OOXML_EMPTY.get(name);
+    const review = removeKept && REVIEW.find(([pattern]) => pattern.test(name));
+    if (review) return rewritten(bytes, entry, (xml) => withoutFingerprints(review[1](xml), ids));
     const hidden = HIDDEN.find(([pattern]) => pattern.test(name));
     if (hidden) return rewritten(bytes, entry, (xml) => withoutFingerprints(hidden[1](xml), ids));
     if (PRINTER.test(name)) return withoutPrinter(await partOf(bytes, entry));
@@ -496,6 +517,55 @@ async function itemText(bytes, entry, name) {
   } catch {
     throw unreadable(`${name} is neither UTF-8 nor UTF-16`);
   }
+}
+
+// A Word run with no run inside it — a text box puts whole paragraphs in
+// one — and whether it is hidden text: formatted hidden, holding text that
+// is not only spaces. A hidden paragraph mark alone hides nothing.
+const RUN = /<w:r\b(?:[^>]*[^>/])?>(?:(?!<\/w:r>|<w:r\b)[\s\S])*<\/w:r>/g;
+const hiddenTextIn = (run) =>
+  /<w:rPr\b[^>]*>(?:(?!<\/w:rPr>)[\s\S])*<w:vanish(?:\s+w:val="(?:1|true|on)")?\s*\/>/.test(run)
+  && /<w:t\b[^>]*>[^<]*[^<\s]/.test(run);
+
+// Word's records of a formatting change, each holding the formatting before.
+const FORMAT_CHANGES = 'rPrChange|pPrChange|sectPrChange|tblPrChange|tblPrExChange|trPrChange|tcPrChange|tblGridChange|numberingChange';
+
+/**
+ * Word's body with its tracked changes accepted, its comments' anchors and
+ * hidden text taken out. Inserted text stays and loses its mark; deleted
+ * text, rows deleted whole and text moved away go; a formatting change
+ * keeps the new formatting. A paragraph deleted whole leaves an empty one
+ * behind rather than be joined to the next — Word would join them.
+ */
+function withoutReview(xml) {
+  const open = (names) => `<w:(?:${names})\\b(?:[^>]*[^>/])?>`;
+  return xml
+    .replace(new RegExp(`<w:(${FORMAT_CHANGES})\\b(?:[^>]*[^>/])?>[\\s\\S]*?<\\/w:\\1>|<w:(?:${FORMAT_CHANGES})\\b[^>]*\\/>`, 'g'), '')
+    .replace(/<w:tr\b(?:[^>]*[^>/])?>(?:(?!<w:tr\b|<\/w:tr>)[\s\S])*<\/w:tr>/g,
+      (row) => (/<w:trPr\b(?:(?!<\/w:trPr>)[\s\S])*<w:del\b/.test(row) ? '' : row))
+    .replace(new RegExp(`${open('del')}[\\s\\S]*?<\\/w:del>|${open('moveFrom')}[\\s\\S]*?<\\/w:moveFrom>`, 'g'), '')
+    .replace(/<w:(?:ins|del|moveFrom|moveTo|cellIns|cellDel|cellMerge|moveFromRangeStart|moveFromRangeEnd|moveToRangeStart|moveToRangeEnd)\b[^>]*\/>/g, '')
+    .replace(new RegExp(`${open('ins|moveTo')}|<\\/w:(?:ins|moveTo)>`, 'g'), '')
+    .replace(/<w:comment(?:RangeStart|RangeEnd)\b[^>]*\/>/g, '')
+    .replace(RUN, (run) => (/<w:commentReference\b/.test(run) || hiddenTextIn(run) ? '' : run));
+}
+
+/**
+ * LibreOffice's comments taken out and its tracked changes accepted: the
+ * record of each change goes, and with it the text a deletion kept there;
+ * the marks around an insertion go, and the text stays. Whether changes
+ * are being recorded is kept.
+ */
+function withoutOdfReview(xml) {
+  return xml
+    .replace(/<office:annotation(?=[\s>])[\s\S]*?<\/office:annotation>|<office:annotation-end\b[^>]*\/>/g, '')
+    .replace(/(<text:tracked-changes\b(?:[^>]*[^>/])?)>[\s\S]*?<\/text:tracked-changes>/g, '$1/>')
+    .replace(/<text:change(?:-start|-end)?\b[^>]*\/>/g, '');
+}
+
+/** An XML part with its root element emptied, its attributes kept. */
+function emptied(xml) {
+  return xml.replace(/(<(?!\?|!)([\w.:-]+)\b(?:[^>]*[^>/])?)>[\s\S]*<\/\2>\s*$/, '$1/>');
 }
 
 /**

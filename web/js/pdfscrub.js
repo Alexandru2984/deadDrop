@@ -45,8 +45,11 @@ function unreadable(why, prompt = 'scrub.cannotReadDoc') {
   return Object.assign(new Error(why), { undecodable: true, prompt });
 }
 
-/** A copy of `file` with its information dictionary and XMP blanked. */
-export async function scrubPdf(file) {
+/**
+ * A copy of `file` with its information dictionary and XMP blanked; with
+ * `removeKept`, its comments taken out too (see removeComments).
+ */
+export async function scrubPdf(file, { removeKept = false } = {}) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   // One character per byte, so an index into the text is an index into the file.
   const text = new TextDecoder('latin1').decode(bytes);
@@ -79,6 +82,7 @@ export async function scrubPdf(file) {
   };
   const infos = new Set([...text.matchAll(/\/Info\s+(\d+)\s+(\d+)\s+R/g)].map(([, num, gen]) => `${num} ${gen}`));
   for (const info of infos) await clean(...info.split(' '), true);
+  if (removeKept) await removeComments(bytes, text, packed);
   await packed.writeBack();
 
   for (const match of text.matchAll(SWEPT)) {
@@ -129,8 +133,151 @@ export async function scrubPdf(file) {
   }
 
   const out = new File([bytes], file.name, { type: 'application/pdf', lastModified: 0 });
-  const kept = await annotationsIn(text, packed);
+  // Read from what leaves when comments were taken out, so they are not reported.
+  const left = removeKept ? new TextDecoder('latin1').decode(bytes) : text;
+  const kept = await annotationsIn(left, removeKept ? new ObjectStreams(bytes, left) : packed);
   return kept ? Object.assign(out, { kept }) : out;
+}
+
+/**
+ * Take the comments out: every markup annotation but a redaction, and the
+ * pop-up each opens, leaves every /Annots array that lists it, in every
+ * revision, and what it held — its text, its author, the appearance drawn
+ * for it, a file attached to it — becomes spaces where it lies. The emptied
+ * objects stay where they are, since every offset must, and nothing points
+ * at them any more. A redaction is left: removing the mark would show what
+ * it was meant to hide.
+ */
+async function removeComments(bytes, text, packed) {
+  // Every object, plain or in a stream, with where to write over it.
+  const all = [];
+  for (const m of text.matchAll(/(?:^|[^0-9])(\d+)\s+(\d+)\s+obj\s*/g)) {
+    all.push({ num: m[1], gen: m[2], source: text, at: m.index + m[0].length, stream: null });
+  }
+  for (const { num, view, at, stream } of await packed.objects()) {
+    let i = at;
+    while (/\s/.test(view[i] ?? '')) i++;
+    all.push({ num, gen: '0', source: view, at: i, stream });
+  }
+  const byRef = new Map(all.map((o) => [`${o.num} ${o.gen}`, o]));
+  const blank = (o, start, end) => {
+    if (o.stream) {
+      o.stream.decoded.fill(SPACE, start, end);
+      o.stream.dirty = true;
+    } else {
+      bytes.fill(SPACE, start, end);
+    }
+  };
+  const dictOf = (o) => {
+    if (o.dict === undefined) {
+      const end = o.source.startsWith('<<', o.at) ? dictEndOf(o.source, o.at) : -1;
+      o.dict = end < 0 ? null : o.source.slice(o.at, end);
+    }
+    return o.dict;
+  };
+  const refAfter = (dict, key) => new RegExp(`/${key}\\s+(\\d+)\\s+(\\d+)\\s+R`).exec(dict);
+
+  const removed = new Set();
+  for (const o of all) {
+    const dict = dictOf(o);
+    if (!dict || /\/Type\s*\/Page\b/.test(dict)) continue;
+    if ([...dict.matchAll(MARKUP)].some(([, subtype]) => subtype !== 'Redact')) removed.add(`${o.num} ${o.gen}`);
+  }
+  for (const ref of [...removed]) {
+    const popup = refAfter(dictOf(byRef.get(ref)), 'Popup');
+    if (popup && byRef.has(`${popup[1]} ${popup[2]}`)) removed.add(`${popup[1]} ${popup[2]}`);
+  }
+  for (const o of all) {
+    const dict = dictOf(o);
+    const parent = dict && /\/Subtype\s*\/Popup\b/.test(dict) && refAfter(dict, 'Parent');
+    if (parent && removed.has(`${parent[1]} ${parent[2]}`)) removed.add(`${o.num} ${o.gen}`);
+  }
+
+  // A stream's data becomes spaces and it loses its filter, as XMP does.
+  const blankStream = (ref) => {
+    const o = byRef.get(ref);
+    const dict = o && !o.stream && dictOf(o);
+    const data = dict && streamData(o.source, o.at + dict.length, dict);
+    if (!data) return;
+    blank(o, data.start, data.end);
+    const filter = /\/Filter\s*(?:\/[^\s/[\]<>()]+|\[[^\]]*\])/.exec(dict);
+    if (filter) blank(o, o.at + filter.index, o.at + filter.index + filter[0].length);
+    for (const extra of dict.matchAll(/\/DecodeParms\s*(?:<<[^>]*>>|\[[^\]]*\])/g)) blank(o, o.at + extra.index, o.at + extra.index + extra[0].length);
+  };
+  // The references under `key` in `dict`, and one level below them.
+  const refsUnder = (dict, key) => {
+    const found = [];
+    const at = new RegExp(`/${key}\\s*(?=<<|\\d)`).exec(dict);
+    if (!at) return found;
+    const start = at.index + at[0].length;
+    const collect = (source, from) => walkDict(source, from, () => {}, (n, g) => found.push(`${n} ${g}`));
+    if (dict.startsWith('<<', start)) collect(dict, start);
+    else {
+      const ref = /^(\d+)\s+(\d+)\s+R/.exec(dict.slice(start));
+      if (ref) found.push(`${ref[1]} ${ref[2]}`);
+    }
+    for (const ref of [...found]) {
+      const o = byRef.get(ref);
+      const inner = o && dictOf(o);
+      if (inner && !/\bstream\s/.test(o.source.slice(o.at + inner.length, o.at + inner.length + 12))) collect(inner, 0);
+    }
+    return found;
+  };
+
+  for (const ref of removed) {
+    const o = byRef.get(ref);
+    const dict = dictOf(o);
+    walkDict(o.source, o.at, (start, end) => blank(o, start + 1, end - 1), () => {});
+    for (const appearance of refsUnder(dict, 'AP')) blankStream(appearance);
+    for (const attached of refsUnder(dict, 'FS')) {
+      const file = byRef.get(attached);
+      if (file && /\/Type\s*\/EmbeddedFile\b/.test(dictOf(file) ?? '')) blankStream(attached);
+    }
+    // No longer an annotation of any kind, should anything still read it.
+    const subtype = /\/Subtype\s*\/([A-Za-z]+)/.exec(dict);
+    if (subtype) {
+      const name = o.at + subtype.index + subtype[0].length - subtype[1].length;
+      blank(o, name, name + subtype[1].length);
+      if (o.stream) o.stream.decoded[name] = 0x58;
+      else bytes[name] = 0x58; // "X"
+    }
+  }
+
+  // Out of every list of a page's annotations, direct or an object of its own.
+  const unlist = (o, from) => {
+    const end = arrayEnd(o.source, from);
+    if (end < 0) return;
+    for (const m of o.source.slice(from, end).matchAll(/(\d+)\s+(\d+)\s+R(?![A-Za-z])/g)) {
+      if (removed.has(`${m[1]} ${m[2]}`)) blank(o, from + m.index, from + m.index + m[0].length);
+    }
+  };
+  const sources = [{ source: text, at: 0, stream: null }, ...(packed.streams ?? []).filter((st) => st.opened).map((st) => ({ source: st.view, at: 0, stream: st }))];
+  for (const o of sources) {
+    for (const m of o.source.matchAll(/\/Annots\s*(\[|(\d+)\s+(\d+)\s+R)/g)) {
+      if (m[1] === '[') unlist(o, m.index + m[0].length - 1);
+      else {
+        const list = byRef.get(`${m[2]} ${m[3]}`);
+        if (list && list.source[list.at] === '[') unlist(list, list.at);
+      }
+    }
+  }
+}
+
+/** Index just past the `]` closing the array at `start`, or -1. */
+function arrayEnd(text, start) {
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (c === '(' || (c === '<' && text[i + 1] !== '<')) {
+      try {
+        i = stringEnd(text, i) - 1;
+      } catch {
+        return -1;
+      }
+    } else if (c === '[') depth++;
+    else if (c === ']' && --depth === 0) return i + 1;
+  }
+  return -1;
 }
 
 // Annotations a reviewer leaves, and a redaction still waiting to be
@@ -166,12 +313,12 @@ async function annotationsIn(text, packed) {
     }
   };
   for (const match of text.matchAll(/\d+\s+\d+\s+obj\s*<</g)) look(text, match.index + match[0].length - 2);
-  for (const [view, at] of await packed.objects()) {
+  for (const { view, at } of await packed.objects()) {
     let i = at;
     while (/\s/.test(view[i] ?? '')) i++;
     if (view.startsWith('<<', i)) look(view, i);
   }
-  return comments || redactions ? { comments, redactions, people: [...people] } : null;
+  return comments || redactions ? { comments, redactions, people: [...people], removable: !redactions } : null;
 }
 
 /** A PDF string's text: literal or hex, in UTF-16, UTF-8 or PDFDocEncoding. */
@@ -302,12 +449,12 @@ class ObjectStreams {
     return found && !unread;
   }
 
-  /** Every object in every stream that can be read: its stream's text, and where it starts. */
+  /** Every object in every stream that can be read: its number, its stream's text, and where it starts. */
   async objects() {
     const found = [];
     for (const stream of this._list()) {
       if (!await this._open(stream)) continue;
-      for (const at of stream.starts.values()) found.push([stream.view, at]);
+      for (const [num, at] of stream.starts) found.push({ num, view: stream.view, at, stream });
     }
     return found;
   }

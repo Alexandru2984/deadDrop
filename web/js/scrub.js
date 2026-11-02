@@ -97,12 +97,16 @@ export function isScrubbable(file) {
     || DOCUMENTS.has(type) || type === 'application/pdf';
 }
 
-/** A metadata-free copy of `file`, whichever kind it is. */
-export function scrubFile(file) {
+/**
+ * A metadata-free copy of `file`, whichever kind it is. A document's comes
+ * back with a `kept` note when comments, changes or hidden parts are left in
+ * it; with `removeKept`, those that can be are taken out first.
+ */
+export function scrubFile(file, { removeKept = false } = {}) {
   const type = typeOf(file);
   if (MOVIES.has(type)) return scrubMovie(file);
-  if (DOCUMENTS.has(type)) return scrubDocument(file, type);
-  if (type === 'application/pdf') return scrubPdf(file);
+  if (DOCUMENTS.has(type)) return scrubDocument(file, type, { removeKept });
+  if (type === 'application/pdf') return scrubPdf(file, { removeKept });
   return scrubImage(file);
 }
 

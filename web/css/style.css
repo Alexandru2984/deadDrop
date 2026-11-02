@@ -1555,7 +1555,7 @@ select { cursor: pointer; width: auto; }
 
 /* ── QR safety-code verification overlay ── */
 
-.qr-verify {
+.qr-verify, .kept-ask {
   position: fixed;
   inset: 0;
   background: rgba(10, 10, 15, 0.92);
@@ -1566,7 +1566,7 @@ select { cursor: pointer; width: auto; }
   padding: 16px;
 }
 
-.qr-verify-box {
+.qr-verify-box, .kept-ask-box {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -1576,11 +1576,23 @@ select { cursor: pointer; width: auto; }
   text-align: center;
 }
 
-.qr-verify-box h3 {
+.qr-verify-box h3, .kept-ask-box h3 {
   color: var(--text);
   font-size: 16px;
   margin-bottom: 6px;
 }
+
+.kept-ask-box { max-width: 440px; }
+.kept-ask-text {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.kept-ask-btns { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.kept-ask-btns .btn { flex: 1 1 auto; min-height: 40px; }
 
 .qr-verify-hint {
   color: var(--dim);
