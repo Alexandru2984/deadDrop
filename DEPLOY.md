@@ -347,6 +347,11 @@ Each run unpacks what it just wrote and parses it before publishing the archive,
 so a backup that cannot be restored fails loudly on the day it is taken rather
 than on the day it is needed. Fourteen days are kept.
 
+Account deletion removes the live record and revokes access, but does not rewrite
+existing archives. Deleted handles and verifiers can remain in those backups
+until retention removes them. Restoring an old archive can restore deleted
+accounts or superseded credentials; review that consequence before a restore.
+
 **Restore:**
 
 ```bash

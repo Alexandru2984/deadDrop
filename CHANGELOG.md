@@ -9,6 +9,26 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+- **Security:** pending SRP proofs are bound to in-memory credential revisions.
+  A password change or account deletion now invalidates them, including proofs
+  already being processed; account actions re-check session revocation after
+  reading the request body. Decoy credential changes preserve primary logins.
+- **Security:** “Hide IP from peer” blocks connection when no valid relay is
+  available. Direct transport requires an explicit choice; failed or expired
+  TURN configuration can no longer disable the privacy policy.
+- **Security:** Panic cancels pending file preparation/decryption and clears
+  preferences locally. Files and messages cannot reappear after cleanup, and a
+  hung logout no longer leaves the conversation visible. Identity/contact
+  deletion waits for its transaction to commit.
+- **Security:** common photo/video extensions are recognised with empty or
+  generic MIME labels, and the file signature is checked before cleaning.
+- **Security:** require Go 1.26.11 for the `net/http` fix reported as GO-2026-6859.
+- Add browser privacy regressions, credential revocation concurrency tests and
+  a MIME/metadata removal matrix. Deployment now runs the scrub self-test too.
+- Explain deleted-account retention in backups in both security-page languages.
+
 ## 0.7.0 — 2026-11-02
 
 **Update when you can.** Documents now leave without what ties a copy to
