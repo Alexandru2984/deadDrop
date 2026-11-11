@@ -129,7 +129,9 @@ func (s *store) registerSRP(username, saltHex, verifierHex, kdf string) error {
 		return errors.New("account limit reached")
 	}
 	next := cloneUsers(s.users)
-	next[username] = user{Salt: saltHex, Verifier: verifierHex, Kdf: kdf}
+	s.revision++
+	next[username] = user{Salt: saltHex, Verifier: verifierHex, Kdf: kdf,
+		primaryRevision: s.revision, duressRevision: s.revision}
 	return s.commit(next)
 }
 
@@ -146,9 +148,11 @@ func (s *store) setVerifier(username, saltHex, verifierHex, kdf string) error {
 		return errors.New("no such account")
 	}
 	next := cloneUsers(s.users)
+	s.revision++
 	next[username] = user{
 		Salt: saltHex, Verifier: verifierHex, Kdf: kdf,
 		DuressSalt: u.DuressSalt, DuressVerifier: u.DuressVerifier, DuressKdf: u.DuressKdf,
+		primaryRevision: s.revision, duressRevision: s.revision,
 	}
 	return s.commit(next)
 }
@@ -177,6 +181,8 @@ func (s *store) setDuress(username, saltHex, verifierHex, kdf string) error {
 		return errors.New("no such account")
 	}
 	u.DuressSalt, u.DuressVerifier, u.DuressKdf = saltHex, verifierHex, kdf
+	s.revision++
+	u.duressRevision = s.revision
 	next := cloneUsers(s.users)
 	next[username] = u
 	return s.commit(next)
@@ -185,14 +191,16 @@ func (s *store) setDuress(username, saltHex, verifierHex, kdf string) error {
 /* ── pending SRP challenges (one-time, short-lived) ── */
 
 type pendingChallenge struct {
-	username   string
-	A          *big.Int
-	ch         *srp.Challenge // real verifier
-	real       bool           // a real account exists
-	chDuress   *srp.Challenge // duress verifier (or a deterministic dummy)
-	realDuress bool           // a real duress verifier exists
-	expiry     time.Time
-	source     string // ClientTag of the requester, for the per-source bound
+	username        string
+	A               *big.Int
+	ch              *srp.Challenge // real verifier
+	real            bool           // a real account exists
+	chDuress        *srp.Challenge // duress verifier (or a deterministic dummy)
+	realDuress      bool           // a real duress verifier exists
+	expiry          time.Time
+	source          string // ClientTag of the requester, for the per-source bound
+	primaryRevision uint64
+	duressRevision  uint64
 }
 
 type challengeStore struct {
@@ -1001,6 +1009,8 @@ func (h *Handler) SRPRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	h.accountMu.Lock()
+	defer h.accountMu.Unlock()
 	if err := h.store.registerSRP(body.Username, body.Salt, body.Verifier, body.Kdf); err != nil {
 		if consumed {
 			if restoreErr := h.invites.restore(body.Invite); restoreErr != nil {
@@ -1114,7 +1124,8 @@ func (h *Handler) SRPChallenge(w http.ResponseWriter, r *http.Request) {
 	token, err := h.challenges.put(&pendingChallenge{
 		username: body.Username, A: A,
 		ch: ch, real: real, chDuress: chD, realDuress: realDuress,
-		source: middleware.ClientTag(r),
+		source:          middleware.ClientTag(r),
+		primaryRevision: u.primaryRevision, duressRevision: u.duressRevision,
 	})
 	if err != nil {
 		jsonErr(w, "authentication temporarily unavailable", http.StatusServiceUnavailable)
@@ -1155,6 +1166,12 @@ func (h *Handler) SRPAuthenticate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	primaryOK, duressOK, M2, M2d := verifyChallengeProofs(p, body.M1, body.M1d)
+	// The owner may have changed/deleted the credential while this proof was
+	// being computed, or after its challenge was taken out of the table. Check
+	// its revision and issue the session atomically with account actions.
+	h.accountMu.Lock()
+	defer h.accountMu.Unlock()
+	primaryOK, duressOK = h.currentProofs(p, primaryOK, duressOK)
 
 	if primaryOK {
 		if err := h.setCookieSession(w, r, p.username, false); err != nil {
@@ -1233,6 +1250,10 @@ func (h *Handler) SetVerifier(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if !h.lockAccountAction(w, r, username, duress) {
+		return
+	}
+	defer h.accountMu.Unlock()
 	if !h.requireFreshProof(r, username, duress, body.Token, body.M1, body.M1d) {
 		jsonErr(w, "re-authentication required", http.StatusUnauthorized)
 		return
@@ -1282,6 +1303,10 @@ func (h *Handler) SetDuress(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if !h.lockAccountAction(w, r, username, duress) {
+		return
+	}
+	defer h.accountMu.Unlock()
 	// The proof is checked before the decoy branch below, and against whichever
 	// credential opened this session, so a decoy still answers 200 for its own
 	// password and never reveals which branch it took.
@@ -1326,6 +1351,10 @@ func (h *Handler) DeleteAccount(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if !h.lockAccountAction(w, r, username, duress) {
+		return
+	}
+	defer h.accountMu.Unlock()
 	// Destroying an account is irreversible, so a borrowed session must not be
 	// able to do it either. A decoy proves its own credential and still gets the
 	// deletion theatre below.
@@ -1380,6 +1409,10 @@ func (h *Handler) SignOutOthers(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if !h.lockAccountAction(w, r, username, duress) {
+		return
+	}
+	defer h.accountMu.Unlock()
 	if !h.requireFreshProof(r, username, duress, body.Token, body.M1, body.M1d) {
 		jsonErr(w, "re-authentication required", http.StatusUnauthorized)
 		return
@@ -1471,6 +1504,7 @@ func (h *Handler) requireFreshProof(r *http.Request, username string, duress boo
 		return false
 	}
 	primaryOK, duressOK, _, _ := verifyChallengeProofs(p, m1, m1d)
+	primaryOK, duressOK = h.currentProofs(p, primaryOK, duressOK)
 	proved := primaryOK
 	if duress {
 		proved = duressOK
@@ -1481,6 +1515,32 @@ func (h *Handler) requireFreshProof(r *http.Request, username string, duress boo
 	}
 	h.lockout.reset(username, ip)
 	return true
+}
+
+// currentProofs must be called with accountMu held through the authorized
+// action. Revisions are independent: a decoy change cannot invalidate a real
+// user's pending login, while a primary password change revokes both kinds.
+func (h *Handler) currentProofs(p *pendingChallenge, primaryOK, duressOK bool) (bool, bool) {
+	u, exists := h.store.getUser(p.username)
+	return primaryOK && exists && p.primaryRevision != 0 && p.primaryRevision == u.primaryRevision,
+		duressOK && exists && p.duressRevision != 0 && p.duressRevision == u.duressRevision
+}
+
+// lockAccountAction re-checks the cookie after reading the body and waiting
+// for other account actions. A session valid at request arrival may have been
+// revoked meanwhile. On success the caller must defer accountMu.Unlock().
+func (h *Handler) lockAccountAction(w http.ResponseWriter, r *http.Request, username string, duress bool) bool {
+	h.accountMu.Lock()
+	c, err := sessionCookie(r)
+	if err == nil {
+		name, kind, live := h.sess.getMeta(c.Value)
+		if live && name == username && kind == duress {
+			return true
+		}
+	}
+	h.accountMu.Unlock()
+	jsonErr(w, "not authenticated", http.StatusUnauthorized)
+	return false
 }
 
 func decodeSRPProof(encoded string) ([]byte, bool) {

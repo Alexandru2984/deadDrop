@@ -45,15 +45,21 @@ type user struct {
 	DuressSalt     string `json:"duressSalt,omitempty"`
 	DuressVerifier string `json:"duressVerifier,omitempty"`
 	DuressKdf      string `json:"duressKdf,omitempty"`
+	// In-memory authorization revisions. Challenges do not survive restart, so
+	// these need not be persisted or disclosed. Re-registering a deleted handle
+	// gets fresh revisions even if it restores the exact same verifier.
+	primaryRevision uint64
+	duressRevision  uint64
 }
 
 func (u user) isSRP() bool     { return u.Verifier != "" }
 func (u user) hasDuress() bool { return u.DuressVerifier != "" }
 
 type store struct {
-	mu    sync.RWMutex
-	users map[string]user
-	path  string
+	mu       sync.RWMutex
+	users    map[string]user
+	path     string
+	revision uint64 // monotonic within this store; protected by mu
 }
 
 const (
@@ -103,6 +109,9 @@ func newStore(dir string) (*store, error) {
 			if err := validateStoredUser(username, u); err != nil {
 				return nil, fmt.Errorf("invalid account %q: %w", username, err)
 			}
+			s.revision++
+			u.primaryRevision, u.duressRevision = s.revision, s.revision
+			s.users[username] = u
 		}
 	} else if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("inspect users.json: %w", err)
@@ -386,6 +395,9 @@ func genToken() (string, error) {
 
 // Handler exposes auth endpoints and middleware.
 type Handler struct {
+	// Serializes authorization against credential changes and session revocation.
+	// Request bodies and anonymous SRP arithmetic are processed before taking it.
+	accountMu  sync.Mutex
 	store      *store
 	sess       *sessions
 	invites    *invites
