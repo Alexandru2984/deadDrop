@@ -3,7 +3,7 @@
  *
  * Only switches live here: which protections are on, how soon an idle tab locks.
  * Nothing about people, rooms or messages. It sits in this origin's
- * localStorage, which the panic wipe clears (Clear-Site-Data: "storage").
+ * localStorage, which the panic wipe clears locally, even without a response.
  *
  * Every value is validated on the way out as well as on the way in, so a stale
  * or hand-edited entry cannot switch a protection off: anything unrecognised
@@ -55,3 +55,7 @@ export function setPref(name, value) {
 }
 
 export const PREF_DEFAULTS = DEFAULTS;
+
+export function clearPrefs() {
+  try { localStorage.removeItem(KEY); } catch { /* storage may be blocked */ }
+}

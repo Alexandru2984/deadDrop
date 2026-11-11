@@ -175,6 +175,8 @@ jobs:
             suite: browser.a11y.mjs
           - name: browser support
             suite: browser.support.mjs
+          - name: privacy regressions
+            suite: browser.privacy.mjs
           - name: smoke
             suite: browser.smoke.mjs
           # Two isolated contexts, one real WebRTC session between them: a

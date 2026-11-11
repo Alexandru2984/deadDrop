@@ -216,9 +216,10 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   clipboard clear keep wall-clock time, so a phone that slept catches up as
   soon as the page is back.
 - The panic action, and the idle lock when set, clear this tab's in-memory
-  state, delete the saved identity and pinned contacts, close connections,
-  and end the session on the server — logout is never rate limited, so it
-  cannot be refused. They cannot wipe the peer, infrastructure logs,
+  state, delete the saved identity, pinned contacts and preferences, close connections,
+  and request server logout. Local clearing does not wait for the network;
+  logout is never rate limited, but a network failure can prevent revocation.
+  They cannot wipe the peer, infrastructure logs,
   browser/OS forensic traces, or anything already copied.
 - “Relay-only” hides each endpoint's network address from the other peer when
   TURN works. Missing or expired relay configuration blocks a new connection

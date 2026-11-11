@@ -105,6 +105,12 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 
 ## Browser suites
 
+`browser.privacy.mjs` exercises the unchanged browser client with controlled
+network responses: missing/failed/invalid/expired TURN credentials must block
+relay-only connections, and delayed file preparation must not resurrect data
+after Panic. The other transport suites explicitly choose direct connections
+because local CI has no TURN server; they do not depend on a privacy fallback.
+
 `browser.smoke.mjs` (one page), `browser.pair.mjs` (two peers, one real WebRTC
 session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 (one audio/video call, with the DTLS fingerprint binding checked against the

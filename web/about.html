@@ -88,7 +88,7 @@
       <li>A burn-after-reading message starts burning when it can be seen — the tab in front and the privacy screen lifted — with time to read that grows with its length, up to 30 seconds; a file gets 15. A received message's timer also starts when it can be seen, or ten minutes after it arrived unseen, and removes only that copy. Timers keep wall-clock time, so a phone that slept drops what expired as soon as the page is back.</li>
       <li>A reply names the message it answers and never repeats its words. Each side quotes its own copy, and the quote is wiped when that copy is removed, so a reply cannot keep a timed or burned message alive.</li>
       <li>A sent message gets a ✓ once every recipient's client says it arrived. That tells the sender the message reached them, never that it was read; read receipts exist only for burn-after-reading, which needs them.</li>
-      <li>The panic button clears this tab's in-memory state, deletes the saved identity and pinned contacts, closes connections, and ends the session on the server. The idle lock, when set, does the same after that long without a key or a touch. Neither can wipe another device, infrastructure logs, crash dumps, swap, extensions, or data already copied.</li>
+      <li>The panic button clears this tab's in-memory state, deletes the saved identity, pinned contacts and preferences, closes connections, and requests server logout. Local clearing does not wait for a network response; a network failure can prevent server revocation. The idle lock, when set, does the same after that long without a key or a touch. Neither can wipe another device, infrastructure logs, crash dumps, swap, extensions, or data already copied.</li>
     </ul>
 
     <h2>Authentication and duress</h2>

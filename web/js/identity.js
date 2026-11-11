@@ -55,9 +55,11 @@ async function withStore(name, mode, fn) {
     return await new Promise((resolve, reject) => {
       const tx = db.transaction(name, mode);
       const request = fn(tx.objectStore(name));
+      // Request success precedes transaction commit. A wipe must not reload
+      // the page while its deletes can still be rolled back.
+      tx.oncomplete = () => resolve(request.result);
       tx.onabort = () => reject(tx.error);
       tx.onerror = () => reject(tx.error);
-      request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
     });
   } finally {
@@ -86,8 +88,9 @@ export async function loadIdentity() {
  * non-extractable CryptoKey: IndexedDB can hold the handle, but nothing — not
  * this module, not injected script — can read the key material back out.
  */
-export async function ensureIdentity() {
+export async function ensureIdentity({ isCurrent = () => true } = {}) {
   const existing = await loadIdentity();
+  if (!isCurrent()) return null;
   if (existing) return existing;
 
   const pair = await crypto.subtle.generateKey(
@@ -96,19 +99,29 @@ export async function ensureIdentity() {
     ['sign', 'verify'],
   );
   const publicKeyRaw = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey));
-  await withStore(KEY_STORE, 'readwrite', (store) => store.put({
-    privateKey: pair.privateKey,
-    publicKeyRaw,
-  }, SELF_ID));
+  if (!isCurrent()) return null;
+  await withStore(KEY_STORE, 'readwrite', (store) => {
+    if (!isCurrent()) throw new Error('Identity creation cancelled');
+    return store.put({ privateKey: pair.privateKey, publicKeyRaw }, SELF_ID);
+  });
   return { privateKey: pair.privateKey, publicKeyRaw };
 }
 
 /** Destroy the identity and every pinned contact. Used by the panic wipe. */
 export async function clearIdentity() {
+  let db;
   try {
-    await withStore(KEY_STORE, 'readwrite', (store) => store.delete(SELF_ID));
-    await withStore(TRUST_STORE, 'readwrite', (store) => store.clear());
+    db = await openDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction([KEY_STORE, TRUST_STORE], 'readwrite');
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+      tx.objectStore(KEY_STORE).delete(SELF_ID);
+      tx.objectStore(TRUST_STORE).clear();
+    });
   } catch { /* nothing stored, or storage unavailable */ }
+  finally { db?.close(); }
 }
 
 /* ── Signing ── */
@@ -171,12 +184,11 @@ export async function fingerprint(publicKeyRaw) {
  * a peer presenting a different key is a different contact — never a silent
  * upgrade of an existing one.
  */
-export async function pinContact(fp, label) {
-  await withStore(TRUST_STORE, 'readwrite', (store) => store.put({
-    fingerprint: fp,
-    label: String(label || '').slice(0, 40),
-    verifiedAt: Date.now(),
-  }, fp));
+export async function pinContact(fp, label, { isCurrent = () => true } = {}) {
+  await withStore(TRUST_STORE, 'readwrite', (store) => {
+    if (!isCurrent()) throw new Error('Contact save cancelled');
+    return store.put({ fingerprint: fp, label: String(label || '').slice(0, 40), verifiedAt: Date.now() }, fp);
+  });
 }
 
 export async function findContact(fp) {

@@ -5,8 +5,9 @@ const store = new Map();
 globalThis.localStorage = {
   getItem: (k) => (store.has(k) ? store.get(k) : null),
   setItem: (k, v) => store.set(k, String(v)),
+  removeItem: (k) => store.delete(k),
 };
-const { getPref, setPref } = await import('../web/js/prefs.js');
+const { getPref, setPref, clearPrefs } = await import('../web/js/prefs.js');
 
 let failures = 0;
 const ok = (condition, message) => {
@@ -80,6 +81,9 @@ ok(getPref('messageTtl') === 300, 'a lifetime the composer does not offer is ref
 let threw = false;
 try { getPref('nonsense'); } catch { threw = true; }
 ok(threw, 'an unknown preference name is a programming error, not a silent default');
+clearPrefs();
+ok(!store.has('dd_prefs') && getPref('relayOnly') && getPref('scrubMetadata'),
+   'a local wipe removes preferences and restores protections without a server response');
 
 console.log('passphrase generator');
 ok(WORDS.length === 1295 && new Set(WORDS).size === WORDS.length && WORDS.every((w) => /^[a-z]{3,5}$/.test(w)),

@@ -22,7 +22,7 @@ import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig, passwordProblem, passphrase } from './util.js';
 import { callSignalAllowed } from './callsignal.js';
 import { checkSupport } from './support.js';
-import { getPref, setPref } from './prefs.js';
+import { getPref, setPref, clearPrefs } from './prefs.js';
 import { firstAnswer } from './boot.js';
 
 // The code that cleans a file is a sixth of what the app loads and is needed
@@ -591,13 +591,16 @@ class DeadDrop {
   async _checkAuth() {
     try {
       const res = await (firstAnswer() ?? fetch('/api/me'));
+      if (this._wiping) return;
       if (res.ok) {
         const data = await res.json();
+        if (this._wiping) return;
         this.username = data.username;
         // A returning visitor lands here rather than in _afterAuth, so without
         // this the identity stays unloaded and every saved contact is silently
         // forgotten on reload — the exact case the feature exists for.
         await this._restoreIdentity().catch(() => {});
+        if (this._wiping) return;
         this._showPage('landing');
         // Nor did a reload arm the idle lock: it waited for the first key or
         // touch, so a tab reloaded and left alone was never wiped.
@@ -613,6 +616,7 @@ class DeadDrop {
   }
 
   async _login() {
+    if (this._wiping) return;
     const username = this.el.authUser.value.trim();
     const password = this.el.authPass.value;
     if (!username || !password) return;
@@ -684,6 +688,7 @@ class DeadDrop {
   }
 
   async _register() {
+    if (this._wiping) return;
     const username = this.el.authUser.value.trim();
     const password = this.el.authPass.value;
     const invite = this.el.authInvite.value.trim();
@@ -1746,6 +1751,7 @@ class DeadDrop {
     if (!s || !fp) return;
     s.identityFp = fp;
     const known = await findContact(fp);
+    if (this._wiping || this.peers.get(peerId) !== s) return;
     if (!known) {
       this._maybeSaveContact(peerId); // the user may have already confirmed
       this._refreshRoomState();
@@ -1769,6 +1775,7 @@ class DeadDrop {
       const s = this.peers.get(peerId);
       if (!s) return;
       const route = await s.conn.routeKind().catch(() => null);
+      if (this.peers.get(peerId) !== s) return;
       if (route !== s.route) {
         s.route = route;
         this._renderVerifyBar();
@@ -1824,14 +1831,16 @@ class DeadDrop {
   _offerToSaveContact(peerId, s) {
     const label = window.prompt(t('contact.savePrompt'), s.label);
     if (label === null) return;
-    pinContact(s.identityFp, label.trim() || s.label)
+    const current = () => !this._wiping && this.peers.get(peerId) === s;
+    pinContact(s.identityFp, label.trim() || s.label, { isCurrent: current })
       .then(() => {
+        if (!current()) return;
         s.knownContact = { fingerprint: s.identityFp, label };
         s.label = label.trim() || s.label;
         this._renderSystem(`🔖 ${s.label} ${t('contact.saved')}`);
         this._refreshRoomState();
       })
-      .catch(() => this._renderSystem(t('contact.saveFailed')));
+      .catch(() => { if (current()) this._renderSystem(t('contact.saveFailed')); });
   }
 
   /* ── QR safety-code verification ──
@@ -1973,14 +1982,21 @@ class DeadDrop {
       files = files.slice(0, MAX_FILES_AT_ONCE);
     }
     const room = this.roomCode;
+    const generation = this._signalGeneration;
     for (const file of files) {
-      if (!this.encrypted || this.roomCode !== room) return;
+      if (!this.encrypted || this.roomCode !== room || this._signalGeneration !== generation) return;
       await this.sendFile(file);
     }
   }
 
   async sendFile(file, { recorded = false } = {}) {
-    if (!this.encrypted) return;
+    if (!this.encrypted || this._wiping) return;
+    const room = this.roomCode;
+    const generation = this._signalGeneration;
+    const current = () => !this._wiping && this.encrypted && this.roomCode === room
+      && this._signalGeneration === generation;
+    // A later arrival must not become a recipient of a file selected earlier.
+    const targets = [...this.peers].filter(([, s]) => s.verified && s.conn.userVerified);
     // Refused before it is read: a movie is scrubbed in memory, and a
     // two-gigabyte one would be read whole only to be turned away after.
     // A picture can come out of re-encoding smaller, so it is judged after.
@@ -1996,6 +2012,7 @@ class DeadDrop {
     // A file is never sent uncleaned because the code to clean it did not
     // arrive, or arrived altered and was refused.
     const scrub = this.el.scrubToggle.checked && !recorded ? await scrubber().catch(() => null) : undefined;
+    if (!current()) return;
     if (scrub === null) {
       this._renderSystem(t('err.scrubFailed'));
       return;
@@ -2004,8 +2021,10 @@ class DeadDrop {
       const { scrubFile } = scrub;
       try {
         file = await scrubFile(file);
+        if (!current()) return;
         scrubNote = 'file.cleaned';
       } catch (err) {
+        if (!current()) return;
         console.warn('metadata removal failed:', err?.message);
         // A HEIC or TIFF photo this browser cannot read, or a document that
         // is password-protected: say what it means and let the person
@@ -2022,10 +2041,13 @@ class DeadDrop {
       // to forget, and carry names.
       if (file.kept) {
         const choice = await this._askKept(file.kept);
+        if (!current()) return;
         if (choice === 'remove') {
           try {
             file = await scrubFile(original, { removeKept: true });
+            if (!current()) return;
           } catch (err) {
+            if (!current()) return;
             console.warn('removing comments failed:', err?.message);
             file = null;
           }
@@ -2038,7 +2060,7 @@ class DeadDrop {
           this._renderSystem(t('file.notSent'));
           return;
         }
-        if (!this.encrypted) return;
+        if (!current()) return;
       }
     }
     if (file.size > MAX_FILE_SIZE) {
@@ -2065,7 +2087,6 @@ class DeadDrop {
     //
     // The sender's copy appears at once, but on a slow link 25 MB takes a
     // while to leave; closing the tab before then loses it. Say how far it got.
-    const targets = [...this.peers].filter(([, s]) => s.verified && s.conn.userVerified);
     const own = document.getElementById(this._domMessageId(this._messageKey(null, id)));
     if (own && scrubNote) {
       own.querySelector('.file-details')?.after(h('div', {
@@ -2096,7 +2117,8 @@ class DeadDrop {
     this._sendingFiles = (this._sendingFiles || 0) + 1;
     this._syncWakeLock();
     for (const [index, [peerId, s]] of targets.entries()) {
-      if (cancelled) break;
+      if (cancelled || !current()) break;
+      if (this.peers.get(peerId) !== s || !s.conn.userVerified) continue;
       const onProgress = sending && ((done, total) => {
         const pct = Math.min(100, Math.floor(((index + done / total) / targets.length) * 100));
         progress.textContent = t('file.sending').replace('{pct}', String(pct));
@@ -2105,13 +2127,15 @@ class DeadDrop {
         await this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn, onProgress, peerId);
         results.push({ status: 'fulfilled' });
       } catch (reason) {
+        if (!current()) break;
         results.push({ status: 'rejected', reason });
         this._undeliverable(id, peerId);
       }
     }
-    this._sendingFiles -= 1;
+    if (this._signalGeneration === generation) this._sendingFiles = Math.max(0, this._sendingFiles - 1);
     this._syncWakeLock();
     sending?.remove();
+    if (!current()) return;
     if (results.some((r) => r.status === 'rejected')) {
       console.error('File send failed:', results.find((r) => r.status === 'rejected')?.reason);
       this._renderSystem(t('err.fileFailed'));
@@ -2217,6 +2241,9 @@ class DeadDrop {
   /* ── Messaging ── */
 
   async sendMessage() {
+    const generation = this._signalGeneration;
+    const room = this.roomCode;
+    const current = () => !this._wiping && this._signalGeneration === generation && this.roomCode === room;
     const text = this.el.msgInput.value.trim();
     if (!text || !this.encrypted) return;
     if (text.length > MAX_TEXT_LEN) {
@@ -2238,15 +2265,18 @@ class DeadDrop {
     for (const [peerId, s] of targets) {
       try {
         const { ciphertext, iv, epoch } = await s.crypto.encrypt(text);
+        if (!current()) return;
         await s.conn.send({
           type: 'chat', id, ciphertext, iv, epoch, ttl, burnAfterReading: burn, ...quoting,
         });
       } catch (err) {
+        if (!current()) return;
         console.warn('Send failed for one peer:', err);
         this._undeliverable(id, peerId);
       }
     }
 
+    if (!current()) return;
     this._renderMsg(id, text, true, ttl, burn, null, null, reply?.key);
     this._cancelReply();
     this.el.msgInput.value = '';
@@ -2273,6 +2303,7 @@ class DeadDrop {
         this._stopTyping(peerId);
         try {
           const text = await s.crypto.decrypt(msg.ciphertext, msg.iv, msg.epoch);
+          if (this._wiping || this.peers.get(peerId) !== s) return;
           if (typeof text !== 'string' || text.length > MAX_TEXT_LEN) return;
           this._renderMsg(msg.id, text, false, msg.ttl, msg.burnAfterReading, s, peerId,
             this._quotedKey(msg));
@@ -2379,10 +2410,13 @@ class DeadDrop {
   }
 
   async _onFileComplete(result, s, peerId) {
+    const generation = this._signalGeneration;
+    const current = () => !this._wiping && this._signalGeneration === generation && this.peers.get(peerId) === s;
     let fileData;
     try {
       // Decrypt metadata
       const metaJson = await s.crypto.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch);
+      if (!current()) return;
       const rawMeta = JSON.parse(metaJson);
       assertFileSizeBinding(rawMeta?.fileSize, result.ciphertext.byteLength);
       const meta = this._sanitizeFileMeta(rawMeta);
@@ -2390,6 +2424,7 @@ class DeadDrop {
 
       // Decrypt file data
       fileData = await s.crypto.decryptBinary(result.ciphertext, result.fileIv, result.fileEpoch);
+      if (!current()) return;
       assertFileSizeBinding(meta.fileSize, result.ciphertext.byteLength, fileData.byteLength);
       const blob    = new Blob([fileData], { type: meta.fileType });
       const blobUrl = URL.createObjectURL(blob);
@@ -2400,6 +2435,7 @@ class DeadDrop {
       );
       this._sendBestEffort(s.conn, { type: 'got', id: result.id });
     } catch (err) {
+      if (!current()) return;
       console.error('File decryption failed:', err.message);
       this._renderSystem(t('err.fileDecrypt'));
     } finally {
@@ -3628,9 +3664,11 @@ class DeadDrop {
   }
 
   _cleanup() {
-    // Invalidate already-queued asynchronous signaling work before destroying
-    // its sessions, socket, and ICE credentials.
+    // Invalidate pending signaling, file preparation and decryption before
+    // destroying the sessions they belong to.
     this._signalGeneration++;
+    this._sendingFiles = 0;
+    this._answerKept(null);
     clearTimeout(this._rejoinTimer);
     this._rejoinTimer = null;
     this._warnedSignalLost = false;
@@ -3792,9 +3830,13 @@ class DeadDrop {
    * browser presents nothing that outlives a session.
    */
   async _setContactsEnabled(enabled) {
+    const generation = this._identityGeneration = (this._identityGeneration || 0) + 1;
+    const current = () => !this._wiping && this._identityGeneration === generation;
     if (enabled) {
       try {
-        this.identity = await ensureIdentity();
+        const identity = await ensureIdentity({ isCurrent: current });
+        if (!current()) return;
+        this.identity = identity;
       } catch {
         this.el.contactsToggle.checked = false;
         this._renderContacts();
@@ -3812,7 +3854,10 @@ class DeadDrop {
   }
 
   async _restoreIdentity() {
-    this.identity = await loadIdentity().catch(() => null);
+    const generation = this._identityGeneration;
+    const identity = await loadIdentity().catch(() => null);
+    if (this._wiping || this._identityGeneration !== generation) return;
+    this.identity = identity;
     this.el.contactsToggle.checked = !!this.identity;
     this._renderContacts();
   }
@@ -3829,6 +3874,7 @@ class DeadDrop {
     if (!this.identity) return;
 
     const saved = await listContacts().catch(() => []);
+    if (this._wiping || !this.identity) return;
     if (saved.length === 0) {
       box.append(h('p', { class: 'account-hint', text: t('contacts.none') }));
       return;
@@ -3848,20 +3894,31 @@ class DeadDrop {
   }
 
   async _panicWipe() {
+    if (this._wiping) return;
+    this._wiping = true;
     this._clearClipboard();
     // Tear down every trace locally, end the session, and reload to a clean screen.
     this._cleanup();
-    // The identity and its pinned contacts are the only things this app keeps
-    // across sessions, so a panic wipe has to take them too.
-    await clearIdentity().catch(() => {});
+    this.identity = null;
+    clearPrefs();
+    try { localStorage.removeItem('dd_lang'); } catch { /* storage may be blocked */ }
     if (this.el.messages) this.el.messages.replaceChildren();
     if (this.el.msgInput) this.el.msgInput.value = '';
     this.roomCode = null;
     this._announced = new Set();
     this.username = null;
+    for (const input of [this.el.authUser, this.el.authPass, this.el.authInvite,
+      this.el.currentPass, this.el.newPass, this.el.duressPass]) input.value = '';
+    this._showPage('auth');
     // wipe=1 also asks the browser to drop cache and origin storage; a plain
     // logout leaves those alone.
-    try { await fetch('/api/logout?wipe=1', { method: 'POST' }); } catch { /* best effort */ }
+    const controller = new AbortController();
+    let timer;
+    const deadline = new Promise((resolve) => { timer = setTimeout(resolve, 3000); });
+    const logout = fetch('/api/logout?wipe=1', { method: 'POST', signal: controller.signal, keepalive: true });
+    await Promise.race([Promise.allSettled([clearIdentity(), logout]), deadline]);
+    clearTimeout(timer);
+    controller.abort();
     location.replace(location.origin + '/');
   }
 
