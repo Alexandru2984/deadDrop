@@ -6,7 +6,6 @@
 # integrity files and never commits or pushes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-ROOT="$PWD"
 CANDIDATE=""
 DEPLOY_DIR=/opt/deaddrop
 DEPLOYED="$DEPLOY_DIR/deaddrop"
@@ -57,9 +56,20 @@ echo "▸ checking for known vulnerabilities…"
 go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 
 echo "▸ building (prod flags)…"
-CANDIDATE="$(mktemp "$ROOT/.deaddrop-build.XXXXXX")"
+# Keep the output outside the checkout: even an empty untracked candidate
+# makes Go stamp vcs.modified=true into an otherwise clean release build.
+CANDIDATE="$(mktemp "${TMPDIR:-/tmp}/deaddrop-build.XXXXXX")"
 go build -trimpath -ldflags="-s -w" -o "$CANDIDATE" ./cmd/server/
 chmod 0755 "$CANDIDATE"
+build_info="$(go version -m "$CANDIDATE")"
+if ! printf '%s\n' "$build_info" | awk -v rev="$(git rev-parse HEAD)" '
+  $1 == "build" && $2 == "vcs.revision=" rev { revision = 1 }
+  $1 == "build" && $2 == "vcs.modified=false" { clean = 1 }
+  END { exit !(revision && clean) }
+'; then
+  echo "✗ candidate does not identify the clean checkout at HEAD"
+  exit 1
+fi
 
 echo "▸ validating production environment…"
 if [ -e /etc/deaddrop.env ]; then
