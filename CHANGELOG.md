@@ -9,7 +9,10 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.7.1 — 2026-11-11
+
+**Security update.** Rebuild and redeploy the server, then reload open tabs to
+pick up the client fixes.
 
 - **Security:** pending SRP proofs are bound to in-memory credential revisions.
   A password change or account deletion now invalidates them, including proofs

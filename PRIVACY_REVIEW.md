@@ -7,7 +7,7 @@ Reproducerile au rulat pe servere locale separate, cu date temporare. Configura�
 efectivă din producție și infrastructura Cloudflare/nginx/coturn nu au fost auditate.
 
 **Stare după remediere:** cele patru probleme reproduse mai jos au fost corectate
-local, cu teste de regresie. La revizia inițială, testele existente treceau fără
+în repository, cu teste de regresie. La revizia inițială, testele existente treceau fără
 să le detecteze. Proiectul oferă confidențialitate
 a conținutului între endpoints verificate, cu limite documentate; nu oferă
 anonimitate față de toate componentele infrastructurii.
@@ -30,14 +30,18 @@ scanerul fixat de proiect raportează `No vulnerabilities found.`
 [Istoricul oficial Go](https://go.dev/doc/devel/release#go1.26.11)
 confirmă patch-ul din 10 noiembrie și remedierile de securitate din `net/http`.
 
-Modificarea este locală. Workflow-ul găzduit nu a fost rerulat cu aceste fișiere,
-iar un executabil deja construit trebuie reconstruit și redeployat pentru a
-beneficia de patch.
+Remedierile au fost publicate la `d2c3898582a784e89e24e367b5aa004335e61363`.
+[CI complet, run 43091071686](https://github.com/Alexandru2984/deadDrop/actions/runs/43091071686)
+a trecut toate cele 14 job-uri, iar
+[Vulnerability watch, run 43091104517](https://github.com/Alexandru2984/deadDrop/actions/runs/43091104517)
+a trecut separat pe aceeași revizie. Un executabil deja construit trebuie
+reconstruit și redeployat pentru a beneficia de patch; `deaddrop version` și
+`deaddrop doctor` verifică separat starea instalării.
 
 ## Constatări inițiale și remedieri
 
-Referințele numerice de mai jos descriu revizia analizată inițial. Modificările
-ulterioare nu sunt încă publicate sau instalate în producție.
+Referințele numerice și reproducerile de mai jos descriu revizia analizată
+inițial, înaintea remedierilor.
 
 ### 1. P1 — Proof-urile SRP pregătite înaintea schimbării parolei rămân autorizate
 
@@ -258,5 +262,6 @@ un review de cod cu teste țintite, nu o certificare criptografică.
   acordul utilizatorului înainte de trimiterea originalului.
 - Verificarea metodelor originale de trimitere confirmă că o schimbare de cameră
   abandonează fișierul și că deconectarea destinatarului eliberează contorul de transfer.
-- Firefox și Safari nu sunt disponibile în mediul local; suitele lor au fost
-  adaptate să aleagă explicit transportul direct în CI, unde nu există TURN.
+- Firefox și Safari nu sunt disponibile în mediul local. Suitele găzduite pentru
+  Gecko, boot Safari și Safari–Chrome au trecut în CI; aleg explicit transportul
+  direct, deoarece runner-ele nu au TURN.

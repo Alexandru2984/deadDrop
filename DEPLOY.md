@@ -36,8 +36,8 @@ manifest passes its read-only check:
 ./scripts/deploy.sh
 ```
 
-`scripts/deploy.sh` additionally requires a clean working tree, runs all Go and
-browser tests, validates `/etc/deaddrop.env` with `deaddrop check-config`, swaps
+`scripts/deploy.sh` additionally requires a clean working tree, runs the Go tests
+and Node self-tests, validates `/etc/deaddrop.env` with `deaddrop check-config`, swaps
 the binary atomically, checks health, and restores the old binary on failure.
 
 ### Remove the obsolete integrity watcher
