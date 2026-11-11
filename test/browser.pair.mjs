@@ -1212,6 +1212,18 @@ await alice.eval(`(() => {
   return true;
 })()`);
 await bob.eval(`(() => { const log = document.querySelector('#messages'); log.scrollTop = log.scrollHeight; return true; })()`);
+// A queued scroll may arrive after image layout changes but before its load
+// handler. Force that order so the test also catches the race on fast runners.
+await bob.eval(`(() => {
+  const log = document.querySelector('#messages');
+  const beforePreview = (event) => {
+    if (!event.target.matches?.('.file-preview-img') || event.target.alt !== 'tall.png') return;
+    log.removeEventListener('load', beforePreview, true);
+    log.dispatchEvent(new Event('scroll'));
+  };
+  log.addEventListener('load', beforePreview, true);
+  return true;
+})()`);
 await alice.sendGeneratedImage(300, 900, 'tall.png');
 ok(await waitFor(() => bob.eval(`(() => {
   const last = [...document.querySelectorAll('.msg.theirs .file-preview-img')].at(-1);
@@ -1225,6 +1237,18 @@ await sleep(500);
 const shortAfter = await shortOfEnd();
 await cdp.send('Emulation.clearDeviceMetricsOverride', {}, bob.sessionId);
 ok(shortAfter < 4, `and when the window shrinks, as a keyboard makes it, the end stays in view (${shortAfter}px short)`);
+
+await bob.eval(`document.querySelector('#messages').scrollTop = 0; true`);
+await sleep(200);
+await alice.sendGeneratedImage(300, 1000, 'readback.png');
+ok(await waitFor(() => bob.eval(`(() => {
+  const last = [...document.querySelectorAll('.msg.theirs .file-preview-img')].at(-1);
+  return !!last && last.complete && last.naturalHeight === 1000;
+})()`), { timeout: 40000 }), 'a picture also loads while the reader is higher in the conversation');
+await sleep(300);
+ok(await bob.eval(`document.querySelector('#messages').scrollTop < 50
+  && !document.querySelector('#jump-new').classList.contains('hidden')`),
+  'loading it leaves the reader in place, with the new-message button');
 
 // ── Back ──
 // A conversation lives only in the page; back, or a phone's edge swipe, used

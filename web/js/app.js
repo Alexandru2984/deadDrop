@@ -473,7 +473,7 @@ class DeadDrop {
     // Anywhere on the picture closes it: there is nothing else to do there.
     this.el.imageViewer.addEventListener('click', () => this._closeImage());
     this.el.jumpNew.addEventListener('click', () => {
-      this.el.messages.scrollTop = this.el.messages.scrollHeight;
+      this._scrollLogEnd();
       this._onLogScroll();
     });
     this.el.replyCancel.addEventListener('click', () => {
@@ -3146,6 +3146,8 @@ class DeadDrop {
     const key = this._messageKey(mine ? null : peerId, id);
     el.id = this._domMessageId(key);
 
+    const placeholder = document.getElementById(el.id);
+
     let preview;
     if (meta.fileType.startsWith('image/')) {
       preview = h('img', {
@@ -3164,7 +3166,18 @@ class DeadDrop {
     }
     // A picture or video takes its height only once decoded, after the log
     // has scrolled to it: half of it was left below the screen.
-    preview?.addEventListener(preview.tagName === 'IMG' ? 'load' : 'loadedmetadata', () => this._holdLogEnd(), { once: true });
+    // An undecoded image is initially shorter than the transfer indicator.
+    // Reserve that height until load so replacement cannot clamp scrollTop
+    // before the image grows and the queued scroll event reaches us.
+    if (placeholder && preview?.tagName === 'IMG' && !preview.complete) {
+      el.style.minHeight = `${placeholder.getBoundingClientRect().height}px`;
+    }
+    const previewReady = () => {
+      el.style.minHeight = '';
+      this._holdLogEnd();
+    };
+    preview?.addEventListener(preview.tagName === 'IMG' ? 'load' : 'loadedmetadata', previewReady, { once: true });
+    preview?.addEventListener('error', previewReady, { once: true });
 
     // Anything without a preview is one compact row — icon, name and size —
     // rather than a tall card around a lone icon.
@@ -3186,7 +3199,7 @@ class DeadDrop {
     );
     this._applySenderColor(el, sender);
 
-    this._appendToLog(el, mine);
+    this._appendToLog(el, mine, placeholder);
 
     this.msgMgr.add(key, el, ttl, burn, mine, blobUrl, {
       wireId: id,
@@ -3270,9 +3283,6 @@ class DeadDrop {
 
   _renderFileComplete(id, blobUrl, meta, ttl, burn, sender = null, peerId = null) {
     if (!this._validMessageID(id)) return;
-    const key = this._messageKey(peerId, id);
-    const old = document.getElementById(this._domMessageId(key));
-    if (old) old.remove();
     this._renderFileMsg(id, blobUrl, meta, false, ttl, burn, sender, peerId);
   }
 
@@ -3565,13 +3575,14 @@ class DeadDrop {
    * follow; anything else waits behind a "new messages" button, and a message
    * that arrives out of view is not yet seen — its timer and burn wait.
    */
-  _appendToLog(el, follow = false) {
+  _appendToLog(el, follow = false, replace = null) {
     const list = this.el.messages;
     const atEnd = this._atLogEnd();
-    list.appendChild(el);
+    if (replace?.parentNode === list) replace.replaceWith(el);
+    else list.appendChild(el);
     this._pruneRenderedNodes();
     if (follow || atEnd) {
-      list.scrollTop = list.scrollHeight;
+      this._scrollLogEnd();
       return;
     }
     this._scrolledAway = true;
@@ -3585,10 +3596,23 @@ class DeadDrop {
 
   /** Something in the log grew: whoever was reading at the end stays there. */
   _holdLogEnd() {
-    if (this._followingEnd !== false) this.el.messages.scrollTop = this.el.messages.scrollHeight;
+    if (this._followingEnd !== false) this._scrollLogEnd();
+  }
+
+  _scrollLogEnd() {
+    const list = this.el.messages;
+    list.scrollTop = list.scrollHeight;
+    this._logScrollTarget = list.scrollTop;
+    this._followingEnd = true;
   }
 
   _onLogScroll() {
+    // A programmatic scroll event can arrive after an image has grown the log.
+    // At the position we requested, the reader has not scrolled away: keep
+    // following even though that position is no longer the new bottom.
+    if (this._followingEnd && Math.abs(this.el.messages.scrollTop - this._logScrollTarget) < 1) {
+      this._scrollLogEnd();
+    }
     this._followingEnd = this._atLogEnd();
     if (!this._scrolledAway || !this._atLogEnd()) return;
     this._scrolledAway = false;

@@ -18,6 +18,8 @@ compare rather than take a hash on trust.
   late TURN responses cannot repopulate cleared credentials.
 - Extend browser privacy regressions to cover delayed authentication, password
   derivation, room creation and ordinary logout.
+- Keep the latest message in view when an image finishes loading or the window
+  shrinks, even if a delayed programmatic scroll event sees the new layout.
 
 ## 0.7.1 — 2026-11-11
 
