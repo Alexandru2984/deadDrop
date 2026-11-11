@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # Actions are pinned to a commit, not a tag: a tag can be moved to other code
 # after review, a commit cannot. Dependabot proposes the bumps.

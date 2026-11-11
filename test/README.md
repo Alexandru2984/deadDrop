@@ -105,6 +105,10 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 
 ## Browser suites
 
+The complete CI workflow can also be started manually, for example after a
+GitHub delivery incident: `gh workflow run ci.yml --ref main`. This uses the
+same jobs and checks as push-triggered CI.
+
 `browser.privacy.mjs` exercises the unchanged browser client with controlled
 network responses: missing/failed/invalid/expired TURN credentials must block
 relay-only connections. Delayed authentication, password derivation, room setup
