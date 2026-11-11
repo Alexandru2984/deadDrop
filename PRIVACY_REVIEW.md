@@ -207,6 +207,12 @@ de cameră livrat după logout obișnuit, fără a se baza pe flag-ul Panic. Anu
 locală nu retrage o modificare pe care serverul a procesat-o deja și nu înlocuiește
 revocarea server-side a sesiunii.
 
+[CI complet, run 43099585411](https://github.com/Alexandru2984/deadDrop/actions/runs/43099585411)
+a trecut toate cele 14 job-uri pe `8cd8105c1135e2f99f4041022c5e2aa12af89c5c`,
+inclusiv regresiile noi de privacy și suitele Firefox/Safari. Rularea automată
+[43099533417](https://github.com/Alexandru2984/deadDrop/actions/runs/43099533417)
+a trecut separat pe aceeași revizie.
+
 ## Ce este bine construit
 
 - Backend mic, cu o singură dependență Go directă; conținutul conversațiilor

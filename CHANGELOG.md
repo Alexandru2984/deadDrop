@@ -9,7 +9,9 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.7.2 — 2026-11-11
+
+**Security update.** Reload open tabs after deployment to pick up the client fixes.
 
 - **Security:** cancel authentication, account actions and room setup when the
   local session is cleared. Delayed SRP challenges, password derivation and room
@@ -20,6 +22,7 @@ compare rather than take a hash on trust.
   derivation, room creation and ordinary logout.
 - Keep the latest message in view when an image finishes loading or the window
   shrinks, even if a delayed programmatic scroll event sees the new layout.
+- Allow manual CI runs and wait for the new document in the settings reload test.
 
 ## 0.7.1 — 2026-11-11
 
