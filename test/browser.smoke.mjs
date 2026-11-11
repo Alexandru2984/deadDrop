@@ -563,9 +563,10 @@ await sessionEval(`(() => {
   idle.value = '0'; idle.dispatchEvent(new Event('change'));
   return true;
 })()`);
-await sessionEval(`location.reload(); true`);
-await waitFor(async () => sessionEval(
-  `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });
+await sessionEval(`window.__settingsReloading = true; location.reload(); true`);
+ok(await waitFor(() => sessionEval(`!window.__settingsReloading && document.readyState === 'complete'
+  && !document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 }),
+  'the settings reload reaches the landing page in the new document');
 
 await chooseDirectTransport({ eval: sessionEval });
 
