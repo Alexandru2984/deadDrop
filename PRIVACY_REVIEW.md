@@ -184,6 +184,29 @@ semnătura binară înainte de curățare. O nepotrivire de tip trebuie explicat
 fără a prezenta fișierul drept curățat. Matricea de teste trebuie să includă
 MIME corect, gol și generic pentru fiecare format.
 
+## Verificare suplimentară — operații reluate după cleanup
+
+Revizie verificată: `f4c9115a255271419384500999a49366d1b0a4f8` (0.7.1).
+Cu răspunsurile de rețea și logout-ul întârziate controlat în Chromium, Panic
+golea ecranul, dar un challenge SRP primit ulterior putea continua autentificarea
+și redeschide ecranul contului. Un răspuns întârziat de creare a camerei putea
+deschide un WebSocket nou și afișa din nou invitația. Patru aserțiuni din testul
+extins `browser.privacy.mjs` au eșuat pe clientul 0.7.1.
+
+**Remediat:** operațiile de autentificare, reautentificare, modificare de cont,
+creare/intrare în cameră și încărcare TURN folosesc un semnal de anulare legat de
+sesiunea locală. Cleanup îl invalidează înainte să elimine starea. Cererile în
+curs sunt întrerupte, iar rezultatele operațiilor care nu pot fi întrerupte, precum
+derivarea parolei, sunt verificate înaintea următoarei cereri sau modificări UI.
+Așteptarea mesajului WebSocket de bun venit se încheie și la anulare; operațiile
+vechi nu pot elibera blocajul unei acțiuni noi sau relua reconectarea. Mesajele de
+signaling care așteaptă configurația TURN verifică din nou generația conexiunii.
+
+Regresiile suplimentare verifică și o derivare de parolă întârziată și un răspuns
+de cameră livrat după logout obișnuit, fără a se baza pe flag-ul Panic. Anularea
+locală nu retrage o modificare pe care serverul a procesat-o deja și nu înlocuiește
+revocarea server-side a sesiunii.
+
 ## Ce este bine construit
 
 - Backend mic, cu o singură dependență Go directă; conținutul conversațiilor

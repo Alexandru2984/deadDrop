@@ -31,17 +31,33 @@ try {
   let holdScrub = false;
   let scrubRequest = null;
   let logoutRequest = null;
+  let holdAuth = false;
+  let authRequest = null;
+  let authenticateRequests = 0;
+  let holdRoom = false;
+  let roomRequest = null;
+  let holdWipe = false;
   const errors = [];
   await cdp.send('Fetch.enable', { patterns: [
     { urlPattern: '*/api/turn', requestStage: 'Request' },
     { urlPattern: '*/js/scrub.js', requestStage: 'Request' },
     { urlPattern: '*/api/logout*', requestStage: 'Request' },
+    { urlPattern: '*/api/srp/challenge', requestStage: 'Request' },
+    { urlPattern: '*/api/srp/authenticate', requestStage: 'Request' },
+    { urlPattern: '*/api/room', requestStage: 'Request' },
   ] }, alice.sessionId);
   cdp.on(async (msg) => {
     if (msg.sessionId !== alice.sessionId || msg.method !== 'Fetch.requestPaused') return;
     const { requestId, request } = msg.params;
     try {
-      if (request.url.endsWith('/api/turn')) {
+      if (holdAuth && request.url.endsWith('/api/srp/challenge')) {
+        authRequest = requestId;
+      } else if (request.url.endsWith('/api/srp/authenticate')) {
+        authenticateRequests++;
+        await cdp.send('Fetch.continueRequest', { requestId }, alice.sessionId);
+      } else if (holdRoom && request.url.endsWith('/api/room')) {
+        roomRequest = requestId;
+      } else if (request.url.endsWith('/api/turn')) {
         await cdp.send('Fetch.fulfillRequest', {
           requestId, responseCode: response.status,
           responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
@@ -49,7 +65,7 @@ try {
         }, alice.sessionId);
       } else if (holdScrub && request.url.endsWith('/js/scrub.js')) {
         scrubRequest = requestId;
-      } else if (holdScrub && request.url.includes('/api/logout')) {
+      } else if ((holdScrub || holdWipe) && request.url.includes('/api/logout')) {
         logoutRequest = requestId;
       } else {
         await cdp.send('Fetch.continueRequest', { requestId }, alice.sessionId);
@@ -68,6 +84,129 @@ try {
       throw new Error('privacy: did not return to the landing page');
     }
   };
+  const loginAlice = async () => {
+    await alice.eval(`fetch('/api/logout', { method: 'POST' }).then(() => true)`);
+    await alice.goto(BASE + '/');
+    if (!await waitFor(() => alice.eval(`!document.querySelector('#auth').classList.contains('hidden')`))) {
+      throw new Error('privacy: sign-in page not shown');
+    }
+    await alice.eval(`document.querySelector('#auth-user').value = ${JSON.stringify(`zz_pr0_${suffix}`)};
+      document.querySelector('#auth-pass').value = 'privacy-test-passphrase-2208';
+      document.querySelector('#login-btn').click(); true`);
+    if (!await waitFor(() => alice.eval(`!document.querySelector('#landing').classList.contains('hidden')`))) {
+      throw new Error('privacy: sign-in did not return to landing');
+    }
+  };
+  const panic = () => alice.eval(`window.__privacyPanicDocument = true; for (let i = 0; i < 3; i++)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
+  const resume = async (requestId) => {
+    try { await cdp.send('Fetch.continueRequest', { requestId }, alice.sessionId); }
+    catch (err) { if (!/Invalid InterceptionId|Invalid requestId/.test(err.message)) throw err; }
+  };
+  const wipedReload = async () => {
+    if (!await waitFor(() => alice.eval(`document.readyState === 'complete'
+      && !window.__privacyPanicDocument
+      && !document.querySelector('#login-btn').disabled
+      && document.querySelector('#relay-toggle').checked`).catch(() => false), { timeout: 8000 })) {
+      throw new Error('privacy: panic did not reload');
+    }
+    holdWipe = false;
+  };
+
+  console.log('panic cancels pending authentication and room entry');
+  await alice.eval(`fetch('/api/logout', { method: 'POST' }).then(() => true)`);
+  await alice.goto(BASE + '/');
+  await waitFor(() => alice.eval(`!document.querySelector('#auth').classList.contains('hidden')`));
+  holdAuth = holdWipe = true;
+  authenticateRequests = 0;
+  await alice.eval(`document.querySelector('#auth-user').value = ${JSON.stringify(`zz_pr0_${suffix}`)};
+    document.querySelector('#auth-pass').value = 'privacy-test-passphrase-2208';
+    document.querySelector('#login-btn').click(); true`);
+  if (!await waitFor(() => authRequest)) throw new Error('privacy: auth challenge not intercepted');
+  await panic();
+  if (!await waitFor(() => logoutRequest)) throw new Error('privacy: auth wipe not intercepted');
+  holdAuth = false;
+  await resume(authRequest);
+  await sleep(1800);
+  ok(authenticateRequests === 0, 'a delayed sign-in never sends a new proof after panic');
+  ok(await alice.eval(`!document.querySelector('#auth').classList.contains('hidden')`),
+    'a delayed sign-in cannot restore the account screen after panic');
+  await wipedReload();
+
+  // Derivation cannot be aborted like fetch. Its result may still arrive after
+  // cleanup, and must be discarded before an authentication request is made.
+  await alice.eval(`fetch('/api/logout', { method: 'POST' }).then(() => true)`);
+  await alice.goto(BASE + '/');
+  await waitFor(() => alice.eval(`!document.querySelector('#auth').classList.contains('hidden')`));
+  holdWipe = true;
+  logoutRequest = null;
+  authenticateRequests = 0;
+  await alice.eval(`(() => {
+    const derive = crypto.subtle.deriveBits.bind(crypto.subtle);
+    let hold = true;
+    crypto.subtle.deriveBits = async (...args) => {
+      const bits = await derive(...args);
+      if (hold) { hold = false; await new Promise((resolve) => { window.__privacyResumeDerive = resolve; }); }
+      return bits;
+    };
+    document.querySelector('#auth-user').value = ${JSON.stringify(`zz_pr0_${suffix}`)};
+    document.querySelector('#auth-pass').value = 'privacy-test-passphrase-2208';
+    document.querySelector('#login-btn').click();
+    return true;
+  })()`);
+  if (!await waitFor(() => alice.eval('!!window.__privacyResumeDerive'))) throw new Error('privacy: derivation not held');
+  await panic();
+  if (!await waitFor(() => logoutRequest)) throw new Error('privacy: derivation wipe not intercepted');
+  await alice.eval('window.__privacyResumeDerive(); true');
+  await sleep(1800);
+  ok(authenticateRequests === 0, 'a password derivation completed after panic cannot send a proof');
+  ok(await alice.eval(`!document.querySelector('#auth').classList.contains('hidden')`),
+    'a late password derivation leaves the wiped screen clear');
+  await wipedReload();
+  await loginAlice();
+
+  response = validRelay();
+  holdRoom = holdWipe = true;
+  logoutRequest = null;
+  await alice.eval(`document.querySelector('#create-room').click(); true`);
+  if (!await waitFor(() => roomRequest)) throw new Error('privacy: room request not intercepted');
+  await panic();
+  if (!await waitFor(() => logoutRequest)) throw new Error('privacy: room wipe not intercepted');
+  const socketsAfterWipe = await alice.eval('window.__privacySockets.length');
+  holdRoom = false;
+  await resume(roomRequest);
+  await sleep(500);
+  ok(await alice.eval('window.__privacySockets.length') === socketsAfterWipe,
+    'a delayed room response opens no signaling socket after panic');
+  ok(await alice.eval(`!document.querySelector('#auth').classList.contains('hidden')
+    && document.querySelector('#messages').children.length === 0`),
+    'a delayed room response cannot restore the conversation or invitation');
+  await wipedReload();
+  await loginAlice();
+
+  // Ordinary logout also cancels work, without relying on the panic flag or a
+  // reload. Deliver the successful room response after the session has ended.
+  holdRoom = true;
+  roomRequest = null;
+  await alice.eval(`document.querySelector('#create-room').click(); true`);
+  if (!await waitFor(() => roomRequest)) throw new Error('privacy: logout room request not intercepted');
+  await alice.eval(`document.querySelector('#logout-btn').click(); true`);
+  if (!await waitFor(() => alice.eval(`!document.querySelector('#auth').classList.contains('hidden')`))) {
+    throw new Error('privacy: ordinary logout did not finish');
+  }
+  const socketsAfterLogout = await alice.eval('window.__privacySockets.length');
+  holdRoom = false;
+  try {
+    await cdp.send('Fetch.fulfillRequest', { requestId: roomRequest, responseCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/json' }],
+      body: Buffer.from(JSON.stringify({ code: '0123456789abcdef01234567' })).toString('base64'),
+    }, alice.sessionId);
+  } catch (err) { if (!/Invalid InterceptionId|Invalid requestId/.test(err.message)) throw err; }
+  await sleep(500);
+  ok(await alice.eval('window.__privacySockets.length') === socketsAfterLogout,
+    'a late room response opens no signaling socket after ordinary logout');
+  await loginAlice();
+
   console.log('relay-only fails closed');
   for (const [name, value, join] of [
     ['no relay configured', noRelay],

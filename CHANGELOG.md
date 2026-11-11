@@ -9,6 +9,16 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+- **Security:** cancel authentication, account actions and room setup when the
+  local session is cleared. Delayed SRP challenges, password derivation and room
+  responses cannot log back in, reopen signaling or restore an invitation after
+  Panic or logout. Pending fetches and WebSocket welcome waits are cancelled;
+  late TURN responses cannot repopulate cleared credentials.
+- Extend browser privacy regressions to cover delayed authentication, password
+  derivation, room creation and ordinary logout.
+
 ## 0.7.1 — 2026-11-11
 
 **Security update.** Rebuild and redeploy the server, then reload open tabs to

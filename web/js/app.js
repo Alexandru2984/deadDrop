@@ -232,6 +232,7 @@ class DeadDrop {
     this._signalBytes = 0;
     this._signalQ = Promise.resolve();
     this._signalGeneration = 0;
+    this._workController = new AbortController();
 
     // Call state (calls stay 1:1 — only available when exactly one peer is in the room)
     this.callState = 'idle'; // idle | requesting | incoming | connecting | active
@@ -588,19 +589,30 @@ class DeadDrop {
 
   /* ── Auth ── */
 
+  // Async work belongs to the current local session. Fetches can be aborted;
+  // password derivation and storage must check the same scope before continuing.
+  _workScope() {
+    const signal = this._workController.signal;
+    const current = () => !signal.aborted && !this._wiping;
+    return { signal, current, check: () => {
+      if (!current()) throw new DOMException('Operation cancelled', 'AbortError');
+    } };
+  }
+
   async _checkAuth() {
+    const work = this._workScope();
     try {
-      const res = await (firstAnswer() ?? fetch('/api/me'));
-      if (this._wiping) return;
+      const res = await (firstAnswer() ?? fetch('/api/me', { signal: work.signal }));
+      if (!work.current()) return;
       if (res.ok) {
         const data = await res.json();
-        if (this._wiping) return;
+        if (!work.current()) return;
         this.username = data.username;
         // A returning visitor lands here rather than in _afterAuth, so without
         // this the identity stays unloaded and every saved contact is silently
         // forgotten on reload — the exact case the feature exists for.
         await this._restoreIdentity().catch(() => {});
-        if (this._wiping) return;
+        if (!work.current()) return;
         this._showPage('landing');
         // Nor did a reload arm the idle lock: it waited for the first key or
         // touch, so a tab reloaded and left alone was never wiped.
@@ -608,15 +620,17 @@ class DeadDrop {
       } else {
         this._showPage('auth');
         const data = await res.json().catch(() => ({}));
+        if (!work.current()) return;
         if (data.error === 'signed out') this._showAuthError(t('auth.signedOutElsewhere'));
       }
     } catch {
-      this._showPage('auth');
+      if (work.current()) this._showPage('auth');
     }
   }
 
   async _login() {
     if (this._wiping) return;
+    const work = this._workScope();
     const username = this.el.authUser.value.trim();
     const password = this.el.authPass.value;
     if (!username || !password) return;
@@ -625,11 +639,12 @@ class DeadDrop {
     this._setAuthBusy(true);
     try {
       const client = new ClientLogin(username, password);
-      const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A });
+      const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A }, work);
       if (!ch.ok) { this._showAuthError(serverMessage(ch.data.error, 'srv.badLogin')); return; }
 
       // The challenge advertises each credential's password-stretch KDF.
       const { M1 } = await client.finish(ch.data.salt, ch.data.B, ch.data.kdf);
+      work.check();
       // Second proof against the duress challenge, reusing the same ephemeral `a`.
       // Exactly one of the two proofs matches server-side (real vs duress password).
       let clientD = null, M1d = '';
@@ -638,7 +653,7 @@ class DeadDrop {
         clientD.start();
         M1d = (await clientD.finish(ch.data.salt2, ch.data.B2, ch.data.kdf2)).M1;
       }
-      const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d });
+      const auth = await this._postJSON('/api/srp/authenticate', { token: ch.data.token, M1, M1d }, work);
       if (!auth.ok) { this._showAuthError(serverMessage(auth.data.error, 'srv.badLogin')); return; }
       // Authenticate the server too. Which locally-computed M2 matches tells this
       // browser which credential won; the server response remains identical for
@@ -659,36 +674,40 @@ class DeadDrop {
         try {
           const up = await srpRegister(username, password);
           await this._postJSON('/api/account/verifier',
-            { ...up, ...(await this._reauthProof(username, password)) });
+            { ...up, ...(await this._reauthProof(username, password, work)) }, work);
         } catch { /* best-effort; login already succeeded */ }
       }
-      this._afterAuth();
+      if (work.current()) this._afterAuth();
     } catch {
-      this._showAuthError(t('err.connection'));
+      if (work.current()) this._showAuthError(t('err.connection'));
     } finally {
-      this._setAuthBusy(false);
+      if (work.current()) this._setAuthBusy(false);
     }
   }
 
   /** Prove the current password again for a credential change. A session cookie
    *  alone must not be able to rekey the account, so the server re-runs the SRP
    *  verification against whichever credential this session was opened with. */
-  async _reauthProof(username, password) {
+  async _reauthProof(username, password, work = this._workScope()) {
+    work.check();
     const client = new ClientLogin(username, password);
-    const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A });
+    const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A }, work);
     if (!ch.ok) throw new Error('re-authentication challenge failed');
     const { M1 } = await client.finish(ch.data.salt, ch.data.B, ch.data.kdf);
+    work.check();
     let M1d = '';
     if (ch.data.salt2 && ch.data.B2) {
       const clientD = new ClientLogin(username, password, client.a);
       clientD.start();
       M1d = (await clientD.finish(ch.data.salt2, ch.data.B2, ch.data.kdf2)).M1;
     }
+    work.check();
     return { token: ch.data.token, M1, M1d };
   }
 
   async _register() {
     if (this._wiping) return;
+    const work = this._workScope();
     const username = this.el.authUser.value.trim();
     const password = this.el.authPass.value;
     const invite = this.el.authInvite.value.trim();
@@ -702,7 +721,7 @@ class DeadDrop {
     this._setAuthBusy(true);
     try {
       const { salt, verifier, kdf } = await srpRegister(username, password);
-      const res = await this._postJSON('/api/srp/register', { username, salt, verifier, kdf, invite });
+      const res = await this._postJSON('/api/srp/register', { username, salt, verifier, kdf, invite }, work);
       if (res.ok) {
         this.username = res.data.username;
         this._afterAuth();
@@ -710,9 +729,9 @@ class DeadDrop {
         this._showAuthError(serverMessage(res.data.error, 'srv.registerFailed'));
       }
     } catch {
-      this._showAuthError(t('err.connection'));
+      if (work.current()) this._showAuthError(t('err.connection'));
     } finally {
-      this._setAuthBusy(false);
+      if (work.current()) this._setAuthBusy(false);
     }
   }
 
@@ -769,16 +788,16 @@ class DeadDrop {
       say(t('account.needCurrent'));
       return;
     }
-    await this._accountBusy(this.el.changePassBtn, say, async () => {
+    await this._accountBusy(this.el.changePassBtn, say, async (work) => {
       let proof;
       try {
-        proof = await this._reauthProof(this.username, current);
+        proof = await this._reauthProof(this.username, current, work);
       } catch {
-        say(t('account.wrongCurrent'));
+        if (work.current()) say(t('account.wrongCurrent'));
         return;
       }
       const credential = await srpRegister(this.username, next);
-      const res = await this._postJSON('/api/account/verifier', { ...credential, ...proof });
+      const res = await this._postJSON('/api/account/verifier', { ...credential, ...proof }, work);
       if (res.status === 401) { say(t('account.wrongCurrent')); return; }
       if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
       say(t('account.passChanged'), true);
@@ -815,16 +834,16 @@ class DeadDrop {
       say(t('duress.sameAsReal'));
       return;
     }
-    await this._accountBusy(this.el.setDuressBtn, say, async () => {
+    await this._accountBusy(this.el.setDuressBtn, say, async (work) => {
       let proof;
       try {
-        proof = await this._reauthProof(this.username, current);
+        proof = await this._reauthProof(this.username, current, work);
       } catch {
-        say(t('account.wrongCurrent'));
+        if (work.current()) say(t('account.wrongCurrent'));
         return;
       }
       const { salt, verifier, kdf } = await srpRegister(this.username, pw);
-      const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf, ...proof });
+      const res = await this._postJSON('/api/account/duress', { salt, verifier, kdf, ...proof }, work);
       if (res.status === 401) { say(t('account.wrongCurrent')); return; }
       if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
       say(t('duress.saved'), true);
@@ -842,15 +861,15 @@ class DeadDrop {
       return;
     }
     if (!confirm(t('account.confirmDelete'))) return;
-    await this._accountBusy(this.el.delAccountBtn, say, async () => {
+    await this._accountBusy(this.el.delAccountBtn, say, async (work) => {
       let proof;
       try {
-        proof = await this._reauthProof(this.username, current);
+        proof = await this._reauthProof(this.username, current, work);
       } catch {
-        say(t('account.wrongCurrent'));
+        if (work.current()) say(t('account.wrongCurrent'));
         return;
       }
-      const res = await this._postJSON('/api/account/delete', proof);
+      const res = await this._postJSON('/api/account/delete', proof, work);
       if (res.status === 401) { say(t('account.wrongCurrent')); return; }
       if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
       this.el.currentPass.value = '';
@@ -872,15 +891,15 @@ class DeadDrop {
       say(t('account.needCurrent'));
       return;
     }
-    await this._accountBusy(this.el.signOutOthersBtn, say, async () => {
+    await this._accountBusy(this.el.signOutOthersBtn, say, async (work) => {
       let proof;
       try {
-        proof = await this._reauthProof(this.username, current);
+        proof = await this._reauthProof(this.username, current, work);
       } catch {
-        say(t('account.wrongCurrent'));
+        if (work.current()) say(t('account.wrongCurrent'));
         return;
       }
-      const res = await this._postJSON('/api/account/signout-others', proof);
+      const res = await this._postJSON('/api/account/signout-others', proof, work);
       if (res.status === 401) { say(t('account.wrongCurrent')); return; }
       if (!res.ok) { say(serverMessage(res.data.error, 'err.connection')); return; }
       this.el.currentPass.value = '';
@@ -901,24 +920,29 @@ class DeadDrop {
    * send a second request, and with a network failure reported rather than lost.
    */
   async _accountBusy(btn, say, action) {
+    const work = this._workScope();
+    if (!work.current() || btn.disabled) return;
     btn.disabled = true;
     try {
-      await action();
+      await action(work);
     } catch {
-      say(t('err.connection'));
+      if (work.current()) say(t('err.connection'));
     } finally {
-      btn.disabled = false;
+      if (work.current()) btn.disabled = false;
     }
   }
 
-  async _postJSON(path, body) {
+  async _postJSON(path, body, work = this._workScope()) {
+    work.check();
     const res = await fetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: work.signal,
     });
     let data = {};
     try { data = await res.json(); } catch { /* empty body */ }
+    work.check();
     return { ok: res.ok, status: res.status, data };
   }
 
@@ -944,10 +968,14 @@ class DeadDrop {
    * conversations it still has open end with it.
    */
   async _recheckSession() {
+    const work = this._workScope();
+    if (!work.current()) return;
     let res;
-    try { res = await fetch('/api/me'); } catch { return; }
+    try { res = await fetch('/api/me', { signal: work.signal }); } catch { return; }
+    if (!work.current()) return;
     if (res.status !== 401) return;
     const data = await res.json().catch(() => ({}));
+    if (!work.current()) return;
     if (data.error === 'signed out') {
       this._disarmIdleLock();
       this._cleanup();
@@ -1074,9 +1102,10 @@ class DeadDrop {
    * invitation.
    */
   async _landingAction(action) {
-    if (this._landingBusy) return;
+    const work = this._workScope();
+    if (!work.current() || this._landingBusy) return;
     this._landingBusy = true;
-    try { await action(); } finally { this._landingBusy = false; }
+    try { await action(); } finally { if (work.current()) this._landingBusy = false; }
   }
 
   createRoom() {
@@ -1088,31 +1117,35 @@ class DeadDrop {
   }
 
   async _createRoom() {
+    const work = this._workScope();
     this._landingError('');
     await this._loadIceServers();
+    if (!work.current()) return;
     if (this._relayOnly && !this._hasRelay()) {
       this._landingError(t('warn.noRelay'));
       return;
     }
     // Request a server-generated room code (stronger entropy)
     try {
-      const res = await fetch('/api/room', { method: 'POST' });
+      const res = await fetch('/api/room', { method: 'POST', signal: work.signal });
       const data = await res.json();
+      if (!work.current()) return;
       if (!res.ok || typeof data.code !== 'string' || !ROOM_CODE_RE.test(data.code)) {
         this._landingError(serverMessage(data.error, 'err.roomCreate'));
         return;
       }
       this.roomCode = data.code;
     } catch {
-      this._landingError(t('err.roomCreate'));
+      if (work.current()) this._landingError(t('err.roomCreate'));
       return;
     }
     try {
       await this._connectSignaling();
+      if (!work.current()) return;
       this._joinPending = true;
       this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
     } catch {
-      this._landingError(t('err.signaling'));
+      if (work.current()) this._landingError(t('err.signaling'));
       return;
     }
     this._enterChat(this.roomCode);
@@ -1191,6 +1224,7 @@ class DeadDrop {
   }
 
   async _joinRoom() {
+    const work = this._workScope();
     this._landingError('');
     this.el.landingInvited.classList.add('hidden');
     if (!this.el.roomInput.value.trim()) return;
@@ -1200,14 +1234,16 @@ class DeadDrop {
       return;
     }
     await this._loadIceServers();
+    if (!work.current()) return;
     if (this._relayOnly && !this._hasRelay()) {
       this._landingError(t('warn.noRelay'));
       return;
     }
     try {
       await this._connectSignaling();
+      if (!work.current()) return;
     } catch {
-      this._landingError(t('err.signaling'));
+      if (work.current()) this._landingError(t('err.signaling'));
       return;
     }
     this.roomCode = code;
@@ -1227,7 +1263,12 @@ class DeadDrop {
   /* ── Signaling (WebSocket → signaling server) ── */
 
   _connectSignaling() {
+    const work = this._workScope();
     return new Promise((resolve, reject) => {
+      if (!work.current()) {
+        reject(new DOMException('Operation cancelled', 'AbortError'));
+        return;
+      }
       if (this.ws && this.ws.readyState < WebSocket.CLOSING) {
         reject(new Error('Signaling connection already active'));
         return;
@@ -1241,12 +1282,20 @@ class DeadDrop {
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(`${proto}//${location.host}/ws`);
       this.ws = socket;
+      const finish = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        work.signal.removeEventListener('abort', onAbort);
+        if (err) reject(err); else resolve();
+      };
+      const onAbort = () => finish(new DOMException('Operation cancelled', 'AbortError'));
       const timer = setTimeout(() => {
         if (settled || generation !== this._signalGeneration || this.ws !== socket) return;
-        settled = true;
         socket.close();
-        reject(new Error('WebSocket welcome timeout'));
+        finish(new Error('WebSocket welcome timeout'));
       }, 15000);
+      work.signal.addEventListener('abort', onAbort, { once: true });
 
       socket.onmessage = (e) => {
         if (generation !== this._signalGeneration || this.ws !== socket) return;
@@ -1263,9 +1312,7 @@ class DeadDrop {
         }
         if (msg.type === 'welcome' && !this.peerId && this._validPeerID(msg.peerId)) {
           this.peerId = msg.peerId;
-          settled = true;
-          clearTimeout(timer);
-          resolve();
+          finish();
         }
         if (!this.peerId && msg.type !== 'welcome') return;
         this._signalQ = this._signalQ
@@ -1284,8 +1331,7 @@ class DeadDrop {
         if (settled && this.roomCode) this._onSignalingLost();
         else this._setStatus('disconnected', () => t('st.serverLost'));
         if (!settled) {
-          settled = true;
-          reject(new Error('WebSocket closed before welcome'));
+          finish(new Error('WebSocket closed before welcome'));
         }
       };
       socket.onerror = () => {
@@ -1294,8 +1340,7 @@ class DeadDrop {
         // Could be an ended session — but only the server saying so counts.
         this._recheckSession();
         if (!settled) {
-          settled = true;
-          reject(new Error('WebSocket error'));
+          finish(new Error('WebSocket error'));
         }
       };
     });
@@ -1323,10 +1368,11 @@ class DeadDrop {
   }
 
   _scheduleRejoin(delay) {
+    const work = this._workScope();
     clearTimeout(this._rejoinTimer);
     const room = this.roomCode;
     this._rejoinTimer = setTimeout(async () => {
-      if (!room || this.roomCode !== room || this.ws) return;
+      if (!work.current() || !room || this.roomCode !== room || this.ws) return;
       const next = Math.min(delay * 2, 30000);
       if (this.peers.size > 0) { this._scheduleRejoin(next); return; }
       this.peerId = null;
@@ -1334,6 +1380,7 @@ class DeadDrop {
       try {
         await this._connectSignaling();
       } catch {
+        if (!work.current()) return;
         this.ws = null;
         if (this.roomCode === room) {
           this._setStatus('disconnected', () => t('st.reconnecting'));
@@ -1341,7 +1388,7 @@ class DeadDrop {
         }
         return;
       }
-      if (this.roomCode !== room) return;
+      if (!work.current() || this.roomCode !== room) return;
       this._warnedSignalLost = false;
       this._joinPending = true;
       this.ws.send(JSON.stringify({ type: 'join', room }));
@@ -1349,6 +1396,7 @@ class DeadDrop {
   }
 
   async _onSignal(msg) {
+    const generation = this._signalGeneration;
     switch (msg.type) {
       case 'peer-joined':
         if (!this._validPeerID(msg.peerId) || msg.peerId === this.peerId) return;
@@ -1362,6 +1410,7 @@ class DeadDrop {
         // Deterministic initiator per pair: the lower peerId creates the offer.
         if (this.peerId < msg.peerId) {
           await this._loadIceServers();
+          if (this._wiping || generation !== this._signalGeneration) return;
           await this._ensureSession(msg.peerId).conn.createOffer(msg.peerId);
         }
         break;
@@ -1413,6 +1462,7 @@ class DeadDrop {
       case 'offer': {
         if (!this._validSignal(msg)) return;
         await this._loadIceServers();
+        if (this._wiping || generation !== this._signalGeneration) return;
         const s = this._ensureSession(msg.from);
         await s.conn.handleOffer(msg.from, JSON.parse(msg.payload));
         break;
@@ -1579,13 +1629,16 @@ class DeadDrop {
 
   /** Fetch self-hosted STUN/TURN ICE servers (with an ephemeral credential). */
   async _loadIceServers() {
+    const work = this._workScope();
+    if (!work.current()) return;
     const now = Date.now();
     if (this._iceExpiresAt - now > 5 * 60 * 1000) return;
     if (this._iceExpiresAt <= now) this.iceConfig.iceServers = [];
     try {
-      const res = await fetch('/api/turn');
+      const res = await fetch('/api/turn', { signal: work.signal });
       if (!res.ok) return;
       const raw = await res.text();
+      if (!work.current()) return;
       if (raw.length > 32 * 1024) throw new Error('ICE response too large');
       const clean = sanitizeIceConfig(JSON.parse(raw));
       this.iceConfig.iceServers = clean.iceServers;
@@ -3664,6 +3717,12 @@ class DeadDrop {
   }
 
   _cleanup() {
+    this._workController.abort();
+    this._workController = new AbortController();
+    this._landingBusy = false;
+    this._setAuthBusy(false);
+    for (const btn of [this.el.changePassBtn, this.el.setDuressBtn,
+      this.el.delAccountBtn, this.el.signOutOthersBtn]) btn.disabled = false;
     // Invalidate pending signaling, file preparation and decryption before
     // destroying the sessions they belong to.
     this._signalGeneration++;

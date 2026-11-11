@@ -107,8 +107,9 @@ and correctly shaped, short-lived coturn REST credentials reach WebRTC.
 
 `browser.privacy.mjs` exercises the unchanged browser client with controlled
 network responses: missing/failed/invalid/expired TURN credentials must block
-relay-only connections, and delayed file preparation must not resurrect data
-after Panic. The other transport suites explicitly choose direct connections
+relay-only connections. Delayed authentication, password derivation, room setup
+and file preparation must not restore state or send new proofs after Panic;
+ordinary logout also cancels pending room setup. The other transport suites explicitly choose direct connections
 because local CI has no TURN server; they do not depend on a privacy fallback.
 
 `browser.smoke.mjs` (one page), `browser.pair.mjs` (two peers, one real WebRTC
