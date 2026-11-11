@@ -46,7 +46,7 @@ node scripts/verify-vendor.mjs
 echo "▸ running pre-deploy tests…"
 go vet ./...
 go test -race ./...
-for suite in crypto lifecycle mlkem srp fingerprint config manifest callsignal ice-grace seo property; do
+for suite in crypto lifecycle mlkem srp fingerprint config manifest callsignal ice-grace scrub seo property; do
   node "test/$suite.selftest.mjs"
 done
 

@@ -1000,7 +1000,8 @@ ok(!heldSeen.data.includes(AUTHOR) && /^\n */.test(heldSeen.after) && offsetsLan
 const predicted = objStm([[5, `<< /Author (${AUTHOR}) >>`]]);
 ok(await pdfAsked(pdf([[1, '<< /Type /Catalog >>'], [3, predicted.entry.replace('/Filter /FlateDecode', '/Filter /FlateDecode /DecodeParms << /Predictor 12 >>')]])) === 'scrub.cannotReadDoc',
   'one whose object stream could not be written back is put to the person');
-ok(await pdfAsked(Buffer.from('just text, not a PDF')) === 'scrub.cannotReadDoc', 'and something that is not a PDF at all');
+ok(await pdfAsked(Buffer.from('just text, not a PDF')) === undefined,
+  'a file with no PDF signature is refused before the document cleaner');
 
 // Comments on a PDF stay, but the person is asked first, told the names on
 // them; and a redaction never applied leaves its text in the file.
@@ -1060,6 +1061,43 @@ ok(Buffer.from(await (await scrubFile(new File([bare], 'b.pdf', { type: 'applica
 // Office documents can be signed too, and the signature covers their properties.
 ok(await asked(zip([{ name: '[Content_Types].xml', data: '<Types/>' }, { name: '_xmlsignatures/sig1.xml', data: '<Signature/>' }])) === 'scrub.signedDoc',
   'a signed Word document is put to the person rather than have its signature broken');
+
+console.log('missing and generic MIME labels cannot bypass metadata removal');
+for (const [extension, mime, input, secret] of [
+  ['jpg', 'image/jpeg', photo, GPS_TEXT],
+  ['jpeg', 'image/jpeg', photo, AUTHOR],
+  ['png', 'image/png', png, AUTHOR],
+  ['webp', 'image/webp', webp, AUTHOR],
+  ['gif', 'image/gif', gif, AUTHOR],
+  ['mp4', 'video/mp4', movie, GPS],
+  ['mov', 'video/quicktime', movie, GPS],
+  ['m4a', 'audio/mp4', movie, GPS],
+  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docx, AUTHOR],
+  ['pdf', 'application/pdf', report, AUTHOR],
+]) {
+  for (const declared of [mime, '', 'application/octet-stream']) {
+    const f = new File([input], `IMG_20261111_121212.${extension}`, { type: declared });
+    const cleaned = await scrubFile(f);
+    const bytes = Buffer.from(await cleaned.arrayBuffer());
+    ok(isScrubbable(f) && cleaned.type === mime && !bytes.includes(secret),
+      `${extension} with ${declared || 'empty MIME'} is recognised and its private metadata removed`);
+  }
+}
+for (const [extension, mime] of [
+  ['heic', 'image/heic'], ['heif', 'image/heif'], ['avif', 'image/avif'],
+  ['tif', 'image/tiff'], ['tiff', 'image/tiff'], ['3gp', 'video/3gpp'], ['m4v', 'video/mp4'],
+]) {
+  for (const type of ['', 'application/octet-stream']) {
+    const f = new File(['not an image or movie'], `photo.${extension}`, { type });
+    ok(typeOf(f) === mime && isScrubbable(f), `${extension} falls back to its supported type`);
+  }
+}
+for (const [extension, mime] of [['jpg', 'image/jpeg'], ['png', 'image/png'], ['mp4', 'video/mp4'], ['pdf', 'application/pdf']]) {
+  let refused = false;
+  try { await scrubFile(new File(['private metadata in an unrelated format'], `file.${extension}`, { type: mime })); }
+  catch (err) { refused = err.message === 'File content does not match its type'; }
+  ok(refused, `a forged ${extension} label cannot report unrelated bytes as cleaned`);
+}
 
 console.log(failures === 0 ? '\nALL PASS ✅' : `\n${failures} FAILURE(S) ❌`);
 process.exit(failures === 0 ? 0 : 1);

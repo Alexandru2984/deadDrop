@@ -16,6 +16,7 @@
 import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 import { zip } from './lib/zip.mjs';
 import { scrubFile } from '../web/js/scrub.js';
+import { readFileSync } from 'node:fs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITES = [process.env.DD_INVITE || '', process.env.DD_INVITE2 || ''];
@@ -732,9 +733,8 @@ if (webpCheck?.skipped) console.log('  - WebP chunk cleaning: this browser canno
 else ok(webpCheck.size === '24x16' && !webpCheck.alice && webpCheck.vp8Kept,
   `a WebP loses its EXIF and XMP without being re-encoded, and still decodes (${JSON.stringify(webpCheck)})`);
 
-// A photo a canvas reads but cannot write — HEIC, AVIF — leaves as a clean
-// JPEG. (A PNG under a HEIC label stands in here: what decodes it is the
-// browser's sniffing, and Chromium has no HEIC decoder to show this with.)
+// A real AVIF exercises conversion to JPEG. A PNG disguised as HEIC must be
+// refused by the signature check, rather than relying on the decoder's sniffing.
 const pick = (peer, make, name, type) => peer.eval(`(async () => {
   const blob = await (${make})();
   const input = document.querySelector('#file-input');
@@ -749,20 +749,33 @@ const pngMaker = `async () => {
   c.getContext('2d').fillRect(0, 0, 10, 10);
   return new Promise((r) => c.toBlob(r, 'image/png'));
 }`;
-await pick(alice, pngMaker, 'sunset.heic', 'image/heic');
+await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return true; }; true`);
+await pick(alice, pngMaker, 'mislabeled.heic', 'image/heic');
+await sleep(500);
+ok(!(await bob.receivedFiles()).some((f) => f.name === 'mislabeled.jpg' || f.name === 'mislabeled.heic')
+  && (await alice.eval(`window.__asked.length`)) === 0,
+  'a PNG labelled HEIC is refused without being reported as cleaned or sent as an original');
+const avif = readFileSync(new URL('./vectors/photo.avif', import.meta.url)).toString('base64');
+const avifMaker = `async () => new Blob([Uint8Array.from(atob(${JSON.stringify(avif)}), (c) => c.charCodeAt(0))])`;
+await pick(alice, avifMaker, 'sunset.avif', 'image/avif');
 const converted = await waitFor(async () => (await bob.receivedFiles()).find((f) => f.name === 'sunset.jpg') || false,
   { timeout: 20000 });
-ok(converted, `a HEIC photo leaves as a clean JPEG under its own name (${JSON.stringify(converted)})`);
+ok(converted, `a real AVIF photo leaves as a clean JPEG under its own name (${JSON.stringify(converted)})`);
 // One the browser cannot read is not sent as though it were clean: the
 // person is asked, and nothing goes unless they agree.
 await alice.eval(`window.__asked = []; window.confirm = (q) => { window.__asked.push(q); return false; }; true`);
-await pick(alice, `async () => new Blob(['not really a photo'])`, 'IMG_0001.heic', 'image/heic');
+// A HEIC container signature with no decodable image: select the intended
+// decoder, which must fail and ask before sending the original.
+const unreadableHeic = `async () => new Blob([new Uint8Array([
+  0,0,0,24, 102,116,121,112, 104,101,105,99, 0,0,0,0, 104,101,105,99, 109,105,102,49,
+])])`;
+await pick(alice, unreadableHeic, 'IMG_0001.heic', 'image/heic');
 await sleep(1500);
 const askedNo = await alice.eval(`window.__asked.length`);
 ok(askedNo === 1 && !(await bob.receivedFiles()).some((f) => f.name === 'IMG_0001.heic'),
   'an unreadable HEIC asks first, and is not sent when declined');
 await alice.eval(`window.confirm = () => true; true`);
-await pick(alice, `async () => new Blob(['not really a photo'])`, 'IMG_0002.heic', 'image/heic');
+await pick(alice, unreadableHeic, 'IMG_0002.heic', 'image/heic');
 ok(await waitFor(async () => (await bob.receivedFiles()).some((f) => f.name === 'IMG_0002.heic'), { timeout: 20000 }),
   'and goes as it is when the person agrees');
 const noteOf = (peer, name) => peer.eval(`(() => {

@@ -43,6 +43,9 @@ const CONVERTED = new Set(['image/heic', 'image/heif', 'image/avif', 'image/tiff
 // Some systems hand over a HEIC photo, or a document, with no type at all, or
 // only as "some bytes".
 const BY_EXTENSION = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif',
+  mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/mp4', '3gp': 'video/3gpp',
+  m4a: 'audio/mp4',
   heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', tif: 'image/tiff', tiff: 'image/tiff',
   ...DOCUMENT_EXTENSIONS,
   pdf: 'application/pdf',
@@ -102,12 +105,44 @@ export function isScrubbable(file) {
  * back with a `kept` note when comments, changes or hidden parts are left in
  * it; with `removeKept`, those that can be are taken out first.
  */
-export function scrubFile(file, { removeKept = false } = {}) {
+export async function scrubFile(file, { removeKept = false } = {}) {
   const type = typeOf(file);
+  if (!isScrubbable(file)) return file;
+  // MIME labels and extensions select a cleaner; neither proves what the file
+  // contains. Refuse a mismatch before a permissive decoder can reinterpret it
+  // and report an unrelated format as cleaned.
+  const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+  if (!matchesType(head, type)) throw new Error('File content does not match its type');
   if (MOVIES.has(type)) return scrubMovie(file);
   if (DOCUMENTS.has(type)) return scrubDocument(file, type, { removeKept });
   if (type === 'application/pdf') return scrubPdf(file, { removeKept });
   return scrubImage(file);
+}
+
+function matchesType(bytes, type) {
+  const starts = (values) => values.every((v, i) => bytes[i] === v);
+  const text = new TextDecoder('latin1').decode(bytes);
+  if (type === 'image/jpeg') return starts([0xff, 0xd8, 0xff]);
+  if (type === 'image/png') return starts([137, 80, 78, 71, 13, 10, 26, 10]);
+  if (type === 'image/gif') return /^GIF8[79]a/.test(text);
+  if (type === 'image/webp') return text.startsWith('RIFF') && text.slice(8, 12) === 'WEBP';
+  if (type === 'image/tiff') return starts([0x49, 0x49, 42, 0]) || starts([0x4d, 0x4d, 0, 42]);
+  if (type === 'image/heic' || type === 'image/heif' || type === 'image/avif') {
+    if (text.slice(4, 8) !== 'ftyp' || bytes.length < 16) return false;
+    const brands = [text.slice(8, 12)];
+    const end = Math.min(new DataView(bytes.buffer).getUint32(0), bytes.length);
+    for (let i = 16; i + 4 <= end; i += 4) brands.push(text.slice(i, i + 4));
+    return type === 'image/avif' ? brands.some((b) => b === 'avif' || b === 'avis')
+      : brands.some((b) => /^(?:hei[cfmsx]|hev[cmsx]|mif1|msf1)$/.test(b));
+  }
+  if (MOVIES.has(type)) return bytes.length >= 8 && /^(?:ftyp|moov|mdat|wide|free|skip)$/.test(text.slice(4, 8));
+  if (type === 'application/pdf') return text.slice(0, 1024).includes('%PDF-');
+  if (DOCUMENTS.has(type)) {
+    // Encrypted Office files use OLE, which the document cleaner reports as
+    // unreadable and asks about; they must never be labelled as cleaned.
+    return starts([0x50, 0x4b, 3, 4]) || starts([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  }
+  return false;
 }
 
 // Boxes that hold nothing but description: where, when, which device.
@@ -124,7 +159,7 @@ const FREE = [0x66, 0x72, 0x65, 0x65];
  * breaking the promise, as with an image that cannot be rewritten.
  */
 export async function scrubMovie(file) {
-  const type = String(file.type).toLowerCase();
+  const type = typeOf(file);
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (!blankBoxes(bytes, 0, bytes.length, 0).has('moov')) throw new Error('no movie box');
   return new File([bytes], scrubbedName(file.name, type), { type, lastModified: 0 });
