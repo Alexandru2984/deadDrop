@@ -15,7 +15,7 @@
  */
 
 import { DriverPeer, launchDriver } from './lib/webdriver.mjs';
-import { waitFor } from './lib/browser.mjs';
+import { chooseDirectTransport, waitFor } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITE = process.env.DD_INVITE || '';
@@ -65,6 +65,7 @@ try {
 
   ok(await peer.register(`zz_wk_${suffix}`, INVITE, PASS), 'an account can be registered');
 
+  await chooseDirectTransport(peer);
   await peer.eval(`(() => { document.querySelector('#create-room').click(); return true; })()`);
   const room = await waitFor(async () => {
     const code = await peer.eval(`document.querySelector('#room-code').textContent`);

@@ -19,7 +19,7 @@
 
 import { DriverPeer, launchDriver } from './lib/webdriver.mjs';
 import { existsSync } from 'node:fs';
-import { waitFor } from './lib/browser.mjs';
+import { chooseDirectTransport, waitFor } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITES = [process.env.DD_INVITE || '', process.env.DD_INVITE2 || ''];
@@ -87,6 +87,8 @@ try {
   ok(await alice.register(USERS[0], INVITES[0], PASS), 'peer A registers');
   ok(await bob.register(USERS[1], INVITES[1], PASS), 'peer B registers');
 
+  await chooseDirectTransport(alice);
+  await chooseDirectTransport(bob);
   await alice.eval(`(() => { document.querySelector('#create-room').click(); return true; })()`);
   const room = await waitFor(async () => {
     const code = await alice.eval(`document.querySelector('#room-code').textContent`);

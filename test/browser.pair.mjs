@@ -13,7 +13,7 @@
  * session without comparing anything again.
  */
 
-import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
+import { chooseDirectTransport, Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 import { zip } from './lib/zip.mjs';
 import { scrubFile } from '../web/js/scrub.js';
 import { readFileSync } from 'node:fs';
@@ -58,6 +58,8 @@ ok(await bob.register(USERS[1], INVITES[1], PASS), 'peer B registers');
 await alice.enableSavedContacts();
 await bob.enableSavedContacts();
 
+await chooseDirectTransport(alice);
+await chooseDirectTransport(bob);
 await alice.eval(`document.querySelector('#create-room').click(); true`);
 const room = await waitFor(async () => {
   const code = await alice.eval(`document.querySelector('#room-code').textContent`);
@@ -1133,6 +1135,8 @@ await bob.goto(BASE + '/');
 await waitFor(() => alice.eval(`!document.querySelector('#landing').classList.contains('hidden')`));
 await waitFor(() => bob.eval(`!document.querySelector('#landing').classList.contains('hidden')`));
 
+await chooseDirectTransport(alice);
+await chooseDirectTransport(bob);
 await alice.eval(`document.querySelector('#create-room').click(); true`);
 const room2 = await waitFor(async () => {
   const code = await alice.eval(`document.querySelector('#room-code').textContent`);

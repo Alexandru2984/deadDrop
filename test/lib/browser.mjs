@@ -23,6 +23,18 @@ export const CHROME_CANDIDATES = [
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Local CI has no TURN server. Transport suites deliberately opt into direct
+// connections; the privacy suite keeps the protective default to test refusal.
+// This works with CDP, BiDi and WebDriver peers, which all expose eval().
+export function chooseDirectTransport(peer) {
+  return peer.eval(`(() => {
+    const toggle = document.querySelector('#relay-toggle');
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+}
+
 export async function waitFor(fn, { timeout = 20000, interval = 150 } = {}) {
   const deadline = Date.now() + timeout;
   for (;;) {

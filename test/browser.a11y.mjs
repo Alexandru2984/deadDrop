@@ -15,7 +15,7 @@
  * as "skull".
  */
 
-import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
+import { chooseDirectTransport, Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITE = process.env.DD_INVITE || '';
@@ -147,6 +147,7 @@ ok(await waitFor(() => peer.eval(
   `!document.querySelector('#landing').classList.contains('hidden')`)),
   'dismissing a dialog with Escape never counts toward the panic wipe');
 
+await chooseDirectTransport(peer);
 await peer.eval(`document.querySelector('#create-room').click(); true`);
 ok(await waitFor(() => peer.inChat()), 'a room opens');
 

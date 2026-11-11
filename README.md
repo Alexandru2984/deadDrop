@@ -221,7 +221,9 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   cannot be refused. They cannot wipe the peer, infrastructure logs,
   browser/OS forensic traces, or anything already copied.
 - “Relay-only” hides each endpoint's network address from the other peer when
-  TURN works. The TURN/VPS operator still sees both endpoint IPs and timing.
+  TURN works. Missing or expired relay configuration blocks a new connection
+  while this option is on; direct transport requires explicitly turning it off.
+  The TURN/VPS operator still sees both endpoint IPs and timing.
 - Rate limiting and login lockout key on an HMAC of the source address under a
   per-process secret that is never persisted, so those in-memory maps are not a
   standing list of who used the service. This is not a defence against an
@@ -286,6 +288,8 @@ ALLOW_LOCAL_ORIGINS=1 OPEN_REGISTRATION=1 ./deaddrop
 Open two tabs at the displayed loopback URL, register test handles, create/join a
 room, compare the safety code over a separate trusted path, and have both tabs
 confirm it. Messaging, files, and calls stay locked until mutual confirmation.
+For local development without TURN, explicitly turn off “Hide IP from peer” in
+both tabs before creating or joining a room. The default never falls back to direct.
 
 ## Project structure
 

@@ -14,7 +14,7 @@
  * three safety codes pair up correctly and are all different from each other.
  */
 
-import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
+import { chooseDirectTransport, Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITES = [
@@ -70,6 +70,9 @@ for (let i = 0; i < 3; i++) {
 }
 const [a, b, c] = peers;
 
+await chooseDirectTransport(a);
+await chooseDirectTransport(b);
+await chooseDirectTransport(c);
 await a.eval(`document.querySelector('#create-room').click(); true`);
 const room = await waitFor(async () => {
   const code = await a.eval(`document.querySelector('#room-code').textContent`);

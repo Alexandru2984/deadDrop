@@ -14,6 +14,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { chooseDirectTransport } from './lib/browser.mjs';
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -398,6 +399,8 @@ await sessionEval(`
   })()
 `);
 
+await chooseDirectTransport({ eval: sessionEval });
+
 // A join the server refuses — here, by sending it a malformed code — returns to
 // the landing page with the reason, instead of leaving an empty chat view
 // whose header holds the only clue.
@@ -563,6 +566,8 @@ await sessionEval(`(() => {
 await sessionEval(`location.reload(); true`);
 await waitFor(async () => sessionEval(
   `!document.querySelector('#landing').classList.contains('hidden')`).catch(() => false), { timeout: 20000 });
+
+await chooseDirectTransport({ eval: sessionEval });
 
 // Enter a room so the chat view, header and verify bar all render. Tapped
 // twice, as an impatient thumb on a slow connection does: that used to make

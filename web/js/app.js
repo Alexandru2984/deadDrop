@@ -223,7 +223,7 @@ class DeadDrop {
     this.iceConfig = { iceServers: [] };
     this._iceExpiresAt = 0;
     // On by default: a direct connection hands the other person your IP
-    // address. Falls back to direct only when no relay is configured, and says so.
+    // address. A missing relay blocks connection until the user chooses direct.
     this._relayOnly = getPref('relayOnly');
     this._coverEnabled = getPref('coverTraffic'); // decoy traffic to mask when real chatting happens
     this._coverTimer = null;
@@ -1084,6 +1084,11 @@ class DeadDrop {
 
   async _createRoom() {
     this._landingError('');
+    await this._loadIceServers();
+    if (this._relayOnly && !this._hasRelay()) {
+      this._landingError(t('warn.noRelay'));
+      return;
+    }
     // Request a server-generated room code (stronger entropy)
     try {
       const res = await fetch('/api/room', { method: 'POST' });
@@ -1097,7 +1102,6 @@ class DeadDrop {
       this._landingError(t('err.roomCreate'));
       return;
     }
-    await this._loadIceServers();
     try {
       await this._connectSignaling();
       this._joinPending = true;
@@ -1191,6 +1195,10 @@ class DeadDrop {
       return;
     }
     await this._loadIceServers();
+    if (this._relayOnly && !this._hasRelay()) {
+      this._landingError(t('warn.noRelay'));
+      return;
+    }
     try {
       await this._connectSignaling();
     } catch {
@@ -1428,13 +1436,20 @@ class DeadDrop {
     if (this.peers.size >= MAX_REMOTE_PEERS) {
       throw new Error('Room peer limit exceeded');
     }
+    if (this._relayOnly && !this._hasRelay()) {
+      if (!this._warnedNoRelay) {
+        this._warnedNoRelay = true;
+        this._renderSystem(t('warn.noRelay'));
+      }
+      throw new Error('A relay is required by the privacy setting');
+    }
     const cryptoLayer = new CryptoLayer();
     const conn = new PeerConnection(
       { send: (o) => this.ws.send(JSON.stringify(o)) },
       cryptoLayer,
       (m) => this._onPeerMessage(peerId, m),
       (state, sas) => this._onConnState(peerId, state, sas),
-      { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly && this._hasRelay() },
+      { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly },
       this.identity,
     );
     conn.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
@@ -1553,13 +1568,8 @@ class DeadDrop {
   }
 
   _hasRelay() {
-    const relay = this.iceConfig.iceServers.some((server) => [server.urls].flat()
+    return this.iceConfig.iceServers.some((server) => [server.urls].flat()
       .some((url) => /^turns?:/.test(String(url))));
-    if (!relay && this._relayOnly && !this._warnedNoRelay) {
-      this._warnedNoRelay = true;
-      this._renderSystem(t('warn.noRelay'));
-    }
-    return relay;
   }
 
   /** Fetch self-hosted STUN/TURN ICE servers (with an ephemeral credential). */
@@ -1575,7 +1585,7 @@ class DeadDrop {
       const clean = sanitizeIceConfig(JSON.parse(raw));
       this.iceConfig.iceServers = clean.iceServers;
       this._iceExpiresAt = Date.now() + clean.ttl * 1000;
-    } catch { /* keep host candidates only */ }
+    } catch { /* relay-only remains blocked without valid relay credentials */ }
   }
 
   /* ── P2P connection state ── */

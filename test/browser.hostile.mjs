@@ -16,7 +16,7 @@
  * Every assertion below is about B.
  */
 
-import { Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
+import { chooseDirectTransport, Peer, launchBrowser, waitFor, sleep } from './lib/browser.mjs';
 
 const BASE = process.env.DD_URL || 'http://127.0.0.1:8100';
 const INVITES = [process.env.DD_INVITE || '', process.env.DD_INVITE2 || ''];
@@ -54,6 +54,8 @@ ok(await mallory.eval('!!window.__ddApp'), 'the patched client is running');
 ok(await mallory.register(USERS[0], INVITES[0], PASS), 'the hostile peer registers');
 ok(await bob.register(USERS[1], INVITES[1], PASS), 'peer B registers');
 
+await chooseDirectTransport(mallory);
+await chooseDirectTransport(bob);
 await mallory.eval(`document.querySelector('#create-room').click(); true`);
 const room = await waitFor(async () => {
   const code = await mallory.eval(`document.querySelector('#room-code').textContent`);
