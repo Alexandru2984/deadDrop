@@ -1241,10 +1241,15 @@ ok(shortAfter < 4, `and when the window shrinks, as a keyboard makes it, the end
 await bob.eval(`document.querySelector('#messages').scrollTop = 0; true`);
 await sleep(200);
 await alice.sendGeneratedImage(300, 1000, 'readback.png');
+ok(await waitFor(() => bob.eval(`!!document.querySelector('.msg.theirs img[alt="readback.png"]')`),
+  { timeout: 40000 }), 'a picture arrives while the reader is higher in the conversation');
+// Preview loading is lazy. Request this offscreen decode explicitly rather
+// than depending on the browser's distance and network heuristics.
+await bob.eval(`document.querySelector('.msg.theirs img[alt="readback.png"]').loading = 'eager'; true`);
 ok(await waitFor(() => bob.eval(`(() => {
-  const last = [...document.querySelectorAll('.msg.theirs .file-preview-img')].at(-1);
+  const last = document.querySelector('.msg.theirs img[alt="readback.png"]');
   return !!last && last.complete && last.naturalHeight === 1000;
-})()`), { timeout: 40000 }), 'a picture also loads while the reader is higher in the conversation');
+})()`), { timeout: 40000 }), 'the offscreen preview decodes when explicitly requested');
 await sleep(300);
 ok(await bob.eval(`document.querySelector('#messages').scrollTop < 50
   && !document.querySelector('#jump-new').classList.contains('hidden')`),
