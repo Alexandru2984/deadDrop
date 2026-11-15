@@ -441,7 +441,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("embedded bundle: %v", err)
 	}
-	handler := middleware.SecurityHeaders(mux, importMaps...)
+	// Outermost after the headers, so a request another site made a browser
+	// send is refused before a limiter can charge it to the visitor.
+	handler := middleware.SecurityHeaders(middleware.RefuseForeignRequests(mux), importMaps...)
 	// The onion listener serves `handler` directly; only the clearnet one
 	// advertises the onion, since an onion visitor is already there.
 	clearnet := handler

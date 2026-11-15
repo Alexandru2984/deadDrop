@@ -6,6 +6,62 @@ import (
 	"strings"
 )
 
+// RefuseForeignRequests turns away API and signaling requests that a browser
+// sent on another site's behalf, before any limiter or handler counts them.
+//
+// The limiters are keyed by the visitor's address or account, and they used to
+// run first. A page on any other site could therefore spend them: fifteen
+// forged POSTs to the sign-in route were each refused with 403, and the
+// sixteenth — the visitor's own sign-in — was answered 429. Repeated ten times
+// a minute from a tab left open, that kept a person, and everyone sharing
+// their address, out of the service without ever touching their account. A
+// sibling subdomain could do the same to the per-account signaling and TURN
+// allowances, since SameSite cookies travel within one site.
+//
+// Nothing here is a credential check. It only decides whose request this is,
+// so that a request made by somebody else is not billed to the visitor.
+// Static pages stay reachable from anywhere: links to them are the point.
+func RefuseForeignRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isProgrammaticPath(r.URL.Path) && foreignBrowserRequest(r) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"forbidden origin"}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isProgrammaticPath(path string) bool {
+	return path == "/ws" || strings.HasPrefix(path, "/api/")
+}
+
+// foreignBrowserRequest reports whether a browser says another site caused
+// this request. Clients that send neither header — monitors, the CLI, the
+// e2e suites — are not browsers acting for a third party and pass through to
+// the per-route checks.
+func foreignBrowserRequest(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return false
+	case "none":
+		// The user typed the address or used a bookmark. No page can cause it.
+		return false
+	case "":
+		// Older browsers, and WebSocket handshakes in some current ones, send no
+		// fetch metadata. Every WebSocket handshake and every CORS or POST
+		// request still carries Origin.
+		if origin := r.Header.Get("Origin"); origin != "" {
+			return !originHostMatches(r, origin)
+		}
+		return false
+	default:
+		// cross-site, same-site, or a value no browser sends.
+		return true
+	}
+}
+
 // RequireSameOrigin rejects unsafe browser requests from other origins.
 func RequireSameOrigin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -593,3 +593,97 @@ func TestAccountTagIsOpaqueAndApartFromClientTags(t *testing.T) {
 		t.Fatal("an account named like an address shares that address's bucket")
 	}
 }
+
+func TestRefuseForeignRequestsDecidesBeforeTheLimiter(t *testing.T) {
+	// One token: if a foreign request reaches the limiter, the visitor's own
+	// request after it is the one that gets 429.
+	limiter := NewRateLimiter(1, 1, time.Hour)
+	reached := 0
+	handler := RefuseForeignRequests(limiter.Wrap(func(w http.ResponseWriter, r *http.Request) {
+		reached++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	foreign := []struct {
+		name, method, path string
+		headers            map[string]string
+	}{
+		{"cross-site form post", http.MethodPost, "/api/srp/challenge", map[string]string{
+			"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors", "Origin": "https://evil.example"}},
+		{"cross-site image", http.MethodGet, "/api/health", map[string]string{
+			"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"}},
+		{"sibling subdomain fetch", http.MethodGet, "/api/turn", map[string]string{
+			"Sec-Fetch-Site": "same-site", "Origin": "https://other.micutu.com"}},
+		{"sibling websocket without fetch metadata", http.MethodGet, "/ws", map[string]string{
+			"Origin": "https://other.micutu.com", "Upgrade": "websocket"}},
+		{"old browser cross-origin post", http.MethodPost, "/api/srp/authenticate", map[string]string{
+			"Origin": "https://evil.example"}},
+		{"opaque origin", http.MethodPost, "/api/srp/register", map[string]string{
+			"Origin": "null"}},
+		{"same host over plain http", http.MethodPost, "/api/logout", map[string]string{
+			"Origin": "http://dead.micutu.com"}},
+		{"fetch metadata no browser sends", http.MethodGet, "/api/me", map[string]string{
+			"Sec-Fetch-Site": "SAME-ORIGIN "}},
+	}
+	for _, tc := range foreign {
+		req := httptest.NewRequest(tc.method, "https://dead.micutu.com"+tc.path, nil)
+		req.RemoteAddr = "203.0.113.7:4444"
+		for k, v := range tc.headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s: status = %d, want 403", tc.name, rec.Code)
+		}
+	}
+	if reached != 0 {
+		t.Fatalf("%d foreign request(s) reached the handler", reached)
+	}
+
+	own := httptest.NewRequest(http.MethodPost, "https://dead.micutu.com/api/srp/challenge", nil)
+	own.RemoteAddr = "203.0.113.7:5555"
+	own.Header.Set("Sec-Fetch-Site", "same-origin")
+	own.Header.Set("Origin", "https://dead.micutu.com")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, own)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("the visitor's own request after the foreign ones = %d, want 204", rec.Code)
+	}
+}
+
+func TestRefuseForeignRequestsLetsOrdinaryTrafficThrough(t *testing.T) {
+	handler := RefuseForeignRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	allowed := []struct {
+		name, method, url string
+		headers           map[string]string
+	}{
+		{"same-origin fetch", http.MethodGet, "https://dead.micutu.com/api/me", map[string]string{
+			"Sec-Fetch-Site": "same-origin"}},
+		{"address bar", http.MethodGet, "https://dead.micutu.com/api/health", map[string]string{
+			"Sec-Fetch-Site": "none", "Sec-Fetch-Mode": "navigate"}},
+		{"monitor or CLI", http.MethodGet, "https://dead.micutu.com/api/health", nil},
+		{"own websocket without fetch metadata", http.MethodGet, "https://dead.micutu.com/ws", map[string]string{
+			"Origin": "https://dead.micutu.com", "Upgrade": "websocket"}},
+		{"onion websocket", http.MethodGet, "http://exampleonionaddress.onion/ws", map[string]string{
+			"Origin": "http://exampleonionaddress.onion", "Upgrade": "websocket"}},
+		// Pages are meant to be linked to; only the API is scoped.
+		{"link from another site to the home page", http.MethodGet, "https://dead.micutu.com/", map[string]string{
+			"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}},
+		{"link from another site to the guide", http.MethodGet, "https://dead.micutu.com/guide.html", map[string]string{
+			"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}},
+	}
+	for _, tc := range allowed {
+		req := httptest.NewRequest(tc.method, tc.url, nil)
+		for k, v := range tc.headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s: status = %d, want 204", tc.name, rec.Code)
+		}
+	}
+}
