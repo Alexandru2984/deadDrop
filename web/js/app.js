@@ -201,6 +201,29 @@ function needsKdfUpgrade(kdf) {
   return !match || Number(match[1]) < CURRENT_KDF_ITERATIONS;
 }
 
+// A sign-out the server has not confirmed. The cookie is HttpOnly, so only the
+// server can end a session: if it could not be reached, the session lives on
+// there and the cookie stays here, and the next reload would walk straight back
+// in. Only the fact is kept — no name, no token — so the next page finishes the
+// job before it believes that cookie. 'wipe' repeats a panic wipe's request.
+const SIGNOUT_OWED = 'dd_signout_owed';
+
+function signOutOwed() {
+  try {
+    const owed = localStorage.getItem(SIGNOUT_OWED);
+    return owed === 'wipe' || owed === '1' ? owed : null;
+  } catch {
+    return null;
+  }
+}
+
+function setSignOutOwed(owed) {
+  try {
+    if (owed) localStorage.setItem(SIGNOUT_OWED, owed);
+    else localStorage.removeItem(SIGNOUT_OWED);
+  } catch { /* storage may be blocked */ }
+}
+
 class DeadDrop {
   constructor() {
     this.username = null;
@@ -404,6 +427,7 @@ class DeadDrop {
       this._drawStatus();
     });
     this.el.logoutBtn.addEventListener('click', () => this._logout());
+    window.addEventListener('online', () => { if (signOutOwed()) this._retrySignOut(0); });
     this.el.settingsBtn.addEventListener('click', () => {
       this.el.accountPanel.classList.toggle('hidden');
       if (this.el.accountPanel.classList.contains('hidden')) {
@@ -601,6 +625,14 @@ class DeadDrop {
 
   async _checkAuth() {
     const work = this._workScope();
+    if (signOutOwed()) {
+      // The answer asked for on load came from the session being ended.
+      firstAnswer();
+      this._showPage('auth');
+      const done = await this._finishSignOut();
+      if (work.current() && !done) this._showSignOutOwed();
+      return;
+    }
     try {
       const res = await (firstAnswer() ?? fetch('/api/me', { signal: work.signal }));
       if (!work.current()) return;
@@ -638,6 +670,13 @@ class DeadDrop {
     this._hideAuthError();
     this._setAuthBusy(true);
     try {
+      // A sign-out still owed would reach the server after this and end the
+      // session it is about to open.
+      if (!await this._finishSignOut()) {
+        if (work.current()) this._showSignOutOwed();
+        return;
+      }
+      if (!work.current()) return;
       const client = new ClientLogin(username, password);
       const ch = await this._postJSON('/api/srp/challenge', { username, A: client.start().A }, work);
       if (!ch.ok) { this._showAuthError(serverMessage(ch.data.error, 'srv.badLogin')); return; }
@@ -720,6 +759,11 @@ class DeadDrop {
     this._hideAuthError();
     this._setAuthBusy(true);
     try {
+      if (!await this._finishSignOut()) {
+        if (work.current()) this._showSignOutOwed();
+        return;
+      }
+      if (!work.current()) return;
       const { salt, verifier, kdf } = await srpRegister(username, password);
       const res = await this._postJSON('/api/srp/register', { username, salt, verifier, kdf, invite }, work);
       if (res.ok) {
@@ -1001,19 +1045,68 @@ class DeadDrop {
   async _logout() {
     this._disarmIdleLock();
     this._cleanup();
-    await fetch('/api/logout', { method: 'POST' });
+    // This side is signed out now, whatever the network does next. It used to
+    // wait for the server first: offline, the request threw, the page stayed
+    // where it was, and a reload signed the next person at the keyboard back in.
     this.username = null;
     this.el.authUser.value = '';
     this.el.authPass.value = '';
+    setSignOutOwed('1');
     this._showPage('auth');
+    if (!await this._finishSignOut()) this._showSignOutOwed();
+  }
+
+  /** Ask the server to end this browser's session. Resolves true once it has
+   *  answered; one request at a time, so a retry and a sign-in cannot cross. */
+  _finishSignOut() {
+    if (this._signOutAttempt) return this._signOutAttempt;
+    const attempt = (async () => {
+      const owed = signOutOwed();
+      if (!owed) return true;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const res = await fetch(owed === 'wipe' ? '/api/logout?wipe=1' : '/api/logout',
+          { method: 'POST', signal: controller.signal, keepalive: true });
+        if (!res.ok) return false;
+        setSignOutOwed(null);
+        clearTimeout(this._signOutTimer);
+        if (this._signOutNotice) this._hideAuthError();
+        return true;
+      } catch {
+        return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    this._signOutAttempt = attempt;
+    attempt.finally(() => { if (this._signOutAttempt === attempt) this._signOutAttempt = null; });
+    return attempt;
+  }
+
+  /** Say that the server still holds the session, and keep trying to end it. */
+  _showSignOutOwed() {
+    this._showAuthError(t('auth.signOutOwed'));
+    this._signOutNotice = true;
+    this._retrySignOut(5000);
+  }
+
+  _retrySignOut(delay) {
+    clearTimeout(this._signOutTimer);
+    if (!signOutOwed()) return;
+    this._signOutTimer = setTimeout(async () => {
+      if (!await this._finishSignOut()) this._retrySignOut(Math.min(delay * 2, 60_000));
+    }, delay);
   }
 
   _showAuthError(msg) {
+    this._signOutNotice = false;
     this.el.authError.textContent = msg;
     this.el.authError.classList.remove('hidden');
   }
 
   _hideAuthError() {
+    this._signOutNotice = false;
     this.el.authError.classList.add('hidden');
   }
 
@@ -3998,7 +4091,11 @@ class DeadDrop {
     const controller = new AbortController();
     let timer;
     const deadline = new Promise((resolve) => { timer = setTimeout(resolve, 3000); });
-    const logout = fetch('/api/logout?wipe=1', { method: 'POST', signal: controller.signal, keepalive: true });
+    // Owed until the server answers: with no network the session survived the
+    // wipe, and the page that loads next has to end it before anything else.
+    setSignOutOwed('wipe');
+    const logout = fetch('/api/logout?wipe=1', { method: 'POST', signal: controller.signal, keepalive: true })
+      .then((res) => { if (res.ok) setSignOutOwed(null); });
     await Promise.race([Promise.allSettled([clearIdentity(), logout]), deadline]);
     clearTimeout(timer);
     controller.abort();

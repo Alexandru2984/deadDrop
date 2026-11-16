@@ -37,6 +37,7 @@ try {
   let holdRoom = false;
   let roomRequest = null;
   let holdWipe = false;
+  let failLogout = false;
   const errors = [];
   await cdp.send('Fetch.enable', { patterns: [
     { urlPattern: '*/api/turn', requestStage: 'Request' },
@@ -65,6 +66,8 @@ try {
         }, alice.sessionId);
       } else if (holdScrub && request.url.endsWith('/js/scrub.js')) {
         scrubRequest = requestId;
+      } else if (failLogout && request.url.includes('/api/logout')) {
+        await cdp.send('Fetch.failRequest', { requestId, errorReason: 'InternetDisconnected' }, alice.sessionId);
       } else if ((holdScrub || holdWipe) && request.url.includes('/api/logout')) {
         logoutRequest = requestId;
       } else {
@@ -205,6 +208,41 @@ try {
   await sleep(500);
   ok(await alice.eval('window.__privacySockets.length') === socketsAfterLogout,
     'a late room response opens no signaling socket after ordinary logout');
+  await loginAlice();
+
+  // Only the server can end a session: the cookie is HttpOnly. A sign-out that
+  // never reached it used to leave both in place, and the next reload — by
+  // whoever sat down next — was signed in.
+  console.log('signing out while the server cannot be reached');
+  const signedOutPage = `!document.querySelector('#auth').classList.contains('hidden')
+    && document.querySelector('#landing').classList.contains('hidden')`;
+  const owedNotice = `!document.querySelector('#auth-error').classList.contains('hidden')`;
+  const reachableAgain = async () => {
+    failLogout = false;
+    await alice.eval(`window.dispatchEvent(new Event('online')); true`);
+    return waitFor(() => alice.eval(`localStorage.getItem('dd_signout_owed') === null
+      && document.querySelector('#auth-error').classList.contains('hidden')`), { timeout: 15000 });
+  };
+  failLogout = true;
+  await alice.eval(`document.querySelector('#logout-btn').click(); true`);
+  ok(await waitFor(() => alice.eval(`${signedOutPage} && ${owedNotice}`)),
+    'offline, signing out still leaves the app and says the server was not told');
+  await alice.goto(BASE + '/');
+  ok(await waitFor(() => alice.eval(`${signedOutPage} && ${owedNotice}`).catch(() => false)),
+    'a reload does not walk back into the session the server still holds');
+  ok(await reachableAgain(), 'once the server answers, the sign-out is finished and the notice goes');
+  ok(await alice.eval(`fetch('/api/me').then((r) => r.status)`) === 401,
+    'and the server no longer holds the session');
+  await loginAlice();
+
+  failLogout = true;
+  await panic();
+  ok(await waitFor(() => alice.eval(`document.readyState === 'complete'
+    && !window.__privacyPanicDocument && ${signedOutPage} && ${owedNotice}`).catch(() => false), { timeout: 15000 }),
+    'a panic wipe that never reached the server does not reload into a signed-in page');
+  ok(await reachableAgain(), 'and ends that session as soon as the server answers');
+  ok(await alice.eval(`fetch('/api/me').then((r) => r.status)`) === 401,
+    'so nothing of the wiped session is left on either side');
   await loginAlice();
 
   console.log('relay-only fails closed');
