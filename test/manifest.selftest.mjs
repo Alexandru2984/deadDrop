@@ -33,10 +33,6 @@ ok(rejects(`${hash}  index.html\n`, 'omits required path'), 'requires critical a
 ok(rejects(valid, 'too many files', { maxFiles: 1, requiredPaths: [] }), 'enforces a file-count bound');
 ok(rejects('', 'final newline'), 'rejects an empty manifest');
 
-if (failures) {
-  console.error(`\n${failures} manifest self-test(s) failed`);
-  process.exit(1);
-}
 /* ── The required list must keep up with the bundle ── */
 
 // The verifier checks what the manifest lists and nothing else. A file missing
@@ -77,4 +73,10 @@ let refused = false;
 try { parseIntegrityManifest(trimmed); } catch { refused = true; }
 ok(refused, 'a manifest omitting js/srp.js is rejected, not quietly accepted');
 
+// Decided here, after the last check. It used to be decided halfway down, so
+// everything below that point could fail and the run still ended in "passed".
+if (failures) {
+  console.error(`\n${failures} manifest self-test(s) failed`);
+  process.exit(1);
+}
 console.log('\nAll integrity-manifest self-tests passed.');

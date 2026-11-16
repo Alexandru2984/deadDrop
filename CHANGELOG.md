@@ -9,6 +9,14 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## Unreleased
+
+- The public verifier refuses a manifest that leaves out any module. Four were
+  not on its required list — the page's first script and the three that strip
+  location and author data from files — so a manifest omitting them still got a
+  green result. The self-test meant to catch this printed its failure and
+  exited 0; it now fails the build.
+
 ## 0.7.3 — 2026-11-16
 
 **Security update.** Rebuild and redeploy the server, then reload open tabs to

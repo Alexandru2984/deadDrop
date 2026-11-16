@@ -13,18 +13,27 @@
  * which turns a password into an SRP proof, and the whole post-quantum
  * implementation unguarded. `test/manifest.selftest.mjs` now fails when a module
  * exists on disk and is missing here, so the list cannot drift again.
+ *
+ * It drifted again anyway, by four: that test printed its failure and then
+ * exited 0, because the check for failures ran before the checks it was meant
+ * to cover. Among the four were the three that strip location and author data
+ * from files before they are sent.
  */
 export const REQUIRED_INTEGRITY_PATHS = Object.freeze([
   'index.html',
   'js/app.js',
+  'js/boot.js',
   'js/callsignal.js',
   'js/crypto.js',
+  'js/docscrub.js',
   'js/filetransfer.js',
   'js/handshake.js',
   'js/i18n.js',
   'js/identity.js',
+  'js/imagemeta.js',
   'js/manifest.js',
   'js/messages.js',
+  'js/pdfscrub.js',
   'js/peer.js',
   'js/prefs.js',
   'js/scrub.js',
