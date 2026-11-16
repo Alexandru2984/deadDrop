@@ -279,7 +279,12 @@ export class PeerConnection {
       // peer accepts — it was dropped unanswered and the call never connected.
       // A stopped channel is rejected in the next offer and its slot reused
       // after that, so the offer stops growing.
-      for (const transceiver of this.pc.getTransceivers()) {
+      // This runs inside close(), and nothing here may keep the rest of the
+      // teardown from happening: a connection without transceivers — an old
+      // engine, a closed one — has nothing to retire.
+      let transceivers = [];
+      try { transceivers = this.pc.getTransceivers?.() ?? []; } catch (_) { /* closed */ }
+      for (const transceiver of transceivers) {
         if (transceiver.direction === 'stopped') continue;
         try { transceiver.stop(); } catch (_) { /* already gone */ }
       }
