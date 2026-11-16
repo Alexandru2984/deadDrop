@@ -9,6 +9,30 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## 0.8.1 — 2026-11-16
+
+- **A light theme.** Privacy options → Theme: dark, as before, light, or like
+  the device. It is kept in this browser only, with the other switches, and the
+  panic wipe forgets it. Every text colour in it meets WCAG AA on every surface
+  it sits on, checked in a browser for both themes; the call screen and the
+  photo viewer stay dark, since they frame video and pictures.
+- Fix: a room the app said it could not open was joined anyway, in the
+  background, once the server could be reached again — the landing page showed
+  the error while the tab sat in that room. A room that never opened is now
+  forgotten, and only a connection that was actually made is reconnected.
+- Fix: some participants' names were drawn in a colour too faint to read
+  comfortably, as low as 3.3:1 against the background. Every one of the 360
+  possible colours now reads at 4.9:1 or more, in either theme.
+- **Release binaries you can check.** Each release's Linux binaries are built
+  from the tagged commit by a public workflow, which records a signed statement
+  of exactly that in Sigstore's transparency log; `gh attestation verify
+  deaddrop-linux-amd64 --repo Alexandru2984/deadDrop` checks a downloaded one.
+  Release tags can no longer be moved or deleted, nor the main branch's history
+  rewritten.
+- On narrow phones the message timer no longer takes half the composer.
+- Internal: the app and the server's sign-in code are split into files by
+  subject. Nothing they do changed.
+
 ## 0.8.0 — 2026-11-16
 
 - **An install kit, for anyone to run their own.** `install/setup.sh
