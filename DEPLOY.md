@@ -408,7 +408,9 @@ Anyone can check a binary with
 
 Once published, a release cannot change. Rulesets keep `v*` tags from being
 moved or deleted, `main` from being force-pushed or deleted, and releases are
-immutable, so a tag someone checked last month still names the same code. Run
+immutable (from 0.8.0 on; the setting covers only releases published after
+it is turned on), so a tag someone checked last month still names the same
+code and files. Run
 the workflow by hand (Actions → Release → Run workflow, with the tag) only for
 a tag whose release has no binaries yet. Such a run still builds the tagged
 commit, and the binary records it (`go version -m deaddrop-linux-amd64` shows

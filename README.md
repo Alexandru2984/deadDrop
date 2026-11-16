@@ -380,7 +380,9 @@ Release binaries are built by `.github/workflows/release.yml` from the tagged
 commit and attested through Sigstore; `gh attestation verify deaddrop-linux-amd64
 --repo Alexandru2984/deadDrop` (gh 2.49 or later) checks one, and rebuilding the tag with the flags
 in the release notes gives the same bytes. Release tags cannot be moved or
-deleted, and published releases cannot change.
+deleted, and releases from 0.8.0 on are immutable: their files cannot be
+replaced, and `gh release verify-asset <tag> <file>` checks a download against
+GitHub's signed record of the release.
 
 The in-app `/verify.html` page can compare the served manifest with the public
 repository. An in-page check cannot prove the integrity of code already executing,
