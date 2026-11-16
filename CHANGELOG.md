@@ -9,6 +9,20 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## 0.8.2 — 2026-11-16
+
+- Fix: **messages left for an offline contact could be lost for good.** When
+  two saved contacts met, each browser stored two keys for the other at about
+  the same moment — the key to its own inbox, which it handed over, and the key
+  to the other's — and the second write could undo the first. If the lost key
+  was one's own, the contact could leave messages, was told they had been left,
+  and nothing could ever open them; if it was the contact's, there was nobody
+  to leave a message for. Changes to these keys now happen one at a time,
+  across tabs too. Two contacts who met on 0.8.0 or 0.8.1 should meet in a room
+  once more: every meeting hands over fresh keys, which puts it right. A
+  message already left with a lost key cannot be recovered; it expires on the
+  server as usual.
+
 ## 0.8.1 — 2026-11-16
 
 - **A light theme.** Privacy options → Theme: dark, as before, light, or like
