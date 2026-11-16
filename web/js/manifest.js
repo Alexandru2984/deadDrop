@@ -21,6 +21,12 @@
  */
 export const REQUIRED_INTEGRITY_PATHS = Object.freeze([
   'index.html',
+  'js/app-auth.js',
+  'js/app-calls.js',
+  'js/app-drops.js',
+  'js/app-files.js',
+  'js/app-shared.js',
+  'js/app-verify.js',
   'js/app.js',
   'js/boot.js',
   'js/callsignal.js',

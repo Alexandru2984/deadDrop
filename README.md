@@ -353,6 +353,8 @@ deaddrop/
 ├── internal/strictjson/         # unambiguous protocol JSON decoder
 ├── internal/turn/               # short-lived coturn REST credentials
 ├── internal/drop/               # sealed boxes left for an offline contact
+├── web/js/app.js                # the app: rooms, signaling, sessions, messages
+├── web/js/app-*.js              # its other parts: auth, verify, files, calls, drops
 ├── web/js/crypto.js             # pairwise key schedule and AEAD
 ├── web/js/handshake.js          # authenticated hybrid handshake
 ├── web/js/peer.js               # WebRTC, media binding, rekey transport

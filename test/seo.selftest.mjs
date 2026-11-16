@@ -150,7 +150,9 @@ console.log('\nthe app speaks one language at a time');
 // Romanian user got Romanian until something went wrong — including "do not
 // trust this connection", the one message you least want misread. Nothing was
 // watching, which is why they drifted.
-const appjs = readFileSync(join(WEB, 'js/app.js'), 'utf8');
+// The app is one class written across app.js and its app-*.js parts.
+const appjs = readdirSync(join(WEB, 'js')).filter((f) => /^app(-[a-z]+)?\.js$/.test(f))
+  .map((f) => readFileSync(join(WEB, 'js', f), 'utf8')).join('\n');
 const shown = [...appjs.matchAll(
   /(?:_renderSystem|_showAuthError|_showCallStatus)\(\s*(['"])(.*?)\1/g)]
   .map((m) => m[2])
