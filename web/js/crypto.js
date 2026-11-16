@@ -44,6 +44,19 @@ const SAS_EMOJI = [
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
+const PART_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** Where a file part belongs, as authenticated data. Refuses anything that
+ *  could make two different places read the same. */
+function partLabel(fileId, index, total) {
+  if (typeof fileId !== 'string' || !PART_ID_RE.test(fileId)
+      || !Number.isSafeInteger(index) || !Number.isSafeInteger(total)
+      || index < 0 || total < 1 || index >= total) {
+    throw new Error('Invalid file part position');
+  }
+  return `part/${fileId}/${index}/${total}`;
+}
+
 export class CryptoLayer {
   constructor() {
     this.keyPair = null;
@@ -340,6 +353,28 @@ export class CryptoLayer {
     return plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength);
   }
 
+  /* ── File parts ──
+   * A large file travels as numbered parts, each sealed on its own, so that
+   * neither side ever has to hold all of it at once. Each part's place — which
+   * file, which part, out of how many — is bound into its authentication: a
+   * part cannot be moved to another file or another position, and a file cut
+   * short is missing parts the receiver knows to expect. The data channel's
+   * own sequence numbers already refuse reordering and loss; this holds even
+   * without them.
+   */
+
+  async encryptPart(data, fileId, index, total) {
+    const epoch = this.sendEpoch;
+    const { ciphertext, iv } = await this._encryptBytes(
+      data, 'binary', epoch, partLabel(fileId, index, total),
+    );
+    return { ciphertext, iv: bufToB64(iv), epoch };
+  }
+
+  async decryptPart(ciphertext, ivB64, epoch, fileId, index, total) {
+    return this._decryptBytes(ciphertext, ivB64, epoch, 'binary', partLabel(fileId, index, total));
+  }
+
   destroy() {
     this.keyPair = null;
     if (this._myPubRaw) this._myPubRaw.fill(0);
@@ -362,14 +397,14 @@ export class CryptoLayer {
 
   /* ── Private helpers ── */
 
-  async _encryptBytes(data, context, epoch) {
+  async _encryptBytes(data, context, epoch, label = '') {
     const key = this._sendKey(context, epoch);
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
         iv,
-        additionalData: this._aad(context, epoch),
+        additionalData: this._aad(context, epoch, label),
       },
       key,
       data,
@@ -377,7 +412,7 @@ export class CryptoLayer {
     return { ciphertext, iv };
   }
 
-  async _decryptBytes(ciphertext, ivB64, epoch, context) {
+  async _decryptBytes(ciphertext, ivB64, epoch, context, label = '') {
     this._requireEpoch(epoch);
     const key = this._recvKey(context, epoch);
     const iv = decodeIV(ivB64);
@@ -391,7 +426,7 @@ export class CryptoLayer {
       {
         name: 'AES-GCM',
         iv,
-        additionalData: this._aad(context, epoch),
+        additionalData: this._aad(context, epoch, label),
       },
       key,
       ciphertextBytes,
@@ -412,8 +447,9 @@ export class CryptoLayer {
     return key;
   }
 
-  _aad(context, epoch) {
-    return enc.encode(`deaddrop/v6/aead/${context}/epoch/${epoch}`);
+  _aad(context, epoch, label = '') {
+    const base = `deaddrop/v6/aead/${context}/epoch/${epoch}`;
+    return enc.encode(label ? `${base}/${label}` : base);
   }
 
   _checkReplay(context, epoch, ivKey) {

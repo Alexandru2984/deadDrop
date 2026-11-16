@@ -1228,6 +1228,28 @@ select { cursor: pointer; width: auto; }
   padding: 4px 0;
 }
 .file-receiving .file-cancel { align-self: flex-end; }
+.file-receiving-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text);
+}
+
+/* A large file waiting for a yes: what it is, and the two answers. */
+.file-offer-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--dim);
+}
+.file-offer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.file-offer-actions .btn { flex: 1 1 auto; min-height: 36px; }
 
 .progress-bar {
   height: 4px;

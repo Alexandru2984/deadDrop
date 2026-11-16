@@ -154,6 +154,28 @@ async function binary(a, b) {
   const same = new Uint8Array(out).length === 5000 &&
     new Uint8Array(out).every((v, i) => v === new Uint8Array(data)[i]);
   ok(same, 'binary round-trips intact');
+
+  // File parts: each one's place is part of what is authenticated.
+  const fileId = crypto.randomUUID();
+  const other = crypto.randomUUID();
+  const part = crypto.getRandomValues(new Uint8Array(1000));
+  const sealed = await a.encryptPart(part, fileId, 1, 3);
+  const opened = await b.decryptPart(sealed.ciphertext, sealed.iv, sealed.epoch, fileId, 1, 3);
+  ok(opened.length === 1000 && opened.every((v, i) => v === part[i]), 'a file part round-trips intact');
+  const refusedAs = async (label, ...where) => {
+    const again = await a.encryptPart(part, fileId, 1, 3);
+    try { await b.decryptPart(again.ciphertext, again.iv, again.epoch, ...where); ok(false, label); }
+    catch { ok(true, label); }
+  };
+  await refusedAs('a part does not open as part of another file', other, 1, 3);
+  await refusedAs('nor at another position in the same file', fileId, 0, 3);
+  await refusedAs('nor in a file of another length — a file cannot be cut short and still check out', fileId, 1, 2);
+  const whole = await a.encryptBinary(part);
+  try { await b.decryptPart(whole.ciphertext, whole.iv, whole.epoch, fileId, 0, 1); ok(false, 'a whole-file ciphertext does not pass as a part'); }
+  catch { ok(true, 'a whole-file ciphertext does not pass as a part'); }
+  let badPlace = false;
+  try { await a.encryptPart(part, fileId, 3, 3); } catch { badPlace = true; }
+  ok(badPlace, 'a part cannot be sealed for a position past the end');
 }
 
 async function rekeying(a, b) {

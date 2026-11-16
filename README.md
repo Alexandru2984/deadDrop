@@ -74,6 +74,13 @@ changing the client served by an already-built binary.
 - Every sealed envelope carries its position in that direction's stream, inside
   the AEAD. The data channel is reliable and ordered, so a gap or a reordering
   is someone between the peers removing traffic, and it ends the session.
+- Files go as an offer, numbered parts and an end marker. Each 64 KB part is
+  sealed on its own, with the file it belongs to, its position and the total
+  number of parts bound into its authentication, so a part cannot be moved to
+  another file or place and a file cannot be cut short and still check out.
+  The sender reads the file from disk a part at a time and the receiver hands
+  what it decrypts to the browser as it goes; neither holds the whole file in
+  script memory. Files go up to 1 GB.
 - Rooms contain at most six people and form a mesh of independent pairwise
   sessions. There is no group key; each peer must be verified separately.
 - Saved contacts are optional and off by default. While off, nothing that
@@ -180,6 +187,11 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   that it reached them, not that it was read.
 - A file can be stopped by its sender or refused by a receiver while it is
   still on its way; each side drops what had arrived.
+- Nothing of a file larger than 25 MB is sent until the receiver accepts it,
+  so nobody has a gigabyte pushed at them over mobile data unasked; an offer
+  nobody answers lapses after ten minutes. Smaller files arrive as before.
+  A large received file is held by the browser, which may keep it in a
+  temporary file on disk, until the conversation ends.
 - Metadata stripping, on by default, runs on the sender's device before
   encryption. JPEG photos lose EXIF, XMP and anything appended after the
   picture without re-encoding, keeping only the orientation; PNG, WebP and

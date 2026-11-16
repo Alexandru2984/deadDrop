@@ -114,6 +114,9 @@ export async function scrubFile(file, { removeKept = false } = {}) {
   const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
   if (!matchesType(head, type)) throw new Error('File content does not match its type');
   if (MOVIES.has(type)) return scrubMovie(file);
+  if (file.size > MAX_IN_MEMORY_SCRUB) {
+    throw Object.assign(new Error('too large to clean'), { undecodable: true, prompt: 'scrub.tooLarge' });
+  }
   if (DOCUMENTS.has(type)) return scrubDocument(file, type, { removeKept });
   if (type === 'application/pdf') return scrubPdf(file, { removeKept });
   return scrubImage(file);
@@ -152,6 +155,12 @@ const TIMED = new Set(['mvhd', 'tkhd', 'mdhd']);
 // Boxes made only of other boxes, on the way down to the ones above.
 const NESTED = new Set(['moov', 'trak', 'mdia']);
 const FREE = [0x66, 0x72, 0x65, 0x65];
+// A movie's description runs to a few megabytes even for hours of video; one
+// claiming more is not a movie this should read into memory.
+const MAX_MOVIE_BOX = 256 * 1024 * 1024;
+// Pictures and documents are read whole to be cleaned. Past this, cleaning one
+// would take more memory than a phone can spare, so the person is asked.
+const MAX_IN_MEMORY_SCRUB = 256 * 1024 * 1024;
 
 /**
  * Returns `file` with its descriptive boxes blanked in place. Throws when the
@@ -160,9 +169,44 @@ const FREE = [0x66, 0x72, 0x65, 0x65];
  */
 export async function scrubMovie(file) {
   const type = typeOf(file);
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (!blankBoxes(bytes, 0, bytes.length, 0).has('moov')) throw new Error('no movie box');
-  return new File([bytes], scrubbedName(file.name, type), { type, lastModified: 0 });
+  // Only the boxes that describe the movie are read and rewritten; the
+  // pictures and sound, nearly all of a movie, are carried over as slices of
+  // the original file without ever being read into memory. A movie of a
+  // gigabyte costs what its few megabytes of description do.
+  const parts = [];
+  let sawMovie = false;
+  let pos = 0;
+  while (file.size - pos >= 8) {
+    const head = new Uint8Array(await file.slice(pos, pos + 16).arrayBuffer());
+    const view = new DataView(head.buffer);
+    const type4 = String.fromCharCode(...head.subarray(4, 8));
+    let size = view.getUint32(0);
+    let header = 8;
+    if (size === 1) {
+      if (head.length < 16) throw new Error('truncated box');
+      const large = view.getBigUint64(8);
+      if (large > BigInt(file.size - pos)) throw new Error('box overruns its parent');
+      size = Number(large);
+      header = 16;
+    } else if (size === 0) {
+      size = file.size - pos; // runs to the end of the file
+    }
+    if (size < header || size > file.size - pos) throw new Error('malformed box');
+    if (BLANK.has(type4) || TIMED.has(type4) || NESTED.has(type4)) {
+      if (size > MAX_MOVIE_BOX) throw new Error('movie description too large');
+      const box = new Uint8Array(await file.slice(pos, pos + size).arrayBuffer());
+      // The same walk as before, over this one box: what it does to a box
+      // does not depend on anything outside it.
+      if (blankBoxes(box, 0, box.length, 0).has('moov')) sawMovie = true;
+      parts.push(box);
+    } else {
+      parts.push(file.slice(pos, pos + size));
+    }
+    pos += size;
+  }
+  if (pos < file.size) parts.push(file.slice(pos));
+  if (!sawMovie) throw new Error('no movie box');
+  return new File(parts, scrubbedName(file.name, type), { type, lastModified: 0 });
 }
 
 /** Walks the boxes in [start, end); returns the types seen at this level. */

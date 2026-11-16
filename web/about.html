@@ -28,7 +28,7 @@
   <meta name="twitter:description" content="What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — security and privacy model","url":"https://dead.micutu.com/about.html","description":"What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-AcFCSvIi051J7l85mZPUWUuyu3nssF3t4y4Ho3x3+5A=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-htKBxhdsLoQ2bxRYb+fxdVvBIzTgRcS7YL7hdT/Y/hs=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -49,7 +49,7 @@
 
     <h2>What is end-to-end encrypted</h2>
     <ul>
-      <li><strong>Messages, files, and app controls.</strong> Pairwise protocol v6 combines ephemeral P-256 ECDH and ML-KEM-768, derives direction- and context-specific keys with HKDF-SHA256, and seals data with AES-256-GCM. The transcript, role, epoch, and content class are authenticated; replays are rejected.</li>
+      <li><strong>Messages, files, and app controls.</strong> Pairwise protocol v6 combines ephemeral P-256 ECDH and ML-KEM-768, derives direction- and context-specific keys with HKDF-SHA256, and seals data with AES-256-GCM. The transcript, role, epoch, and content class are authenticated; replays are rejected. A file travels in parts sealed one by one, each bound to its file, its position and the number of parts, so none can be moved, swapped or dropped unnoticed; nothing of a file over 25 MB is sent until the receiver accepts it.</li>
       <li><strong>Nothing can be silently removed or reordered.</strong> Every sealed envelope carries its position in the stream inside the encryption. Whoever carries the bytes can still drop or shuffle them, but the receiver notices the gap and ends the session rather than show a conversation with a piece missing.</li>
       <li><strong>The safety code cannot be steered.</strong> It is derived only from values both sides committed to before either revealed its keys, so someone relaying the handshake cannot keep retrying until two sessions happen to show the same emoji.</li>
       <li><strong>Groups are pairwise meshes.</strong> A room holds at most six people and has no group key. Your browser creates a separate handshake, safety code, ratchet, and ciphertext for each recipient. Verify each row independently.</li>

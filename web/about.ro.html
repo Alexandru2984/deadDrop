@@ -28,7 +28,7 @@
   <meta name="twitter:description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — securitate și confidențialitate","inLanguage":"ro","url":"https://dead.micutu.com/about.ro.html","description":"Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-AcFCSvIi051J7l85mZPUWUuyu3nssF3t4y4Ho3x3+5A=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-htKBxhdsLoQ2bxRYb+fxdVvBIzTgRcS7YL7hdT/Y/hs=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -49,7 +49,7 @@
 
     <h2>Ce e criptat end-to-end</h2>
     <ul>
-      <li><strong>Mesajele, fișierele și comenzile aplicației.</strong> Protocolul pereche v6 combină ECDH P-256 efemer cu ML-KEM-768, derivă chei separate pe direcție și pe context cu HKDF-SHA256 și sigilează datele cu AES-256-GCM. Transcrierea, rolul, epoca și tipul conținutului sunt autentificate; reluările sunt respinse.</li>
+      <li><strong>Mesajele, fișierele și comenzile aplicației.</strong> Protocolul pereche v6 combină ECDH P-256 efemer cu ML-KEM-768, derivă chei separate pe direcție și pe context cu HKDF-SHA256 și sigilează datele cu AES-256-GCM. Transcrierea, rolul, epoca și tipul conținutului sunt autentificate; reluările sunt respinse. Un fișier circulă în bucăți sigilate una câte una, fiecare legată de fișierul ei, de poziția ei și de numărul total de bucăți, așa că niciuna nu poate fi mutată, schimbată sau scoasă fără să se observe; nimic dintr-un fișier de peste 25 MB nu se trimite până nu îl acceptă destinatarul.</li>
       <li><strong>Nimic nu poate fi eliminat sau reordonat pe ascuns.</strong> Fiecare plic sigilat își poartă poziția în flux în interiorul criptării. Cine transportă octeții îi poate în continuare arunca sau amesteca, dar destinatarul observă golul și închide sesiunea, în loc să afișeze o conversație cu o bucată lipsă.</li>
       <li><strong>Codul de siguranță nu poate fi dirijat.</strong> E derivat doar din valori pe care ambele părți s-au angajat înainte ca vreuna să-și dezvăluie cheile, așa că cineva care retransmite handshake-ul nu poate reîncerca până când două sesiuni ajung întâmplător să arate aceleași emoji.</li>
       <li><strong>Grupurile sunt rețele de perechi.</strong> O cameră are cel mult șase persoane și nicio cheie de grup. Browserul tău face un handshake, un cod de siguranță, un ratchet și un text cifrat separat pentru fiecare destinatar. Verifică fiecare rând independent.</li>

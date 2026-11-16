@@ -1,6 +1,12 @@
 /** Bounded file-transfer and peer-scoped message lifecycle self-test. */
 
-import { FileTransferManager, assertFileSizeBinding, safeFileMeta } from '../web/js/filetransfer.js';
+import {
+  FileTransferManager, assertFileSizeBinding, safeFileMeta,
+  PART_SIZE, MAX_FILE_SIZE, AUTO_ACCEPT_SIZE, MAX_PART_WIRE_BYTES, SEND_PACE, partsFor,
+} from '../web/js/filetransfer.js';
+import { MAX_BYTES_PER_WINDOW, MAX_MESSAGES_PER_WINDOW, MAX_DATA_CHANNEL_MESSAGE } from '../web/js/peer.js';
+import { CryptoLayer, PROTOCOL_VERSION } from '../web/js/crypto.js';
+import { Handshake } from '../web/js/handshake.js';
 import { MessageManager } from '../web/js/messages.js';
 import { scrubbedName } from '../web/js/scrub.js';
 
@@ -10,94 +16,221 @@ const ok = (condition, message) => {
   else { console.error('  ✗', message); failures++; }
 };
 
-const iv = Buffer.alloc(12).toString('base64');
 const id = () => crypto.randomUUID();
 const rejectsSizeBinding = (...args) => {
   try { assertFileSizeBinding(...args); return false; } catch { return true; }
 };
-const header = (transferId) => ({
-  type: 'file',
-  id: transferId,
-  meta: { ciphertext: 'AA==', iv, epoch: 0 },
-  fileIv: iv,
-  fileEpoch: 0,
-  totalChunks: 1,
-  totalSize: 16,
-  ttl: 0,
-  burnAfterReading: false,
-});
 
-console.log('peer-scoped, bounded inbound files');
-const manager = new FileTransferManager();
-const sharedId = id();
-ok(manager.handleMessage(header(sharedId), 'peer-a')?.event === 'start',
-   'first peer starts a transfer');
-ok(manager.handleMessage(header(sharedId), 'peer-b')?.event === 'start',
-   'same wire ID from a different peer has an independent scope');
-ok(manager.handleMessage(header(sharedId), 'peer-a') === null,
-   'duplicate active ID from the same peer is rejected');
+/** Two crypto layers that completed a real handshake with each other. */
+async function pairedLayers() {
+  const a = new CryptoLayer(), b = new CryptoLayer();
+  const outA = [], outB = [];
+  const hsA = new Handshake(a, (m) => outA.push(m), { onEstablished() {}, onError() {} });
+  const hsB = new Handshake(b, (m) => outB.push(m), { onEstablished() {}, onError() {} });
+  await hsA.start();
+  await hsB.start();
+  for (let guard = 0; guard < 50 && (outA.length || outB.length); guard++) {
+    while (outA.length) await hsB.handle(outA.shift());
+    while (outB.length) await hsA.handle(outB.shift());
+  }
+  if (!a.established || !b.established) throw new Error('handshake did not complete');
+  return { a, b };
+}
 
-const data = Buffer.alloc(16).toString('base64');
-ok(manager.handleMessage({ type: 'file-chunk', id: sharedId, index: 0, data: 'AAAA' }, 'peer-a')?.event === 'error',
-   'wrong-sized encoded chunk aborts and releases the transfer');
-ok(manager.handleMessage(header(sharedId), 'peer-a')?.event === 'start',
-   'peer can start a clean transfer after the rejected one');
-ok(manager.handleMessage({ type: 'file-chunk', id: sharedId, index: 0, data }, 'peer-a')?.received === 1,
-   'canonical chunk is accepted');
-const completed = manager.handleMessage({ type: 'file-end', id: sharedId }, 'peer-a');
-ok(completed?.event === 'complete' && completed.scope === 'peer-a',
-   'completed ciphertext retains its authenticated peer scope');
-new Uint8Array(completed.ciphertext).fill(0);
+/** A file whose bytes are a function of their position, read lazily. */
+function patterned(size, name = 'data.bin', type = 'application/octet-stream') {
+  const bytes = new Uint8Array(size);
+  for (let i = 0; i < size; i++) bytes[i] = (i * 31 + 7) & 0xff;
+  return new File([bytes], name, { type });
+}
 
-manager.handleMessage({ type: 'file-chunk', id: sharedId, index: 0, data }, 'peer-b');
-manager.handleMessage({ type: 'file-end', id: sharedId }, 'peer-b');
-ok(manager.inbound.size === 0 && manager._reservedInboundBytes === 0,
-   'completed transfers release the global receive budget');
-ok(manager.handleMessage({ ...header('not-a-uuid') }, 'peer-a') === null,
-   'non-canonical transfer IDs are rejected');
+/**
+ * One sender and one receiver joined by an in-order channel. The receiver
+ * does what the app does with each event; `answer` decides offers.
+ */
+function link(cryptoA, cryptoB, { answer = () => 'accept' } = {}) {
+  const sender = new FileTransferManager();
+  const receiver = new FileTransferManager();
+  const wire = [];
+  const events = [];
+  let chain = Promise.resolve();
+  const peer = {
+    dc: { readyState: 'open', bufferedAmount: 0, addEventListener() {}, removeEventListener() {} },
+    async send(message) {
+      wire.push(message);
+      chain = chain.then(async () => {
+        const result = await receiver.handleMessage(structuredClone(message), 'from-a');
+        if (!result) return;
+        events.push(result);
+        if (result.event === 'offer') {
+          const meta = safeFileMeta(JSON.parse(await cryptoB.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch)));
+          const choice = answer(result);
+          if (choice === 'accept' && receiver.accept('from-a', result.id, cryptoB, meta) === 'ok') {
+            sender.accepted('to-b', result.id);
+          } else if (choice === 'refuse') {
+            receiver.decline('from-a', result.id);
+            sender.abortOutbound(result.id, 'to-b');
+          }
+        }
+      });
+      return JSON.stringify(message).length;
+    },
+  };
+  const send = (file, fileId = id()) => sender.send(file, fileId, cryptoA, peer, 0, false, null, 'to-b');
+  return { sender, receiver, wire, events, peer, send, settled: () => chain };
+}
 
-const activeIds = Array.from({ length: 5 }, () => id());
-for (let i = 0; i < 4; i++) manager.handleMessage(header(activeIds[i]), 'peer-a');
-ok(manager.handleMessage(header(activeIds[4]), 'peer-a') === null,
-   'global active-transfer limit rejects the fifth allocation');
-manager.abortScope('peer-a');
-ok(manager.inbound.size === 0 && manager._reservedInboundBytes === 0,
-   'disconnecting a peer wipes its reserved ciphertext buffers');
+const { a, b } = await pairedLayers();
+
+console.log('a file goes in sealed parts, and arrives whole');
+{
+  const size = 3 * PART_SIZE + 123;
+  const file = patterned(size, 'notes.bin');
+  const t = link(a, b);
+  const sent = await t.send(file);
+  await t.settled();
+  ok(sent === true, 'the sender reports the whole file sent');
+  ok(t.wire.map((m) => m.type).join(',') === 'file-offer,file-part,file-part,file-part,file-part,file-done',
+    `an offer, one part per ${PART_SIZE / 1024} KB, and an end marker (${t.wire.map((m) => m.type).join(',')})`);
+  const done = t.events.find((e) => e.event === 'complete');
+  const got = done && new Uint8Array(await done.blob.arrayBuffer());
+  const want = new Uint8Array(await file.arrayBuffer());
+  ok(got && got.length === want.length && got.every((v, i) => v === want[i]),
+    'the received file is byte for byte what was sent');
+  ok(t.receiver.inbound.size === 0 && t.receiver._inboundBytes === 0,
+    'a finished file releases what the receiver had set aside for it');
+  ok(t.wire.filter((m) => m.type === 'file-part').every((m) => !m.data.includes('notes')),
+    'the name is not in any part');
+}
+
+{
+  const t = link(a, b);
+  await t.send(new File([], 'empty.txt', { type: 'text/plain' }));
+  await t.settled();
+  const done = t.events.find((e) => e.event === 'complete');
+  ok(done && done.blob.size === 0 && t.wire.map((m) => m.type).join(',') === 'file-offer,file-done',
+    'an empty file is an offer and an end marker');
+}
+
+console.log('nothing large is sent before the receiver says yes');
+{
+  const big = { size: AUTO_ACCEPT_SIZE + 1, name: 'film.mp4', type: 'video/mp4', slice: () => new Blob([]) };
+  let offered = null;
+  const t = link(a, b, { answer: (offer) => { offered = offer; return 'wait'; } });
+  const fileId = id();
+  const sending = t.send(big, fileId);
+  await new Promise((r) => setTimeout(r, 50));
+  await t.settled();
+  ok(offered?.ask === true, 'an offer above the old limit asks the person');
+  ok(t.wire.length === 1 && t.wire[0].type === 'file-offer', 'and nothing but the offer has gone');
+  ok(t.receiver.offers.size === 1 && t.receiver.inbound.size === 0 && t.receiver._inboundBytes === 0,
+    'an unanswered offer reserves nothing');
+  // The person refuses: the app declines and the sender is told.
+  t.receiver.decline('from-a', fileId);
+  t.sender.abortOutbound(fileId, 'to-b');
+  ok(await sending === false, 'a refused offer ends the send without an error');
+  ok(t.sender.outbound.size === 0, 'and the sender forgets it');
+}
+{
+  let asked = null;
+  const t = link(a, b, { answer: (offer) => { asked = offer.ask; return 'accept'; } });
+  await t.send(patterned(1000));
+  ok(asked === false, 'a small file is taken without asking, as before');
+}
+
+console.log('parts cannot be moved, swapped or cut short');
+{
+  // Part 0 of one file, presented as part 0 of another.
+  const first = link(a, b);
+  await first.send(patterned(2 * PART_SIZE));
+  const stolen = first.wire.find((m) => m.type === 'file-part' && m.index === 0);
+  const victim = id();
+  const r = new FileTransferManager();
+  // Stage an accepted offer for `victim` the way the channel would.
+  const offer = { type: 'file-offer', id: victim, meta: first.wire[0].meta, size: 2 * PART_SIZE, parts: 2, ttl: 0, burnAfterReading: false };
+  await r.handleMessage(offer, 'from-a');
+  r.accept('from-a', victim, b, safeFileMeta({ fileName: 'x', fileType: '', fileSize: 2 * PART_SIZE }));
+  const moved = await r.handleMessage({ ...stolen, id: victim }, 'from-a');
+  ok(moved?.event === 'error' && r.inbound.size === 0,
+    'a part of another file is refused, and the transfer dropped');
+
+  // The right file, the parts out of order.
+  const fileId = id();
+  await r.handleMessage({ ...offer, id: fileId }, 'from-a');
+  r.accept('from-a', fileId, b, safeFileMeta({ fileName: 'x', fileType: '', fileSize: 2 * PART_SIZE }));
+  const parts = [];
+  for (let index = 0; index < 2; index++) {
+    const sealed = await a.encryptPart(new Uint8Array(PART_SIZE), fileId, index, 2);
+    parts.push({ type: 'file-part', id: fileId, index, data: Buffer.from(sealed.ciphertext).toString('base64'), iv: sealed.iv, epoch: sealed.epoch });
+  }
+  const swapped = await r.handleMessage({ ...parts[1], index: 0 }, 'from-a');
+  ok(swapped?.event === 'error', 'a part sent as another position fails to authenticate');
+
+  // Cut short: the end marker before the last part.
+  const cut = id();
+  await r.handleMessage({ ...offer, id: cut }, 'from-a');
+  r.accept('from-a', cut, b, safeFileMeta({ fileName: 'x', fileType: '', fileSize: 2 * PART_SIZE }));
+  const sealed = await a.encryptPart(new Uint8Array(PART_SIZE), cut, 0, 2);
+  await r.handleMessage({ type: 'file-part', id: cut, index: 0, data: Buffer.from(sealed.ciphertext).toString('base64'), iv: sealed.iv, epoch: sealed.epoch }, 'from-a');
+  const early = await r.handleMessage({ type: 'file-done', id: cut }, 'from-a');
+  ok(early?.event === 'error' && r.inbound.size === 0 && r._inboundBytes === 0,
+    'a file that ends early is refused, not delivered short');
+}
+
+console.log('what a peer can make this side hold');
+{
+  const r = new FileTransferManager();
+  const meta = { ciphertext: 'AA==', iv: Buffer.alloc(12).toString('base64'), epoch: 0 };
+  const offerOf = (fileId, size) => ({ type: 'file-offer', id: fileId, meta, size, parts: partsFor(size), ttl: 0, burnAfterReading: false });
+  ok(await r.handleMessage(offerOf(id(), MAX_FILE_SIZE + 1), 'p') === null, 'an offer over the limit is ignored');
+  ok(await r.handleMessage({ ...offerOf(id(), 1000), parts: 2 }, 'p') === null, 'an offer whose part count does not match its size is ignored');
+  ok(await r.handleMessage({ ...offerOf('not-a-uuid', 1000) }, 'p') === null, 'a malformed transfer ID is ignored');
+  const shared = id();
+  ok((await r.handleMessage(offerOf(shared, 1000), 'peer-a'))?.event === 'offer'
+    && (await r.handleMessage(offerOf(shared, 1000), 'peer-b'))?.event === 'offer',
+    'the same ID from two peers is two independent offers');
+  ok(await r.handleMessage(offerOf(shared, 1000), 'peer-a') === null, 'a duplicate from the same peer is ignored');
+  for (let i = 0; i < 6; i++) await r.handleMessage(offerOf(id(), 1000), 'peer-a');
+  ok((await r.handleMessage(offerOf(id(), 1000), 'peer-a'))?.event === 'busy',
+    'past eight unanswered offers, the next is turned away and the sender told');
+  r.abortScope('peer-a');
+  r.abortScope('peer-b');
+  ok(r.offers.size === 0, 'a peer leaving takes its offers with it');
+
+  const bigOne = id(), bigTwo = id();
+  await r.handleMessage(offerOf(bigOne, MAX_FILE_SIZE), 'p');
+  await r.handleMessage(offerOf(bigTwo, MAX_FILE_SIZE), 'p');
+  ok(r.accept('p', bigOne, b, {}) === 'ok', 'one file at the size limit can be accepted');
+  ok(r.accept('p', bigTwo, b, {}) === 'busy' && r.offers.size === 1,
+    'a second one waits: accepting it is refused while the first arrives, and its offer stays');
+  ok(r.discardInbound('p', bigOne) && r._inboundBytes === 0, 'refusing the first releases what it held');
+  ok(r.accept('p', bigTwo, b, {}) === 'ok', 'and the second can then be taken');
+  r.destroyAll();
+  ok(r.inbound.size === 0 && r.offers.size === 0 && r._inboundBytes === 0, 'wiping drops everything');
+}
 
 console.log('authenticated file-size binding');
-assertFileSizeBinding(25, 41, 25);
-ok(true, 'matching metadata, ciphertext tag, and plaintext sizes are accepted');
-ok(rejectsSizeBinding(0, 41, 25),
-   'under-reported metadata cannot bypass the retained-Blob memory budget');
-ok(rejectsSizeBinding(25.5, 41, 25),
-   'fractional file sizes are rejected');
-ok(rejectsSizeBinding(25, 41, 24),
-   'decrypted bytes must exactly match authenticated metadata');
+assertFileSizeBinding(25, 25);
+ok(true, 'metadata that names the offered size is accepted');
+ok(rejectsSizeBinding(0, 25), 'metadata cannot show a size other than the one offered and budgeted');
+ok(rejectsSizeBinding(25.5, 25.5), 'fractional sizes are rejected');
+ok(rejectsSizeBinding(MAX_FILE_SIZE + 1, MAX_FILE_SIZE + 1), 'sizes over the limit are rejected');
 
-console.log('awaited outbound flow');
-const sent = [];
-const fakePeer = {
-  dc: {
-    readyState: 'open',
-    bufferedAmount: 0,
-    addEventListener() {},
-    removeEventListener() {},
-  },
-  async send(message) { sent.push(message); },
-};
-const fakeCrypto = {
-  async encryptBinary() { return { ciphertext: new Uint8Array(16).buffer, iv, epoch: 0 }; },
-  async encrypt() { return { ciphertext: 'AA==', iv, epoch: 0 }; },
-};
-const fakeFile = {
-  size: 0,
-  name: 'empty.txt',
-  type: 'text/plain',
-  async arrayBuffer() { return new ArrayBuffer(0); },
-};
-await manager.send(fakeFile, id(), fakeCrypto, fakePeer, 0, false, null, 'peer-a');
-ok(sent.map((message) => message.type).join(',') === 'file,file-chunk,file-end',
-   'header, every chunk, and end marker are awaited in order');
+console.log('a part fits the channel, and the sender stays under the receiver\'s limit');
+{
+  const fileId = id();
+  const sealed = await a.encryptPart(new Uint8Array(PART_SIZE), fileId, 0, 1);
+  const inner = {
+    type: 'file-part', id: fileId, index: partsFor(MAX_FILE_SIZE) - 1,
+    data: Buffer.from(sealed.ciphertext).toString('base64'), iv: sealed.iv, epoch: 999999,
+  };
+  const outer = await a.seal(inner, a.sendEpoch, Number.MAX_SAFE_INTEGER);
+  const wire = JSON.stringify({ type: 'enc', v: PROTOCOL_VERSION, c: outer.ciphertext, iv: outer.iv, e: outer.epoch }).length;
+  ok(wire <= MAX_PART_WIRE_BYTES, `a full part is ${wire} bytes on the wire, within the ${MAX_PART_WIRE_BYTES} the sender paces by`);
+  ok(MAX_PART_WIRE_BYTES < MAX_DATA_CHANNEL_MESSAGE, 'and within what a receiver accepts in one message');
+  ok(SEND_PACE.bytes <= MAX_BYTES_PER_WINDOW / 2 && SEND_PACE.messages <= MAX_MESSAGES_PER_WINDOW / 2,
+    'a sender paces at most half the receiver\'s limit, so unaligned windows cannot add up past it');
+}
 
 console.log('peer-scoped message destruction');
 const notifications = [];

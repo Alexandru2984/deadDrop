@@ -11,6 +11,13 @@ compare rather than take a hash on trust.
 
 ## Unreleased
 
+- **Files up to 1 GB**, up from 25 MB. A file now travels in 64 KB parts,
+  each sealed on its own with its place in the file bound into it, read from
+  disk and handed to the browser as it goes, so neither side holds the whole
+  of it in memory. Anything over 25 MB is offered first and sent only once the
+  receiver accepts. Movies are cleaned of their metadata without being read
+  into memory; a picture or document too large to clean in the browser is sent
+  only if you agree.
 - **Guest links.** From inside a room you can make a link that lets one person
   in without an account: it works once, within 15 minutes, and stops working
   if you sign out. The guest gets that one room for at most two hours and

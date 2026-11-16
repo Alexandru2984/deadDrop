@@ -10,6 +10,7 @@ import { MessageManager } from './messages.js';
 import {
   FileTransferManager,
   MAX_FILE_SIZE,
+  AUTO_ACCEPT_SIZE,
   assertFileSizeBinding,
   safeFileMeta,
 } from './filetransfer.js';
@@ -243,7 +244,7 @@ class DeadDrop {
     this.identity = null;
     this.msgMgr = null;
     this.fileMgr = new FileTransferManager();
-    this.fileMgr.onTimeout = () => this._syncWakeLock();
+    this.fileMgr.onLapse = (peerId, id, why) => this._onFileLapse(peerId, id, why);
     this.encrypted = false; // true when ≥1 pairwise session is encrypted and SAS-verified
     this.iceConfig = { iceServers: [] };
     this._iceExpiresAt = 0;
@@ -597,6 +598,10 @@ class DeadDrop {
   }
 
   _initMsgManager() {
+    // Received files stay until their message goes; the oldest go first past
+    // this. It has to hold the largest file that can be accepted, or that file
+    // would push itself out the moment it arrived.
+    const budget = { maxBlobBytes: MAX_FILE_SIZE + 4 * AUTO_ACCEPT_SIZE };
     this.msgMgr = new MessageManager((wireId, peerId) => {
       if (peerId) {
         const s = this.peers.get(peerId);
@@ -608,7 +613,7 @@ class DeadDrop {
       for (const s of this._verifiedSessions()) {
         this._sendBestEffort(s.conn, { type: 'delete', id: wireId });
       }
-    });
+    }, budget);
     // Message key → the quotes of it in replies; bubble → its own quote.
     this._quotes = new Map();
     this._quoteOf = new WeakMap();
@@ -2282,7 +2287,7 @@ class DeadDrop {
     // two-gigabyte one would be read whole only to be turned away after.
     // A picture can come out of re-encoding smaller, so it is judged after.
     if (file.size > MAX_FILE_SIZE && !String(file.type).startsWith('image/')) {
-      this._renderSystem(`${t('err.fileTooLarge')} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+      this._renderSystem(`${t('err.fileTooLarge')} — max ${this._fmtSize(MAX_FILE_SIZE)}`);
       return;
     }
     // What the sender is told under their own copy: that it left clean, or
@@ -2345,7 +2350,7 @@ class DeadDrop {
       }
     }
     if (file.size > MAX_FILE_SIZE) {
-      this._renderSystem(`${t('err.fileTooLarge')} — max ${MAX_FILE_SIZE / 1024 / 1024} MB`);
+      this._renderSystem(`${t('err.fileTooLarge')} — max ${this._fmtSize(MAX_FILE_SIZE)}`);
       return;
     }
 
@@ -2362,19 +2367,20 @@ class DeadDrop {
     const blobUrl = URL.createObjectURL(file);
     this._renderFileMsg(id, blobUrl, meta, true, ttl, burn);
 
-    // Fan out to every peer, each copy encrypted with that pair's own keys.
-    // Send sequentially so a group cannot multiply the 25 MB plaintext and
-    // ciphertext buffers in memory for every peer at once.
+    // Fan out to every peer at once, each copy encrypted with that pair's own
+    // keys. A file is read from disk a part at a time for each of them, so a
+    // group no longer multiplies it in memory; and one person slow to accept
+    // a large file does not hold it back from the rest.
     //
-    // The sender's copy appears at once, but on a slow link 25 MB takes a
-    // while to leave; closing the tab before then loses it. Say how far it got.
+    // The sender's copy appears at once, but a large file takes a while to
+    // leave; closing the tab before then loses it. Say how far it got.
     const own = document.getElementById(this._domMessageId(this._messageKey(null, id)));
     if (own && scrubNote) {
       own.querySelector('.file-details')?.after(h('div', {
         class: `file-note${scrubNote === 'file.sentAsIs' ? ' warn' : ''}`, 'data-i18n': scrubNote, text: t(scrubNote),
       }));
     }
-    // On a slow link 25 MB takes minutes; one sent by mistake can be stopped.
+    // A large file takes minutes; one sent by mistake can be stopped.
     // Cancelling withdraws it as a delete for everyone does, which also tells
     // each peer to drop the part that already arrived.
     let cancelled = false;
@@ -2393,32 +2399,55 @@ class DeadDrop {
       ? h('div', { class: 'file-sending' }, progress, cancel)
       : null;
     if (sending) own.append(sending);
-    const results = [];
     this._awaitDelivery(id, targets.map(([peerId]) => peerId));
     this._sendingFiles = (this._sendingFiles || 0) + 1;
     this._syncWakeLock();
-    for (const [index, [peerId, s]] of targets.entries()) {
-      if (cancelled || !current()) break;
-      if (this.peers.get(peerId) !== s || !s.conn.userVerified) continue;
-      const onProgress = sending && ((done, total) => {
-        const pct = Math.min(100, Math.floor(((index + done / total) / targets.length) * 100));
-        progress.textContent = t('file.sending').replace('{pct}', String(pct));
-      });
-      try {
-        await this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn, onProgress, peerId);
-        results.push({ status: 'fulfilled' });
-      } catch (reason) {
-        if (!current()) break;
-        results.push({ status: 'rejected', reason });
-        this._undeliverable(id, peerId);
+    // How far each copy has gone, as a fraction; the note shows the average.
+    const done = new Map(targets.map(([peerId]) => [peerId, 0]));
+    const waiting = new Set();
+    const showProgress = () => {
+      if (!sending) return;
+      if (waiting.size && [...done.values()].every((f) => f === 0)) {
+        progress.dataset.i18n = 'file.waiting';
+        progress.textContent = t('file.waiting');
+        return;
       }
-    }
+      delete progress.dataset.i18n;
+      const pct = Math.min(100, Math.floor(([...done.values()].reduce((a, b) => a + b, 0) / done.size) * 100));
+      progress.textContent = t('file.sending').replace('{pct}', String(pct));
+    };
+    const failures = [];
+    await Promise.all(targets.map(async ([peerId, s]) => {
+      if (cancelled || !current() || this.peers.get(peerId) !== s || !s.conn.userVerified) {
+        this._undeliverable(id, peerId);
+        return;
+      }
+      const onProgress = (sent, total) => {
+        waiting.delete(peerId);
+        done.set(peerId, sent / total);
+        showProgress();
+      };
+      const onWaiting = () => { waiting.add(peerId); showProgress(); };
+      try {
+        await this.fileMgr.send(file, id, s.crypto, s.conn, ttl, burn, onProgress, peerId, onWaiting);
+      } catch (reason) {
+        this._undeliverable(id, peerId);
+        if (!current() || cancelled) return;
+        failures.push({ peerId, s, reason });
+      } finally {
+        waiting.delete(peerId);
+      }
+    }));
     if (this._signalGeneration === generation) this._sendingFiles = Math.max(0, this._sendingFiles - 1);
     this._syncWakeLock();
     sending?.remove();
     if (!current()) return;
-    if (results.some((r) => r.status === 'rejected')) {
-      console.error('File send failed:', results.find((r) => r.status === 'rejected')?.reason);
+    for (const { s, reason } of failures) {
+      if (reason?.code === 'unanswered') this._renderSystem(t('file.unanswered').replace('{peer}', s.label));
+    }
+    const other = failures.find(({ reason }) => reason?.code !== 'unanswered');
+    if (other) {
+      console.error('File send failed:', other.reason);
       this._renderSystem(t('err.fileFailed'));
     }
   }
@@ -2605,6 +2634,11 @@ class DeadDrop {
         this._renderSystem(t('file.refused').replace('{peer}', s.label));
         break;
 
+      case 'file-accept':
+        // Only ever about this peer's own copy of a file we offered it.
+        if (this._validMessageID(msg.id)) this.fileMgr.accepted(peerId, msg.id);
+        break;
+
       case 'read': {
         if (!this._validMessageID(msg.id)) return;
         const own = this._messageKey(null, msg.id);
@@ -2645,21 +2679,25 @@ class DeadDrop {
       }
 
       // ── File transfer messages ──
-      case 'file':
-      case 'file-chunk':
-      case 'file-end': {
+      case 'file-offer':
+      case 'file-part':
+      case 'file-done': {
         let result;
         try {
-          result = this.fileMgr.handleMessage(msg, peerId);
+          result = await this.fileMgr.handleMessage(msg, peerId);
         } catch (err) {
           console.warn('File transfer message rejected:', err);
         } finally {
           this._syncWakeLock();
         }
-        if (!result) break;
+        if (!result || this._wiping || this.peers.get(peerId) !== s) break;
         switch (result.event) {
-          case 'start':
-            this._renderFileProgress(result.id, 0, result.totalChunks, peerId);
+          case 'offer':
+            await this._onFileOffer(result, s, peerId);
+            break;
+          case 'busy':
+            this._sendBestEffort(s.conn, { type: 'file-refuse', id: result.id });
+            this._renderSystem(t('file.busy').replace('{peer}', s.label));
             break;
           case 'progress':
             this._updateFileProgress(result.id, result.received, result.totalChunks, peerId);
@@ -2690,39 +2728,83 @@ class DeadDrop {
     }
   }
 
-  async _onFileComplete(result, s, peerId) {
+  /**
+   * A peer offers a file. Its name and size are read first; a file up to the
+   * old 25 MB limit is taken at once, as it always was, and anything larger
+   * waits for this person to accept it.
+   */
+  async _onFileOffer(offer, s, peerId) {
     const generation = this._signalGeneration;
     const current = () => !this._wiping && this._signalGeneration === generation && this.peers.get(peerId) === s;
-    let fileData;
+    let meta;
     try {
-      // Decrypt metadata
-      const metaJson = await s.crypto.decrypt(result.meta.ciphertext, result.meta.iv, result.meta.epoch);
+      const metaJson = await s.crypto.decrypt(offer.meta.ciphertext, offer.meta.iv, offer.meta.epoch);
       if (!current()) return;
       const rawMeta = JSON.parse(metaJson);
-      assertFileSizeBinding(rawMeta?.fileSize, result.ciphertext.byteLength);
-      const meta = this._sanitizeFileMeta(rawMeta);
+      assertFileSizeBinding(rawMeta?.fileSize, offer.size);
+      meta = this._sanitizeFileMeta(rawMeta);
       if (!meta) throw new Error('Invalid file metadata');
-
-      // Decrypt file data
-      fileData = await s.crypto.decryptBinary(result.ciphertext, result.fileIv, result.fileEpoch);
-      if (!current()) return;
-      assertFileSizeBinding(meta.fileSize, result.ciphertext.byteLength, fileData.byteLength);
-      const blob    = new Blob([fileData], { type: meta.fileType });
-      const blobUrl = URL.createObjectURL(blob);
-
-      // Replace progress placeholder with actual preview
-      this._renderFileComplete(
-        result.id, blobUrl, meta, result.ttl, result.burnAfterReading, s, peerId,
-      );
-      this._sendBestEffort(s.conn, { type: 'got', id: result.id });
     } catch (err) {
       if (!current()) return;
-      console.error('File decryption failed:', err.message);
+      console.error('File offer refused:', err.message);
+      this.fileMgr.decline(peerId, offer.id);
+      this._sendBestEffort(s.conn, { type: 'file-refuse', id: offer.id });
       this._renderSystem(t('err.fileDecrypt'));
-    } finally {
-      new Uint8Array(result.ciphertext).fill(0);
-      if (fileData) new Uint8Array(fileData).fill(0);
+      return;
     }
+    if (offer.ask) {
+      this._renderFileOffer(offer.id, meta, s, peerId);
+      return;
+    }
+    this._acceptFile(offer.id, meta, s, peerId, null);
+  }
+
+  /** Take an offered file: from here its parts are received. */
+  _acceptFile(id, meta, s, peerId, card) {
+    const answer = this.fileMgr.accept(peerId, id, s.crypto, meta);
+    if (answer === 'busy') {
+      // Asked by hand: the question stays, to be answered once the file
+      // already arriving is done. Taken automatically: turned away.
+      if (card) {
+        this._renderSystem(t('file.busyAccept'));
+        return;
+      }
+      this.fileMgr.decline(peerId, id);
+      this._sendBestEffort(s.conn, { type: 'file-refuse', id });
+      this._renderSystem(t('file.busy').replace('{peer}', s.label));
+      return;
+    }
+    if (answer !== 'ok') {
+      card?.remove();
+      return;
+    }
+    this._sendBestEffort(s.conn, { type: 'file-accept', id });
+    this._renderFileProgress(id, 0, 1, peerId, meta);
+    this._syncWakeLock();
+  }
+
+  /** An offer went unanswered, or a file stopped arriving. */
+  _onFileLapse(peerId, id, why) {
+    this._syncWakeLock();
+    const s = this.peers.get(peerId);
+    document.getElementById(this._domMessageId(this._messageKey(peerId, id)))?.remove();
+    if (!s) return;
+    if (why === 'offer') this._renderSystem(t('file.offerLapsed').replace('{peer}', s.label));
+    else this._renderSystem(`⚠️ ${t('err.fileTransfer')}: ${t('file.stalled')}`);
+  }
+
+  async _onFileComplete(result, s, peerId) {
+    const meta = this._sanitizeFileMeta(result.meta);
+    if (!meta || result.blob.size !== meta.fileSize) {
+      this._renderSystem(t('err.fileDecrypt'));
+      return;
+    }
+    const blobUrl = URL.createObjectURL(result.blob);
+    // Replace the progress placeholder with the file itself.
+    this._renderFileComplete(
+      result.id, blobUrl, meta, result.ttl, result.burnAfterReading, s, peerId,
+    );
+    this._sendBestEffort(s.conn, { type: 'got', id: result.id });
   }
 
   /* ── Calls ── */
@@ -3660,17 +3742,22 @@ class DeadDrop {
       split && h('span', { class: 'file-name-ext', text: name.slice(dot) }));
   }
 
-  _renderFileProgress(id, received, total, peerId) {
+  _renderFileProgress(id, received, total, peerId, meta = null) {
     if (!this._validMessageID(id) || !Number.isSafeInteger(total) || total < 1) return;
     const key = this._messageKey(peerId, id);
     const el = document.createElement('div');
     el.className = 'msg theirs file-msg';
     el.id = this._domMessageId(key);
+    // An offer card it answers is replaced where it stands.
+    const offerCard = document.getElementById(el.id);
     el.append(
       // `total` counts transfer chunks, which mean nothing to the reader;
       // the percentage is what is shown and announced.
       h('div', { class: 'file-receiving' },
-        h('span', { text: t('file.receiving') }),
+        meta && meta.fileSize > AUTO_ACCEPT_SIZE
+          ? h('span', { class: 'file-receiving-name' }, this._fileName(meta.fileName),
+            h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) }))
+          : h('span', { 'data-i18n': 'file.receiving', text: t('file.receiving') }),
         h('div', {
           class: 'progress-bar', role: 'progressbar', 'aria-label': t('file.receiving'),
           'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': '0',
@@ -3679,6 +3766,43 @@ class DeadDrop {
         this._refuseButton(id, peerId, el),
       ),
     );
+    this._appendToLog(el, false, offerCard);
+  }
+
+  /**
+   * A file too large to take unasked: what it is, from whom, and the choice.
+   * Nothing of it is sent until this side accepts.
+   */
+  _renderFileOffer(id, meta, s, peerId) {
+    const key = this._messageKey(peerId, id);
+    const el = h('div', { class: 'msg theirs file-msg file-offer', id: this._domMessageId(key) });
+    const accept = h('button', {
+      class: 'btn btn-sm primary file-accept', type: 'button', 'data-i18n': 'file.accept', text: t('file.accept'),
+    });
+    const refuse = h('button', {
+      class: 'btn btn-sm file-decline', type: 'button', 'data-i18n': 'file.decline', text: t('file.decline'),
+    });
+    accept.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (this.peers.get(peerId) !== s) { el.remove(); return; }
+      this._acceptFile(id, meta, s, peerId, el);
+    });
+    refuse.addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.remove();
+      if (!this.fileMgr.decline(peerId, id)) return;
+      if (this.peers.get(peerId) === s) this._sendBestEffort(s.conn, { type: 'file-refuse', id });
+    });
+    appendPresent(el,
+      this._senderTag(false, s),
+      h('div', { class: 'file-details' },
+        h('span', { class: 'file-icon', 'aria-hidden': 'true', text: '📦' }),
+        this._fileName(meta.fileName),
+        h('span', { class: 'file-size', text: this._fmtSize(meta.fileSize) })),
+      h('p', { class: 'file-offer-note', 'data-i18n': 'file.offerNote', text: t('file.offerNote') }),
+      h('div', { class: 'file-offer-actions' }, accept, refuse),
+    );
+    this._applySenderColor(el, s);
     this._appendToLog(el);
   }
 
@@ -4150,7 +4274,8 @@ class DeadDrop {
     if (!Number.isFinite(bytes) || bytes < 0) return '0 B';
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   }
 
   /* ── Cover traffic ──

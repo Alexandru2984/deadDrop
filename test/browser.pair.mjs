@@ -590,6 +590,69 @@ ok(await waitFor(async () => !(await viewerOpen()), { timeout: 10000 }),
 ok(await bob.eval(`!document.querySelector('#image-viewer-img').getAttribute('src') && !document.querySelector('[inert]')`),
   'leaving nothing of it behind, and nothing inert');
 
+// ── A file past the old 25 MB limit ──
+// Offered first, and nothing of it moves until the receiver accepts. Then it
+// streams in sealed parts, read from disk and handed to the browser as it
+// goes, and has to arrive byte for byte.
+const BIG = 26 * 1024 * 1024 + 4321;
+await bob.eval(`(() => {
+  window.__blobs = [];
+  const create = URL.createObjectURL;
+  URL.createObjectURL = (blob) => { window.__blobs.push(blob); return create.call(URL, blob); };
+  return true;
+})()`);
+const offerBig = (name) => alice.eval(`(async () => {
+  const bytes = new Uint8Array(${BIG});
+  for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 2654435761) >>> 24;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  const input = document.querySelector('#file-input');
+  const dt = new DataTransfer();
+  dt.items.add(new File([bytes], ${JSON.stringify(name)}, { type: 'application/octet-stream' }));
+  input.files = dt.files;
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+})()`);
+const sentDigest = await offerBig('archive.bin');
+const card = await waitFor(() => bob.eval(`(() => {
+  const el = document.querySelector('.file-offer');
+  return el ? {
+    name: el.querySelector('.file-name')?.textContent, size: el.querySelector('.file-size')?.textContent,
+    accept: !!el.querySelector('.file-accept'), refuse: !!el.querySelector('.file-decline'),
+    note: el.querySelector('.file-offer-note')?.textContent || '',
+  } : false;
+})()`), { timeout: 20000 });
+ok(card && card.name === 'archive.bin' && /26\.0 MB/.test(card.size) && card.accept && card.refuse,
+  `a file over 25 MB is offered with its name and size, to accept or refuse (${JSON.stringify(card)})`);
+ok(/accept/i.test(card?.note || ''), 'and the offer says nothing is sent until it is accepted');
+ok(await waitFor(() => alice.eval(`/accepted/i.test(document.querySelector('.file-sending')?.textContent || '')`), { timeout: 10000 }),
+  'the sender is told it waits to be accepted');
+await sleep(1500);
+ok(await bob.eval(`!document.querySelector('.progress-bar') && window.__blobs.length === 0`),
+  'and nothing of it arrives while nobody has said yes');
+await bob.eval(`document.querySelector('.file-offer .file-accept').click(); true`);
+const bigArrived = await waitFor(() => bob.eval(`(async () => {
+  const blob = window.__blobs.find((b) => b.size === ${BIG});
+  if (!blob) return false;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+  return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('');
+})()`), { timeout: 120000, interval: 500 });
+ok(bigArrived === sentDigest, `once accepted, it arrives byte for byte (${String(bigArrived).slice(0, 12)}… / ${sentDigest.slice(0, 12)}…)`);
+ok(await waitFor(() => bob.eval(`!document.querySelector('.file-offer') && [...document.querySelectorAll('.file-msg')]
+  .some((el) => el.querySelector('.file-name')?.textContent === 'archive.bin' && el.querySelector('.file-download'))`), { timeout: 10000 }),
+  'the offer turns into the file, ready to save');
+ok(await waitFor(() => alice.eval(`!document.querySelector('.file-sending')`), { timeout: 10000 }),
+  'and the sender\'s note goes once it has all left');
+
+await offerBig('unwanted.bin');
+await waitFor(() => bob.eval(`!!document.querySelector('.file-offer .file-decline')`), { timeout: 20000 });
+await bob.eval(`document.querySelector('.file-offer .file-decline').click(); true`);
+ok(await waitFor(async () => (await alice.notices()).some((n) => /refused/i.test(n)), { timeout: 10000 }),
+  'refusing an offer tells the sender');
+ok(await waitFor(() => alice.eval(`!document.querySelector('.file-sending')`), { timeout: 10000 }),
+  'which stops waiting');
+ok(await bob.eval(`!document.querySelector('.file-offer') && !window.__blobs.some((b) => b.size === ${BIG} && b !== window.__blobs.find((x) => x.size === ${BIG}))`),
+  'and nothing of the refused file arrives');
+
 // A phone photo carries its GPS position in an EXIF block. Build a JPEG with
 // one, run it through the same scrubber the composer uses, and look for it.
 const scrubbed = await alice.eval(`

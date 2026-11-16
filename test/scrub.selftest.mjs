@@ -99,6 +99,31 @@ const largeOut = new TextDecoder('latin1').decode(new Uint8Array(await (await sc
   new File([large], 'a.mp4', { type: 'video/mp4' }))).arrayBuffer()));
 ok(!largeOut.includes(GPS), 'boxes with a 64-bit size are walked as well');
 
+// A long recording: the pictures and sound are carried over without being
+// read. Only the boxes that describe the movie may come into memory.
+{
+  const bulk = new Uint8Array(8 * 1024 * 1024).fill(0x5a);
+  const head = movie.subarray(0, movie.length - media.length - 8);
+  const real = new File([head, new Uint8Array(u32(8 + bulk.length)), enc.encode('mdat'), bulk],
+    'VID_20261014_153212.mp4', { type: 'video/mp4' });
+  let read = 0;
+  const counted = {
+    name: real.name, type: real.type, size: real.size,
+    slice(start, end) {
+      const piece = real.slice(start, end);
+      piece.arrayBuffer = () => { read += piece.size; return Blob.prototype.arrayBuffer.call(piece); };
+      return piece;
+    },
+    arrayBuffer() { read += real.size; return real.arrayBuffer(); },
+  };
+  const cleaned = await scrubMovie(counted);
+  const tail = new Uint8Array(await cleaned.slice(cleaned.size - bulk.length).arrayBuffer());
+  ok(cleaned.size === real.size && tail.every((b) => b === 0x5a), 'a long movie comes out whole, its media untouched');
+  ok(read < 64 * 1024, `and only its description was read — ${read} bytes of ${real.size}`);
+  const cleanedText = new TextDecoder('latin1').decode(new Uint8Array(await cleaned.slice(0, head.length).arrayBuffer()));
+  ok(!cleanedText.includes(GPS) && !cleanedText.includes('Pixel 9'), 'with its location and device gone as before');
+}
+
 // A HEIC photo handed over with no type is still recognised by its name.
 const untyped = new File([new Uint8Array(4)], 'IMG_4021.HEIC', { type: '' });
 ok(typeOf(untyped) === 'image/heic' && isScrubbable(untyped),

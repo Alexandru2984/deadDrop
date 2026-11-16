@@ -12,16 +12,19 @@ import { Handshake } from './handshake.js';
 import { PROTOCOL_VERSION } from './crypto.js';
 import { signTranscript, verifyTranscript, fingerprint } from './identity.js';
 
-const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
+export const MAX_DATA_CHANNEL_MESSAGE = 256 * 1024;
 const REKEY_INTERVAL_MS = 10 * 60 * 1000; // periodic DH key evolution
 const REKEY_TIMEOUT_MS = 30 * 1000;
 const HANDSHAKE_TIMEOUT_MS = 30 * 1000;   // fail an unfinished handshake instead of hanging forever
 // The exchange is four messages; holding a couple covers the open-event race
 // without letting a peer make us buffer on its behalf.
 const MAX_EARLY_KEX = 4;
-const TRAFFIC_WINDOW_MS = 10 * 1000;
-const MAX_MESSAGES_PER_WINDOW = 1500; // accommodates a complete 25 MB file
-const MAX_BYTES_PER_WINDOW = 128 * 1024 * 1024;
+// What a peer may send in ten seconds before the connection is ended as
+// abusive. A file sender paces itself well below this (filetransfer.js), so an
+// honest transfer never comes near it, however fast the link.
+export const TRAFFIC_WINDOW_MS = 10 * 1000;
+export const MAX_MESSAGES_PER_WINDOW = 3000;
+export const MAX_BYTES_PER_WINDOW = 256 * 1024 * 1024;
 
 export class PeerConnection {
   /**
@@ -541,18 +544,22 @@ export class PeerConnection {
     return operation;
   }
 
+  /** Resolves with the size of what went on the wire, which is what the
+   *  other side counts against this connection's traffic limit. */
   async _sendSealedNow(obj, epoch = this.crypto.sendEpoch) {
     if (!this.dc || this.dc.readyState !== 'open') throw new Error('Data channel not open');
     const seq = this._sendSeq++;
     const { ciphertext, iv, epoch: usedEpoch } = await this.crypto.seal(obj, epoch, seq);
     if (!this.dc || this.dc.readyState !== 'open') throw new Error('Data channel closed');
-    this.dc.send(JSON.stringify({
+    const wire = JSON.stringify({
       type: 'enc',
       v: PROTOCOL_VERSION,
       c: ciphertext,
       iv,
       e: usedEpoch,
-    }));
+    });
+    this.dc.send(wire);
+    return wire.length;
   }
 
   _onEstablished(sas) {
