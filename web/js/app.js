@@ -1358,12 +1358,16 @@ class DeadDrop {
       if (work.current()) this._landingError(t('err.roomCreate'));
       return;
     }
+    const created = this.roomCode;
     try {
       await this._connectSignaling();
       if (!work.current()) return;
       this._joinPending = true;
       this.ws.send(JSON.stringify({ type: 'join', room: this.roomCode }));
     } catch {
+      // Not opened, and the person is told so: nothing may go on to join it
+      // behind their back.
+      if (this.roomCode === created) this.roomCode = null;
       if (work.current()) this._landingError(t('err.signaling'));
       return;
     }
@@ -1530,6 +1534,7 @@ class DeadDrop {
       this._signalBytes = 0;
       this._signalQ = Promise.resolve();
       let settled = false;
+      let welcomed = false;
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const socket = new WebSocket(`${proto}//${location.host}/ws`);
       this.ws = socket;
@@ -1563,6 +1568,7 @@ class DeadDrop {
         }
         if (msg.type === 'welcome' && !this.peerId && this._validPeerID(msg.peerId)) {
           this.peerId = msg.peerId;
+          welcomed = true;
           finish();
         }
         if (!this.peerId && msg.type !== 'welcome') return;
@@ -1579,11 +1585,14 @@ class DeadDrop {
         if (generation !== this._signalGeneration || this.ws !== socket) return;
         // The server ended the session on purpose: ask what that means here.
         if (event.reason === 'session revoked') this._recheckSession();
-        if (settled && this.roomCode) this._onSignalingLost();
+        // Only a connection that was made can be lost. One refused or timed
+        // out on the way — a busy server, a rate limit — is reported to
+        // whoever asked for it, which decides what follows. Treating it as
+        // lost rejoined, in the background, a room whose creation had just
+        // been reported as failed.
+        if (welcomed && this.roomCode) this._onSignalingLost();
         else this._setStatus('disconnected', () => t('st.serverLost'));
-        if (!settled) {
-          finish(new Error('WebSocket closed before welcome'));
-        }
+        finish(new Error('WebSocket closed before welcome'));
       };
       socket.onerror = () => {
         clearTimeout(timer);

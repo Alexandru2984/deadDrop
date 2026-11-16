@@ -340,6 +340,58 @@ try {
     .catch(() => false), { timeout: 8000 }), 'a hung logout has a bound and the next page restores protective defaults');
   ok(errors.length === 0 || errors.every((e) => /Invalid InterceptionId|Invalid requestId|Target closed/.test(e)),
     `network interception completed without unexpected errors (${errors.join('; ') || 'none'})`);
+
+  // A signalling connection refused on the way in — a rate limit, a busy
+  // server — was treated as one lost after it was made: the person was told
+  // the room did not open while the app went on to join it behind their back.
+  console.log('a connection that was never made is not one to rejoin');
+  await bob.goto(BASE + '/');
+  await chooseDirectTransport(bob);
+  await bob.eval(`(() => {
+    window.__wsTries = [];
+    window.__joinsSent = [];
+    window.__refuseWs = true;
+    const Native = window.WebSocket;
+    window.WebSocket = class extends Native {
+      constructor(url, protocols) {
+        window.__wsTries.push(Date.now());
+        super(window.__refuseWs ? String(url).replace(/\\/ws$/, '/ws-refused') : url, protocols);
+        window.__wsLast = this;
+        const send = this.send.bind(this);
+        this.send = (data) => {
+          try { const m = JSON.parse(data); if (m.type === 'join') window.__joinsSent.push(m.room); } catch { /* binary */ }
+          return send(data);
+        };
+      }
+    };
+    document.querySelector('#create-room').click();
+    return true;
+  })()`);
+  const refusedNote = await waitFor(() => bob.eval(`(() => {
+    const note = document.querySelector('#landing-error');
+    return !document.querySelector('#landing').classList.contains('hidden') && !note.classList.contains('hidden')
+      && note.textContent ? note.textContent : false;
+  })()`), { timeout: 15000 });
+  ok(refusedNote, `a room whose connection was refused is reported as not opened (${refusedNote || 'nothing shown'})`);
+  // The server would take a connection now; only a join nobody asked for
+  // could use it.
+  await bob.eval(`window.__refuseWs = false; true`);
+  await sleep(6000);
+  const behind = await bob.eval(`({ tries: window.__wsTries.length, joins: window.__joinsSent.length,
+    landing: !document.querySelector('#landing').classList.contains('hidden') })`);
+  ok(behind.tries === 1 && behind.joins === 0 && behind.landing,
+    `and nothing goes on to join it in the background (${JSON.stringify(behind)})`);
+
+  await bob.eval(`document.querySelector('#create-room').click(); true`);
+  ok(await waitFor(() => bob.eval(`document.querySelector('#status').classList.contains('waiting')`), { timeout: 15000 }),
+    'creating a room again afterwards works');
+  await bob.eval(`window.__refuseWs = true; window.__wsTries = []; window.__wsLast.close(); true`);
+  await sleep(11000);
+  const retries = await bob.eval(`window.__wsTries.length`);
+  ok(retries >= 1 && retries <= 3, `a lost connection is retried with a growing wait, not every two seconds (${retries} tries in 11 s)`);
+  await bob.eval(`window.__refuseWs = false; true`);
+  ok(await waitFor(() => bob.eval(`document.querySelector('#status').classList.contains('waiting')`), { timeout: 25000 }),
+    'and the room is rejoined once the server takes the connection again');
 } finally {
   cdp.close();
   cleanup();
