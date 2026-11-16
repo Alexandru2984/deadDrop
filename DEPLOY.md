@@ -410,7 +410,14 @@ Once published, a release cannot change. Rulesets keep `v*` tags from being
 moved or deleted, `main` from being force-pushed or deleted, and releases are
 immutable, so a tag someone checked last month still names the same code. Run
 the workflow by hand (Actions → Release → Run workflow, with the tag) only for
-a tag whose release has no binaries yet.
+a tag whose release has no binaries yet. Such a run still builds the tagged
+commit, and the binary records it (`go version -m deaddrop-linux-amd64` shows
+`vcs.revision`), but its attestation names the branch and commit the workflow
+ran from, not the tag. Only a release started by pushing its tag has a signed
+statement naming the tagged commit itself. 0.8.0's binaries were attached by
+hand like this; every later release is started by its tag.
+
+`gh attestation` needs gh 2.49 or later; distributions' packages can be older.
 
 `deaddrop version` prints both halves because a name alone proves nothing. The
 build is reproducible — the same commit yields the same binary on any machine

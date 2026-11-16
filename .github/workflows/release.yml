@@ -15,6 +15,8 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # For a tag from before this workflow existed. The build is still the tag's
+  # commit, but the attestation names the branch this ran from.
   workflow_dispatch:
     inputs:
       tag:
