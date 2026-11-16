@@ -9,7 +9,7 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
-## Unreleased
+## 0.8.0 — 2026-11-16
 
 - **An install kit, for anyone to run their own.** `install/setup.sh
   chat.example.org --turn <IP>` builds the image, starts the app behind Caddy
