@@ -258,22 +258,112 @@ const views = {
     document.querySelector('#auth').classList.remove('hidden'); true`,
 };
 const lowContrast = [];
-for (const [view, show] of Object.entries(views)) {
-  await peer.eval(show);
-  await sleep(100);
-  for (const issue of await contrastIssues()) lowContrast.push(`${view} → ${issue}`);
+// Both themes: the light one is a second palette, and every token in it has
+// to hold up on every surface the dark one was checked on.
+for (const theme of ['dark', 'light']) {
+  await peer.eval(`document.documentElement.dataset.theme = '${theme}'; true`);
+  for (const [view, show] of Object.entries(views)) {
+    await peer.eval(show);
+    await sleep(100);
+    for (const issue of await contrastIssues()) lowContrast.push(`${theme}, ${view} → ${issue}`);
+  }
+  await peer.eval(`
+    document.querySelector('#auth').classList.add('hidden');
+    document.querySelector('#account-panel').classList.add('hidden');
+    document.querySelector('.prefs').open = false;
+    document.querySelector('#chat-wrap').classList.remove('hidden'); true`);
 }
-await peer.eval(`
-  document.querySelector('#auth').classList.add('hidden');
-  document.querySelector('#account-panel').classList.add('hidden');
-  document.querySelector('.prefs').open = false;
-  document.querySelector('#chat-wrap').classList.remove('hidden'); true`);
 ok(lowContrast.length === 0,
-  `every piece of visible text meets WCAG AA${lowContrast.length ? ': ' + lowContrast.slice(0, 12).join('; ') : ''}`);
+  `every piece of visible text meets WCAG AA, in both themes${lowContrast.length ? ': ' + lowContrast.slice(0, 12).join('; ') : ''}`);
+
+// A peer's name is drawn in a colour of its own, so the check above only ever
+// sees the hues of whoever happened to be in the room. Every hue, then, on
+// every surface a name can sit on.
+const peerHues = (theme) => peer.eval(`
+  (() => {
+    document.documentElement.dataset.theme = '${theme}';
+    const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    const paint = (prop, value) => {
+      const probe = document.createElement('span');
+      probe.style[prop] = value;
+      document.body.append(probe);
+      const got = (getComputedStyle(probe)[prop].match(/\\d+/g) || []).slice(0, 3).map(Number);
+      probe.remove();
+      return got;
+    };
+    const surfaces = ['--bg', '--surface', '--mine', '--theirs'].map((v) => paint('backgroundColor', 'var(' + v + ')'));
+    let worst = Infinity;
+    for (let h = 0; h < 360; h++) {
+      const fg = lum(paint('color', 'hsl(' + h + ', 65%, var(--peer-lightness))'));
+      for (const bg of surfaces) {
+        const b = lum(bg);
+        worst = Math.min(worst, (Math.max(fg, b) + 0.05) / (Math.min(fg, b) + 0.05));
+      }
+    }
+    return worst;
+  })()`);
+for (const theme of ['dark', 'light']) {
+  const worst = await peerHues(theme);
+  ok(worst >= 4.5, `${theme}: every peer's name colour reads at 4.5:1 or more (worst ${worst.toFixed(2)})`);
+}
+await peer.eval(`document.documentElement.dataset.theme = 'dark'; true`);
+
+console.log('\ntheme');
+const shown = () => peer.eval(`({
+  theme: document.documentElement.dataset.theme,
+  bg: getComputedStyle(document.body).backgroundColor,
+  bar: document.querySelector('meta[name="theme-color"]').content,
+  call: (() => {
+    const o = document.querySelector('#call-overlay');
+    o.classList.remove('hidden');
+    const bg = getComputedStyle(o).backgroundColor;
+    o.classList.add('hidden');
+    return bg;
+  })(),
+})`);
+const reloadWith = async (prefs) => {
+  await peer.eval(`localStorage.setItem('dd_prefs', ${JSON.stringify(JSON.stringify(prefs))}); true`);
+  await peer.goto(BASE + '/');
+  await waitFor(() => peer.eval(`document.readyState === 'complete'`));
+};
+const LIGHT = 'rgb(244, 245, 247)', DARK = 'rgb(10, 10, 15)';
+let now = await shown();
+ok(now.theme === 'dark' && now.bg === DARK && now.bar === '#0a0a0f', 'dark until someone chooses otherwise');
+await reloadWith({ theme: 'light' });
+now = await shown();
+ok(now.theme === 'light' && now.bg === LIGHT && now.bar === '#f4f5f7',
+  'a light theme chosen earlier is the one the page opens in, browser bar included');
+ok(now.call === DARK, 'the call screen stays dark in the light theme: it frames video');
+await reloadWith({ theme: 'neon' });
+ok((await shown()).theme === 'dark', 'a theme value nobody could have chosen reads as dark');
+await reloadWith({ theme: 'system' });
+await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] }, peer.sessionId);
+await sleep(100);
+now = await shown();
+ok(now.bg === LIGHT && now.bar === '#f4f5f7', '"like the device" follows a device in light mode');
+await cdp.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] }, peer.sessionId);
+await sleep(100);
+now = await shown();
+ok(now.bg === DARK && now.bar === '#0a0a0f', '…and changes with it, without a reload');
+await cdp.send('Emulation.setEmulatedMedia', { features: [] }, peer.sessionId);
+await reloadWith({});
+await peer.eval(`(() => { const s = document.querySelector('#theme-select'); s.value = 'light';
+  s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+now = await shown();
+ok(now.theme === 'light' && JSON.parse(await peer.eval(`localStorage.getItem('dd_prefs')`)).theme === 'light',
+  'the Theme control switches at once and is remembered');
 
 console.log('\ndecoration is not announced');
 ok(await peer.eval(`[...document.querySelectorAll('.logo')].every((el) => el.getAttribute('aria-hidden') === 'true')`),
   'the logo is hidden from assistive technology');
+
+console.log('\npanic forgets the theme too');
+await peer.eval(`for (let i = 0; i < 3; i++)
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true`);
+ok(await waitFor(() => peer.eval(`document.documentElement.dataset.theme === 'dark'
+  && localStorage.getItem('dd_prefs') === null`).catch(() => false), { timeout: 8000 }),
+  'after a panic wipe the page is dark again and no setting is left behind');
 
 ok(peer.errors.length === 0, `no uncaught exceptions${peer.errors.length ? ': ' + peer.errors[0] : ''}`);
 

@@ -12,7 +12,7 @@ import { loadIdentity, ensureIdentity, clearIdentity, forgetContact, listContact
 import { t, applyI18n, setLang, getLang } from './i18n.js';
 import { sanitizeIceConfig } from './util.js';
 import { checkSupport } from './support.js';
-import { getPref, setPref, clearPrefs } from './prefs.js';
+import { getPref, setPref, clearPrefs, applyTheme } from './prefs.js';
 import { scrubber, ROOM_CODE_RE, MESSAGE_ID_RE, PEER_ID_RE, MAX_TEXT_LEN, MAX_RENDERED_NODES, MAX_REMOTE_PEERS, SIGNAL_WINDOW_MS, MAX_SIGNAL_MESSAGES_PER_WINDOW, MAX_SIGNAL_BYTES_PER_WINDOW, ALLOWED_TTLS, appendPresent, h, serverMessage, roomCodeFrom, signOutOwed, setSignOutOwed } from './app-shared.js';
 import { AuthMethods } from './app-auth.js';
 import { VerifyMethods } from './app-verify.js';
@@ -154,6 +154,7 @@ class DeadDrop {
       replyBarText: $('#reply-bar-text'),
       replyCancel: $('#reply-cancel'),
       idleSelect: $('#idle-select'),
+      themeSelect: $('#theme-select'),
       // Chat
       chatWrap:    $('#chat-wrap'),
       roomInfo:    $('#room-info'),
@@ -276,6 +277,11 @@ class DeadDrop {
     this.el.typingToggle.checked = getPref('typingIndicator');
     this.el.ringToggle.checked = getPref('callRing');
     this.el.idleSelect.value = String(getPref('idleLockMinutes'));
+    this.el.themeSelect.value = getPref('theme');
+    this.el.themeSelect.addEventListener('change', (e) => {
+      setPref('theme', e.target.value);
+      applyTheme(getPref('theme'));
+    });
     this.el.ttlSelect.value = String(getPref('messageTtl'));
     this.el.ttlSelect.addEventListener('change', (e) => {
       setPref('messageTtl', Number.parseInt(e.target.value, 10));
@@ -1020,11 +1026,14 @@ class DeadDrop {
     );
   }
 
-  /** Deterministic per-peer color for sender labels. */
+  /**
+   * Deterministic per-peer color for sender labels. The hue is the peer's;
+   * the lightness is the theme's, chosen so every hue reads at 4.5:1 or more.
+   */
   _peerColor(peerId) {
     let h = 0;
     for (const c of peerId) h = (h * 31 + c.charCodeAt(0)) % 360;
-    return `hsl(${h}, 65%, 62%)`;
+    return `hsl(${h}, 65%, var(--peer-lightness))`;
   }
 
   /** Recompute the aggregate room state: status bar, call button, verify bar. */
@@ -2341,6 +2350,7 @@ class DeadDrop {
     this._cleanup();
     this.identity = null;
     clearPrefs();
+    applyTheme(getPref('theme'));
     try { localStorage.removeItem('dd_lang'); } catch { /* storage may be blocked */ }
     if (this.el.messages) this.el.messages.replaceChildren();
     if (this.el.msgInput) this.el.msgInput.value = '';

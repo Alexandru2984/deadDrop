@@ -20,6 +20,7 @@ const DEFAULTS = Object.freeze({
   callRing: true,
   idleLockMinutes: 0,
   messageTtl: 30,
+  theme: 'dark',
 });
 
 const VALID = {
@@ -30,6 +31,7 @@ const VALID = {
   callRing: (v) => typeof v === 'boolean',
   idleLockMinutes: (v) => [0, 5, 15, 30, 60].includes(v),
   messageTtl: (v) => [0, 10, 30, 60, 300].includes(v),
+  theme: (v) => ['dark', 'light', 'system'].includes(v),
 };
 
 function readAll() {
@@ -55,6 +57,29 @@ export function setPref(name, value) {
 }
 
 export const PREF_DEFAULTS = DEFAULTS;
+
+let followingSystem = false;
+
+/**
+ * Show the page in the chosen theme. boot.js calls it first thing, while the
+ * rest of the app is still loading, so a light page is light from about its
+ * first frame rather than after everything arrives; the browser's own bar and
+ * form controls follow it too.
+ */
+export function applyTheme(theme = getPref('theme')) {
+  const root = document.documentElement;
+  root.dataset.theme = theme;
+  const query = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: light)') : null;
+  const light = theme === 'light' || (theme === 'system' && !!query?.matches);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', light ? '#f4f5f7' : '#0a0a0f');
+  document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', light ? 'light' : 'dark');
+  if (query && !followingSystem) {
+    followingSystem = true;
+    query.addEventListener('change', () => {
+      if (root.dataset.theme === 'system') applyTheme('system');
+    });
+  }
+}
 
 export function clearPrefs() {
   try { localStorage.removeItem(KEY); } catch { /* storage may be blocked */ }

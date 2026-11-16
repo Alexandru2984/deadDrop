@@ -9,6 +9,11 @@
  * the answer the first time it asks; every later check asks afresh.
  */
 
+import { applyTheme } from './prefs.js';
+
+// The theme first: it decides the very first frame.
+applyTheme();
+
 let first = fetch('/api/me');
 // Read later or never: a network error is the app's to handle, not the
 // console's to report as unhandled.

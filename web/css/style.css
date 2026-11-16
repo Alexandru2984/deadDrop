@@ -16,8 +16,81 @@
   --warn:     #ffb020;
   --mine:     #161628;
   --theirs:   #0f1f2e;
+  --accent-hover: #00ff88;
+  --on-accent: #0a0a0f;
+  --pending:  #ffaa00;
+  --info:     #55aaff;
+  --tint:     rgba(255, 255, 255, 0.05);
+  --overlay:  rgba(10, 10, 15, 0.85);
+  --overlay-strong: rgba(10, 10, 15, 0.92);
+  --peer-lightness: 70%;
+  color-scheme: dark;
   --radius:   8px;
   --font:     'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
+}
+
+/* Light, by choice (Privacy options → Theme) or by following the system.
+   Every text colour here is at least 4.5:1 on every surface it sits on. The
+   call screen and the picture viewer stay dark: they frame video and photos. */
+:root[data-theme="light"] {
+  --bg:       #f4f5f7;
+  --surface:  #ffffff;
+  --border:   #d5d8e0;
+  --text:     #1a1c23;
+  --dim:      #565b6d;
+  --accent:   #007a45;
+  --danger:   #bf1130;
+  --warn:     #8a5300;
+  --mine:     #e4f1e9;
+  --theirs:   #e6edf6;
+  --accent-hover: #00663a;
+  --on-accent: #ffffff;
+  --pending:  #8a5300;
+  --info:     #1c5aa6;
+  --tint:     rgba(0, 0, 0, 0.05);
+  --overlay:  rgba(244, 245, 247, 0.88);
+  --overlay-strong: rgba(244, 245, 247, 0.95);
+  --peer-lightness: 25%;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"] {
+    --bg:       #f4f5f7;
+    --surface:  #ffffff;
+    --border:   #d5d8e0;
+    --text:     #1a1c23;
+    --dim:      #565b6d;
+    --accent:   #007a45;
+    --danger:   #bf1130;
+    --warn:     #8a5300;
+    --mine:     #e4f1e9;
+    --theirs:   #e6edf6;
+    --accent-hover: #00663a;
+    --on-accent: #ffffff;
+    --pending:  #8a5300;
+    --info:     #1c5aa6;
+    --tint:     rgba(0, 0, 0, 0.05);
+    --overlay:  rgba(244, 245, 247, 0.88);
+    --overlay-strong: rgba(244, 245, 247, 0.95);
+    --peer-lightness: 25%;
+    color-scheme: light;
+  }
+}
+.call-overlay,
+.image-viewer {
+  --bg:       #0a0a0f;
+  --surface:  #111118;
+  --border:   #222230;
+  --text:     #d0d0d8;
+  --dim:      #7d7d96;
+  --accent:   #00e87b;
+  --danger:   #ff4455;
+  --warn:     #ffb020;
+  --accent-hover: #00ff88;
+  --on-accent: #0a0a0f;
+  --tint:     rgba(255, 255, 255, 0.05);
+  --peer-lightness: 70%;
+  color-scheme: dark;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -413,12 +486,12 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 
 .btn.primary {
   background: var(--accent);
-  color: var(--bg);
+  color: var(--on-accent);
   border-color: var(--accent);
   font-weight: 600;
 }
 
-.btn.primary:hover { background: #00ff88; }
+.btn.primary:hover { background: var(--accent-hover); }
 
 .btn-sm {
   padding: 6px 14px;
@@ -534,7 +607,7 @@ select { cursor: pointer; width: auto; }
   position: absolute;
   inset: 0;
   z-index: 150;
-  background: rgba(10, 10, 15, 0.85);
+  background: var(--overlay);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   display: flex;
@@ -615,9 +688,9 @@ select { cursor: pointer; width: auto; }
   text-overflow: ellipsis;
 }
 
-.status.waiting      { color: #ffaa00; }
-.status.connecting   { color: #ffaa00; }
-.status.connected    { color: #55aaff; }
+.status.waiting      { color: var(--pending); }
+.status.connecting   { color: var(--pending); }
+.status.connected    { color: var(--info); }
 .status.encrypted    { color: var(--accent); background: rgba(0, 232, 123, 0.1); }
 .status.disconnected { color: var(--danger); }
 
@@ -880,7 +953,7 @@ select { cursor: pointer; width: auto; }
   border: 0;
   border-left: 3px solid var(--accent);
   border-radius: 4px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--tint);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -1010,7 +1083,7 @@ select { cursor: pointer; width: auto; }
 }
 
 .countdown {
-  color: #ffaa00;
+  color: var(--pending);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1159,7 +1232,6 @@ select { cursor: pointer; width: auto; }
     gap: 8px;
   }
   .toggle-label { flex: 1; }
-  #ttl-select { flex: 1; }
   #send-btn {
     min-width: 60px;
     padding-left: 12px;
@@ -1197,7 +1269,7 @@ select { cursor: pointer; width: auto; }
   font-size: 11px;
   color: var(--dim);
 }
-.file-note.warn { color: #ffaa00; }
+.file-note.warn { color: var(--pending); }
 
 .file-details {
   display: flex;
@@ -1681,7 +1753,7 @@ select { cursor: pointer; width: auto; }
 .qr-verify, .kept-ask {
   position: fixed;
   inset: 0;
-  background: rgba(10, 10, 15, 0.92);
+  background: var(--overlay-strong);
   z-index: 220;
   display: flex;
   align-items: center;
@@ -1815,7 +1887,7 @@ select { cursor: pointer; width: auto; }
 }
 .boot-detail ul { margin: 8px 0 0; padding-left: 1.2em; }
 .boot-detail li { margin: 4px 0; }
-.boot-fail { color: #ff6b6b; max-width: 34rem; text-align: center; }
+.boot-fail { color: var(--danger); max-width: 34rem; text-align: center; }
 .boot-note {
   max-width: 30rem;
   text-align: center;
