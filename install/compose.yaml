@@ -16,7 +16,7 @@ services:
   # off every network, Docker's included. Being idle, it never restarts, so
   # either of the other two can.
   net:
-    image: registry.k8s.io/pause:3.10.1@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c
+    image: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
     restart: unless-stopped
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
