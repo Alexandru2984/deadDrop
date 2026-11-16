@@ -12,6 +12,10 @@ script — and `test/seo.selftest.mjs` fails the build if one appears. The previ
 `scripts/render-og-image.mjs` and served from here, so unfurling a link to Dead
 Drop involves no third party.
 
+To run your own instance — Docker, one script, HTTPS and a call relay
+included — see [`INSTALL.md`](INSTALL.md). It serves this same client, byte for
+byte.
+
 A fork should change the host in `web/robots.txt`, `web/sitemap.xml` and the
 canonical/`og:` tags. Those are static because the bundle is hashed: a server
 that rewrote them per deployment would no longer match its own manifest.
@@ -348,10 +352,13 @@ deaddrop/
 ├── internal/srp/                # server-side SRP math
 ├── internal/strictjson/         # unambiguous protocol JSON decoder
 ├── internal/turn/               # short-lived coturn REST credentials
+├── internal/drop/               # sealed boxes left for an offline contact
 ├── web/js/crypto.js             # pairwise key schedule and AEAD
 ├── web/js/handshake.js          # authenticated hybrid handshake
 ├── web/js/peer.js               # WebRTC, media binding, rekey transport
-└── scripts/deploy.sh            # fail-closed test/build/preflight/rollback
+├── scripts/deploy.sh            # fail-closed test/build/preflight/rollback
+├── Dockerfile                   # static binary on a distroless base
+└── install/                     # compose stack + setup script (INSTALL.md)
 ```
 
 ## Verifying a build
@@ -403,4 +410,5 @@ The same goes for `browser.{a11y,support,pair,group,call,hostile,integrity,guest
 
 The live SRP migration test is `node test/srp.e2e.mjs` against a disposable local
 server. Production setup and the required pre-deploy configuration changes are in
-[`DEPLOY.md`](DEPLOY.md).
+[`DEPLOY.md`](DEPLOY.md); the containerised install for anyone else is in
+[`INSTALL.md`](INSTALL.md).

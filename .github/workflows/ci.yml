@@ -273,6 +273,68 @@ jobs:
         if: always()
         run: kill "$(cat server.pid)" 2>/dev/null || true
 
+  # What someone else installs is the image and the compose stack in install/,
+  # not the binary every other job builds. This builds both the way INSTALL.md
+  # says to and runs a real conversation through them: the web server in front,
+  # the app behind it on loopback only, its data in a volume.
+  install-kit:
+    name: Install kit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Setup script and compose file
+        run: |
+          shellcheck install/setup.sh
+          docker compose -f install/compose.yaml --env-file install/env.example config -q
+          docker compose -f install/compose.yaml --env-file install/env.example --profile turn config -q
+
+      # The image must serve the client the release publishes, byte for byte:
+      # it is what an operator's visitors check on the verify page.
+      - name: Image serves the published client
+        run: |
+          docker build -t deaddrop:local .
+          docker run --rm deaddrop:local version | tee version.txt
+          grep -qx "bundle  sha256:$(sha256sum web/SHA256SUMS | cut -d' ' -f1)" version.txt
+
+      # Plain HTTP on localhost: browsers treat it as a secure context, and no
+      # certificate can be issued for a CI runner anyway.
+      - name: Start the stack
+        working-directory: install
+        run: |
+          printf '%s\n' DOMAIN=http://localhost BIND_ADDRESS=127.0.0.1 \
+            HTTP_PORT=18480 HTTPS_PORT=18443 PUBLIC_ORIGIN=http://localhost:18480 > .env
+          docker compose up -d
+          for _ in $(seq 1 60); do
+            docker compose exec -T app deaddrop health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:18480/api/health
+          test "$(docker inspect --format '{{.Config.User}} {{.HostConfig.ReadonlyRootfs}}' deaddrop-app-1)" = "65532:65532 true"
+          test -z "$(docker inspect --format '{{json .NetworkSettings.Ports}}' deaddrop-app-1 | tr -d '{}null')"
+
+      - name: Mint invites
+        id: invites
+        working-directory: install
+        run: |
+          echo "a=$(docker compose exec -T app deaddrop invite)" >> "$GITHUB_OUTPUT"
+          echo "b=$(docker compose exec -T app deaddrop invite)" >> "$GITHUB_OUTPUT"
+
+      - name: A conversation through the kit
+        env:
+          DD_URL: http://localhost:18480
+          DD_INVITE: ${{ steps.invites.outputs.a }}
+          DD_INVITE2: ${{ steps.invites.outputs.b }}
+          DD_REQUIRE_BROWSER: '1'
+        run: node test/browser.drops.mjs
+
+      - name: Stack logs (on failure)
+        if: failure()
+        working-directory: install
+        run: docker compose logs || true
+
   # A second engine. Everything above drives Chrome, so on its own it only ever
   # says the app works on Blink — and the client is the whole security product
   # here. Gecko differs in the places it leans on: WebCrypto surfaces, SDP and

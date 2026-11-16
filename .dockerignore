@@ -1,0 +1,10 @@
+# Only what the build needs goes into the image's build context. Listing what
+# to include, rather than what to leave out, means a stray secret or a local
+# data/ directory can never end up inside an image.
+*
+!go.mod
+!go.sum
+!*.go
+!cmd/
+!internal/
+!web/

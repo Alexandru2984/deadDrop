@@ -11,6 +11,20 @@ compare rather than take a hash on trust.
 
 ## Unreleased
 
+- **An install kit, for anyone to run their own.** `install/setup.sh
+  chat.example.org --turn <IP>` builds the image, starts the app behind Caddy
+  with HTTPS certificates that renew themselves, optionally a coturn relay
+  with the hardened settings production uses, and prints the first invite.
+  The app runs as an unprivileged user on a read-only, shell-less image with
+  its port on no network; the web server reaches it over a shared loopback,
+  so visitor addresses are still trusted only from loopback, and a forged
+  forwarding header is ignored. Variants for Cloudflare in front and for a web
+  server already on the machine are included; `INSTALL.md` covers updates,
+  backups, and checking the instance serves the published client. CI builds
+  the kit and runs a conversation through it.
+- `deaddrop health` asks the running service whether it is healthy, for
+  container health checks; the startup banner names the configured address
+  instead of the public instance's.
 - **Messages left for someone offline.** Two people who saved each other as
   contacts can leave each other a message while the other is away; it waits
   up to an hour, a day or a week, and once opened stays on screen until closed

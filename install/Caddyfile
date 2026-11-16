@@ -1,0 +1,32 @@
+# The web server in front of Dead Drop: HTTPS certificates from Let's Encrypt,
+# renewed on their own, and nothing else. The app sets every security header
+# itself, so none are added here.
+{
+	# No admin endpoint listening, even on loopback: the configuration is this
+	# file, and a restart applies it.
+	admin off
+
+	servers {
+		# Only when a proxy such as Cloudflare sits in front (TRUSTED_PROXIES
+		# in .env): from those addresses alone, the visitor's address is taken
+		# from the header the proxy sets. From anyone else it is ignored, so a
+		# visitor cannot claim to be someone else.
+		trusted_proxies static {$TRUSTED_PROXIES:127.0.0.1/32}
+		client_ip_headers CF-Connecting-IP X-Forwarded-For
+	}
+}
+
+{$DOMAIN} {
+	# Caddy keeps no access log unless asked, and is not asked: the app is
+	# built to know as little about its visitors as it can, and a log here
+	# would undo that. Nor does it say what software answers.
+	header -Server
+	header -Via
+
+	reverse_proxy 127.0.0.1:8100 {
+		# The app limits requests per visitor, so it needs to know who is
+		# asking. It takes that from this header only when the request comes
+		# from loopback — which is why the two share a network.
+		header_up X-Real-IP {client_ip}
+	}
+}

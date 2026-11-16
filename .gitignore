@@ -27,9 +27,10 @@ go.work.sum
 *~
 .DS_Store
 
-# Environment
+# Environment (install/.env holds an installation's TURN secret)
 .env
 .env.local
+.env.tmp
 
 # Build output
 /bin/

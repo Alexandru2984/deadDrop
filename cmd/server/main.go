@@ -239,6 +239,14 @@ func main() {
 		case "doctor":
 			runDoctor()
 			return
+		case "health":
+			// For a container's health check: the image has no shell and no
+			// curl, so the binary asks the running service itself.
+			if f := checkServiceLiveness(); f.err != nil {
+				fmt.Fprintf(os.Stderr, "unhealthy: %v\n", f.err)
+				os.Exit(1)
+			}
+			return
 		case "indexnow":
 			runIndexNow(os.Args[2:])
 			return
@@ -476,7 +484,7 @@ func main() {
 	fmt.Printf("│%s│\n", centre("💀 DEAD DROP v"+appassets.Version, 41))
 	fmt.Println("├─────────────────────────────────────────┤")
 	fmt.Printf("│  Listening on %-26s│\n", addr)
-	fmt.Println("│  Behind nginx → https://dead.micutu.com │")
+	fmt.Printf("│%s│\n", centre("→ "+origins[0], 41))
 	fmt.Println("│  Ctrl+C to stop                         │")
 	fmt.Println("└─────────────────────────────────────────┘")
 

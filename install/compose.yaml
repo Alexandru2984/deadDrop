@@ -1,0 +1,109 @@
+# Dead Drop — your own instance. Start with INSTALL.md.
+#
+#   ./setup.sh chat.example.org                   # web app with HTTPS
+#   ./setup.sh chat.example.org --turn 203.0.113.5   # plus a relay for calls
+#
+# Settings live in .env next to this file (setup.sh writes it; env.example
+# explains every line). Images are pinned by digest: what runs is what was
+# reviewed, until someone changes it here.
+
+name: deaddrop
+
+services:
+  # Owns the network the app and the web server share, and does nothing else.
+  # Sharing it lets the web server reach the app on 127.0.0.1 — the only place
+  # the app accepts a visitor's address from — while the app's own port stays
+  # off every network, Docker's included. Being idle, it never restarts, so
+  # either of the other two can.
+  net:
+    image: registry.k8s.io/pause:3.10.1@sha256:278fb9dbcca9518083ad1e11276933a2e96f23de604a3a08cc3c80002767d24c
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-80}:80"
+      - "${BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443"
+      - "${BIND_ADDRESS:-0.0.0.0}:${HTTPS_PORT:-443}:443/udp"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: deaddrop:local
+    restart: unless-stopped
+    network_mode: service:net
+    depends_on: [net]
+    environment:
+      ALLOWED_ORIGINS: ${PUBLIC_ORIGIN:-https://${DOMAIN:?set DOMAIN in .env}}
+      OPEN_REGISTRATION: ${OPEN_REGISTRATION:-0}
+      INVITE_TTL_DAYS: ${INVITE_TTL_DAYS:-14}
+      SECURITY_CONTACT: ${SECURITY_CONTACT:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_URLS: ${TURN_URLS:-}
+      STUN_URLS: ${STUN_URLS:-}
+    volumes:
+      # Accounts, invites and messages left for someone offline. Back up the
+      # first two (INSTALL.md, "Backups"); everything else is disposable.
+      - app-data:/var/lib/deaddrop/data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: local
+      options: { max-size: 5m, max-file: "2" }
+
+  web:
+    image: caddy:2.11.9-alpine@sha256:003a97808e781aa9f7e75cc2f43d34d461099031faf5e20faefb9f61126836f0
+    restart: unless-stopped
+    network_mode: service:net
+    depends_on: [app]
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1/32}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - web-data:/data
+      - web-config:/config
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: local
+      options: { max-size: 5m, max-file: "2" }
+
+  # Only with COMPOSE_PROFILES=turn in .env. A relay has to be reached
+  # directly, on many UDP ports, so it uses the host's network.
+  turn:
+    profiles: [turn]
+    image: coturn/coturn:4.19.0-alpine@sha256:4e3e84aea0ed53ff2cb059ff5c8f48725c03646a6eec5ff2771c3fc12c46c8f5
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_SECRET: ${TURN_SECRET:-}
+      PUBLIC_IP: ${PUBLIC_IP:-}
+      DOMAIN: ${DOMAIN:-}
+    # Checked here rather than by compose, which would demand these even from
+    # an installation without a relay. A relay with an empty or short secret
+    # would let anyone use it, so it refuses to start instead.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >-
+        if [ "$${#TURN_SECRET}" -lt 32 ] || [ -z "$$PUBLIC_IP" ] || [ -z "$$DOMAIN" ]; then
+        echo "turn: set DOMAIN, PUBLIC_IP and a TURN_SECRET of 32+ characters in .env" >&2; exit 1; fi;
+        exec turnserver -c /etc/coturn/turnserver.conf
+        --static-auth-secret="$$TURN_SECRET" --realm="$$DOMAIN" --external-ip="$$PUBLIC_IP"
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+volumes:
+  app-data:
+  web-data:
+  web-config:

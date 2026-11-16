@@ -1,0 +1,22 @@
+# For a machine that already runs a web server (nginx, Apache, Caddy) on ports
+# 80 and 443: that server stays, and the app listens on the host's own
+# loopback for it to forward to. Turn it on with this line in .env:
+#
+#   COMPOSE_FILE=compose.yaml:compose.behind-proxy.yaml
+#
+# The app takes a visitor's address from your server's X-Real-IP header only
+# because the request arrives on loopback; published through Docker's network
+# instead, every visitor would seem to share one address, and one share of the
+# app's limits. INSTALL.md has an nginx example.
+
+services:
+  net:
+    profiles: [unused]
+  web:
+    profiles: [unused]
+  app:
+    network_mode: host
+    depends_on: !reset []
+    environment:
+      HOST: 127.0.0.1
+      PORT: ${APP_PORT:-8100}
