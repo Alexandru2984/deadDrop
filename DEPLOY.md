@@ -389,12 +389,28 @@ restricted as `data/` itself: root-only, mode 0700.
 ## 8. Releasing
 
 The version lives in `version.go` and nowhere else. To cut a release: bump it,
-update `CHANGELOG.md`, commit, tag, then deploy.
+give it a `CHANGELOG.md` entry headed `## X.Y.Z — date`, commit, push, wait for
+CI, deploy, then tag:
 
 ```bash
 /opt/deaddrop/deaddrop version      # release and served-client digest
-git tag -a v0.5.0 -m "0.5.0"
+git tag -a v0.8.1 -m "0.8.1" && git push origin v0.8.1
 ```
+
+The tag starts `.github/workflows/release.yml`. It refuses a tag that
+`version.go` disagrees with, builds the Linux amd64 and arm64 binaries from the
+tagged commit, builds once more to check the bytes repeat, attests each binary
+through Sigstore, and publishes the release with the changelog entry as its
+notes. Nobody holds a signing key: the attestation is signed by that workflow
+run's own identity and records the repository, the workflow and the commit.
+Anyone can check a binary with
+`gh attestation verify deaddrop-linux-amd64 --repo Alexandru2984/deadDrop`.
+
+Once published, a release cannot change. Rulesets keep `v*` tags from being
+moved or deleted, `main` from being force-pushed or deleted, and releases are
+immutable, so a tag someone checked last month still names the same code. Run
+the workflow by hand (Actions → Release → Run workflow, with the tag) only for
+a tag whose release has no binaries yet.
 
 `deaddrop version` prints both halves because a name alone proves nothing. The
 build is reproducible — the same commit yields the same binary on any machine

@@ -374,6 +374,12 @@ node scripts/gen-integrity.mjs
 node scripts/gen-integrity.mjs --check
 ```
 
+Release binaries are built by `.github/workflows/release.yml` from the tagged
+commit and attested through Sigstore; `gh attestation verify deaddrop-linux-amd64
+--repo Alexandru2984/deadDrop` checks one, and rebuilding the tag with the flags
+in the release notes gives the same bytes. Release tags cannot be moved or
+deleted, and published releases cannot change.
+
 The in-app `/verify.html` page can compare the served manifest with the public
 repository. An in-page check cannot prove the integrity of code already executing,
 cannot detect a targeted response by itself, and cannot make a compromised server

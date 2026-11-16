@@ -14,3 +14,20 @@ updates:
     directory: /
     schedule:
       interval: monthly
+  # The install kit pins its images by digest, for the same reason the
+  # workflows pin actions: a tag can be moved after review. These move the
+  # pins forward, one grouped PR each.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      image:
+        patterns: ['*']
+  - package-ecosystem: docker-compose
+    directory: /install
+    schedule:
+      interval: monthly
+    groups:
+      images:
+        patterns: ['*']

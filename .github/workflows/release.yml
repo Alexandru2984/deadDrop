@@ -1,0 +1,116 @@
+name: Release
+
+# A tag says "this commit is version X". This makes that checkable: binaries
+# built here, from the tagged commit, by a workflow anyone can read, each with
+# a signed statement of exactly that — which repository, which workflow, which
+# commit — recorded in Sigstore's public transparency log. The signature comes
+# from this run's own short-lived identity, so there is no signing key to keep
+# or to leak.
+#
+#   gh attestation verify deaddrop-linux-amd64 --repo Alexandru2984/deadDrop
+#
+# The repository's rulesets keep a release tag from being moved or deleted
+# afterwards, and published releases are immutable.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing release tag to build and attach binaries to, like v0.8.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, attest, publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # create the release and attach the binaries
+      id-token: write      # this run's identity, for the Sigstore certificate
+      attestations: write  # record the attestation against the repository
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: The tag names a version
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $TAG"; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: The code says the same version
+        run: |
+          got=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' version.go)
+          [ "$got" = "${TAG#v}" ] || { echo "version.go says $got, the tag says ${TAG#v}"; exit 1; }
+
+      # Outside the checkout: an untracked file in it, even the output itself,
+      # would stamp the binaries as built from a modified tree.
+      - name: Build
+        run: |
+          out="$RUNNER_TEMP/dist"
+          mkdir -p "$out"
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags="-s -w" -o "$out/deaddrop-linux-$arch" ./cmd/server/
+          done
+          go version -m "$out/deaddrop-linux-amd64" | grep -qx $'\tbuild\tvcs.modified=false'
+          go version -m "$out/deaddrop-linux-amd64" | grep -qx $'\tbuild\tvcs.revision='"$(git rev-parse HEAD)"
+          "$out/deaddrop-linux-amd64" version | tee "$RUNNER_TEMP/version.txt"
+          grep -qx "bundle  sha256:$(sha256sum web/SHA256SUMS | cut -d' ' -f1)" "$RUNNER_TEMP/version.txt"
+          (cd "$out" && sha256sum deaddrop-linux-amd64 deaddrop-linux-arm64 > SHA256SUMS)
+          cat "$out/SHA256SUMS"
+
+      # What the release notes promise anyone can check: built again, the
+      # same bytes.
+      - name: Reproducible
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/again" ./cmd/server/
+          cmp "$RUNNER_TEMP/again" "$RUNNER_TEMP/dist/deaddrop-linux-amd64"
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/dist/deaddrop-linux-*
+
+      - name: Release notes from the changelog
+        run: |
+          v="${TAG#v}"
+          awk -v v="$v" '$0 ~ "^## "v" " {on=1; next} on && /^## / {exit} on {print}' CHANGELOG.md \
+            | sed -e '/./,$!d' > "$RUNNER_TEMP/notes.md"
+          [ -s "$RUNNER_TEMP/notes.md" ] || { echo "CHANGELOG.md has no entry for $v"; exit 1; }
+          bundle=$(sed -n 's/^bundle  //p' "$RUNNER_TEMP/version.txt")
+          gover=$(go env GOVERSION)
+          {
+            printf '\n**Checking these binaries.** Each was built by this repository'"'"'s release workflow from the tagged commit, which a signed attestation in Sigstore'"'"'s public log states:\n\n'
+            printf '```\ngh attestation verify deaddrop-linux-amd64 --repo %s\nsha256sum -c SHA256SUMS\n```\n\n' "$GITHUB_REPOSITORY"
+            printf 'The build is reproducible: at this tag, with %s, `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" ./cmd/server/` gives the same bytes. `deaddrop version` prints the client it serves: `%s`.\n' "$gover" "$bundle"
+          } >> "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$RUNNER_TEMP/dist"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+              deaddrop-linux-amd64 deaddrop-linux-arm64 SHA256SUMS
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md" \
+              deaddrop-linux-amd64 deaddrop-linux-arm64 SHA256SUMS
+          fi
