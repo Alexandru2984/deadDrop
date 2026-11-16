@@ -109,6 +109,14 @@ answered with voice only: the camera is never switched on just by accepting.
 An unanswered call stops ringing after 45 seconds. The ring is a tone made in
 the page, and can be turned off in the privacy options.
 
+Either side can show its screen during a call, on desktop browsers. The
+screen travels on the call's own picture channel — the one bound to the safety
+code — in place of the camera, which is switched off while the screen is shown
+and comes back afterwards. Nothing is negotiated again to do it, and nothing a
+peer sends can start a capture: only the button, and then the browser's own
+picker. The person sharing is told so for as long as it lasts, because a
+screen shows whatever is on it — notifications and other windows included.
+
 ### Padding and cover packets
 
 Application envelopes are padded to fixed buckets, which hides exact plaintext

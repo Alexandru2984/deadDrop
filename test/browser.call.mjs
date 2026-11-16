@@ -41,6 +41,16 @@ const alice = await Peer.open(cdp, 'alice');
 const bob = await Peer.open(cdp, 'bob');
 await alice.instrumentPeerConnections();
 await bob.instrumentPeerConnections();
+// A handle on what A captures of its screen, so the test can see it released.
+await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+  window.__ddDisplayTracks = [];
+  const nativeDisplay = navigator.mediaDevices.getDisplayMedia.bind(navigator.mediaDevices);
+  navigator.mediaDevices.getDisplayMedia = async (...args) => {
+    const stream = await nativeDisplay(...args);
+    window.__ddDisplayTracks.push(...stream.getTracks());
+    return stream;
+  };
+` }, alice.sessionId);
 
 await alice.goto(BASE + '/');
 await bob.goto(BASE + '/');
@@ -176,15 +186,17 @@ const answered = await bob.eval(`({ ...window.__ring, last: window.__ring.buzz.a
 ok(answered.open === 0 && answered.last === '0',
   `answering stops the tone and the vibration (${JSON.stringify(answered)})`);
 
+// The picture is put on screen once frames are arriving, a moment after the
+// sound: every call has a picture channel now, and an empty one shows nothing.
 const bobMedia = await waitFor(async () => {
   const s = await bob.mediaState();
-  return s.remote && s.remote.live > 0 ? s : false;
+  return s.remote && s.remote.audio === 1 && s.remote.video === 1 ? s : false;
 }, { timeout: 45000 });
 ok(bobMedia, 'peer B receives live remote tracks');
 
 const aliceMedia = await waitFor(async () => {
   const s = await alice.mediaState();
-  return s.remote && s.remote.live > 0 ? s : false;
+  return s.remote && s.remote.audio === 1 && s.remote.video === 1 ? s : false;
 }, { timeout: 45000 });
 ok(aliceMedia, 'peer A receives live remote tracks');
 // The call screen is modal: nothing behind it can take focus or a click
@@ -387,14 +399,22 @@ const voiceOnly = await waitFor(async () => {
 }, { timeout: 45000 });
 ok(voiceOnly && voiceOnly.b.local.video === 0 && voiceOnly.a.remote.video === 0,
   `answered with voice only, B's camera stays off and A gets no picture (${JSON.stringify(voiceOnly && { bLocal: voiceOnly.b.local, aRemote: voiceOnly.a.remote })})`);
-const bView = await bob.eval(`({
+const bSees = () => bob.eval(`({
   camDisabled: document.querySelector('#toggle-cam').disabled,
   placeholder: !document.querySelector('#remote-placeholder').classList.contains('hidden'),
 })`);
+await waitFor(() => bSees().then((v) => !v.placeholder), { timeout: 10000 });
+const bView = await bSees();
 ok(bView.camDisabled && !bView.placeholder, `B has no camera to switch, and sees A (${JSON.stringify(bView)})`);
-const aView = await waitFor(() => alice.eval(`!document.querySelector('#remote-placeholder').classList.contains('hidden')
-  && document.querySelector('#placeholder-text').textContent`), { timeout: 5000 });
+// "Waiting for video…" for the first moments, while a picture could still be
+// on its way; then the reason there is none.
+const aView = await waitFor(() => alice.eval(`(() => {
+  const text = document.querySelector('#placeholder-text').textContent;
+  return !document.querySelector('#remote-placeholder').classList.contains('hidden')
+    && /voice only/i.test(text) && text;
+})()`), { timeout: 8000 });
 ok(/voice only/i.test(aView || ''), `A sees the placeholder, not a black frame, and why (${aView})`);
+ok((await alice.mediaState()).remote.video === 0, 'and still no picture track once the call has settled');
 await alice.endCall();
 ok(await waitFor(() => bob.mediaState().then((m) => m.local === null && !m.overlay), { timeout: 20000 }),
   'the voice-only call ends cleanly');
@@ -422,8 +442,97 @@ const voiceScreen = await Promise.all([alice, bob].map((p) => p.eval(`({
 })`)));
 ok(voiceScreen.every((v) => /voice call/i.test(v.text) && !v.preview),
   `both screens say it is a voice call, with no empty camera preview (${JSON.stringify(voiceScreen)})`);
+
+// ── Showing a screen ──
+// It rides the call's own picture channel, the one bound to the safety code,
+// by putting a track on it: nothing is negotiated mid-call, and nothing the
+// other side sends can start a capture — only the button, then the browser.
+const localSdp = (p) => p.eval(`window.__ddPeerConnections.at(-1).localDescription.sdp`);
+const shareButton = (p) => p.eval(`(() => {
+  const b = document.querySelector('#share-screen');
+  return { offered: !b.classList.contains('hidden'), pressed: b.getAttribute('aria-pressed') };
+})()`);
+const screenNote = (p) => p.eval(`(() => {
+  const n = document.querySelector('#screen-note');
+  return { text: n.classList.contains('hidden') ? '' : n.textContent, mine: n.classList.contains('mine') };
+})()`);
+const displayTracks = () => alice.eval(`window.__ddDisplayTracks.map((t) => t.readyState)`);
+ok(await waitFor(async () => (await shareButton(alice)).offered && (await shareButton(bob)).offered, { timeout: 10000 }),
+  'a voice call offers screen sharing on both sides, with no camera in it');
+const sdpBeforeShare = await localSdp(alice);
+await alice.gesture(`document.querySelector('#share-screen').click(); true`);
+const shown = await waitFor(async () => {
+  const [media, note, size] = [await bob.mediaState(), await screenNote(bob), await bob.eval(`(() => {
+    const v = document.querySelector('#remote-video');
+    return v.videoWidth > 0 && v.classList.contains('screen') ? v.videoWidth + 'x' + v.videoHeight : '';
+  })()`)];
+  return media.remote.video === 1 && size && /sharing their screen/i.test(note.text) ? { note: note.text, size } : false;
+}, { timeout: 30000 });
+ok(shown, `B sees A's screen, with real frames, and is told whose it is (${shown ? shown.size + ' · ' + shown.note : 'nothing'})`);
+const sharing = { button: await shareButton(alice), note: await screenNote(alice) };
+ok(sharing.button.pressed === 'true' && sharing.note.mine && /sharing your screen/i.test(sharing.note.text),
+  `A is told, as a warning, that its screen is going out (${sharing.note.text})`);
+ok(await localSdp(alice) === sdpBeforeShare, 'nothing was renegotiated to do it');
+await alice.gesture(`document.querySelector('#share-screen').click(); true`);
+const unshown = await waitFor(async () => {
+  const media = await bob.mediaState();
+  const view = await bob.eval(`({
+    placeholder: !document.querySelector('#remote-placeholder').classList.contains('hidden'),
+    text: document.querySelector('#placeholder-text').textContent,
+  })`);
+  return media.remote.video === 0 && view.placeholder && !(await screenNote(bob)).text ? view : false;
+}, { timeout: 15000 });
+ok(unshown && /voice call/i.test(unshown.text), `when A stops, B is back in a voice call (${unshown ? unshown.text : 'still showing'})`);
+ok((await displayTracks()).every((state) => state === 'ended') && (await shareButton(alice)).pressed === 'false',
+  `and A's capture is released (${(await displayTracks()).join(', ')})`);
 await alice.endCall();
 await waitFor(() => bob.mediaState().then((m) => m.local === null), { timeout: 20000 });
+
+// With a camera in the call: the screen takes the camera's place, the camera
+// is switched off rather than left running unseen, and it comes back after.
+await sleep(1000);
+await alice.startCall();
+ok(await waitFor(() => bob.ringing(), { timeout: 20000 }), 'peer B rings for one more video call');
+await bob.acceptCall();
+ok(await waitFor(async () => {
+  const [a, b] = [await alice.mediaState(), await bob.mediaState()];
+  return a.remote?.video === 1 && b.remote?.video === 1 && (await shareButton(alice)).offered;
+}, { timeout: 45000 }), 'the video call connects');
+await alice.gesture(`document.querySelector('#share-screen').click(); true`);
+const swapped = await waitFor(async () => {
+  const a = await alice.mediaState();
+  const seen = await bob.eval(`document.querySelector('#remote-video').classList.contains('screen')`);
+  return a.local.video === 0 && seen ? a : false;
+}, { timeout: 30000 });
+ok(swapped && await alice.eval(`document.querySelector('#toggle-cam').disabled
+  && document.querySelector('#local-video').classList.contains('hidden')`),
+  `while A shows its screen its camera is off, not running unseen (${JSON.stringify(swapped && swapped.local)})`);
+await alice.gesture(`document.querySelector('#share-screen').click(); true`);
+const camBack = await waitFor(async () => {
+  const a = await alice.mediaState();
+  const view = await bob.eval(`({
+    screen: document.querySelector('#remote-video').classList.contains('screen'),
+    placeholder: !document.querySelector('#remote-placeholder').classList.contains('hidden'),
+  })`);
+  return a.local.video === 1 && a.local.live === 2 && !view.screen && !view.placeholder ? a : false;
+}, { timeout: 30000 });
+ok(camBack && await alice.eval(`!document.querySelector('#toggle-cam').disabled`),
+  'after it stops, the camera comes back and B sees A again');
+
+// Hanging up while showing a screen must not leave the capture running.
+await alice.gesture(`document.querySelector('#share-screen').click(); true`);
+ok(await waitFor(async () => (await shareButton(alice)).pressed === 'true', { timeout: 20000 }), 'A shows its screen once more');
+await bob.endCall();
+ok(await waitFor(async () => (await alice.mediaState()).local === null
+  && (await displayTracks()).every((state) => state === 'ended'), { timeout: 20000 }),
+  'the other side hanging up ends the capture too');
+
+// Each call used to leave its two channels in every later offer. The offer
+// grew by seven kilobytes a call until, on the ninth video call of a
+// conversation, it passed the size a peer accepts and the call never
+// connected. Seven calls in, this is where the growth would show.
+const channels = await alice.eval(`(window.__ddPeerConnections.at(-1).localDescription.sdp.match(/^m=/gm) || []).length`);
+ok(channels <= 5, `after all these calls the offer still holds only the current call's channels (${channels} sections)`);
 
 const errors = [...alice.errors, ...bob.errors];
 ok(errors.length === 0, `no uncaught exceptions${errors.length ? ': ' + errors[0] : ''}`);

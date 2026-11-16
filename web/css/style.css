@@ -1375,12 +1375,40 @@ select { cursor: pointer; width: auto; }
   color: var(--dim);
   font-size: 64px;
   pointer-events: none;
+  /* Opaque: with no picture arriving, the last frame must not show through. */
+  background: #000;
 }
 
 .video-placeholder .placeholder-text { font-size: 14px; }
 
+/* Whose screen is on show. One's own is said in the warning colour: it is the
+   one moment in a call when what is on the desk goes out too. */
+.screen-note {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(92%, 560px);
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(10, 10, 15, 0.88);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  z-index: 11;
+}
+.screen-note.mine { border-color: var(--warn, #ffb020); color: var(--warn, #ffb020); }
+
+.call-ctrl.sharing {
+  background: rgba(255, 176, 32, 0.15);
+  border-color: var(--warn, #ffb020);
+}
+
 .call-controls {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
   gap: 16px;
   padding: 16px;

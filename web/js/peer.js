@@ -189,7 +189,20 @@ export class PeerConnection {
   async startMedia(stream) {
     this._requireVerifiedMedia();
     this.localStream = stream;
-    for (const track of stream.getTracks()) this.pc.addTrack(track, stream);
+    this._videoSender = null;
+    for (const track of stream.getTracks()) {
+      const sender = this.pc.addTrack(track, stream);
+      if (track.kind === 'video') this._videoSender = sender;
+    }
+    // A picture channel even when no camera is sent. A screen can then be
+    // shown later by putting a track on it, with nothing negotiated again
+    // mid-call — the one thing the call state machine never allows. With no
+    // track on it, it sends nothing.
+    if (!this._videoSender) {
+      this._videoSender = this.pc.addTransceiver('video', {
+        direction: 'sendrecv', streams: [stream],
+      }).sender;
+    }
     const offer = await this.pc.createOffer();
     await this.pc.setLocalDescription(offer);
     return this.pc.localDescription;
@@ -203,9 +216,24 @@ export class PeerConnection {
     this._requireVerifiedMedia();
     this._requireBoundCertificate(offer);
     await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
+    this._videoSender = null;
     if (localStream) {
       this.localStream = localStream;
-      for (const track of localStream.getTracks()) this.pc.addTrack(track, localStream);
+      for (const track of localStream.getTracks()) {
+        const sender = this.pc.addTrack(track, localStream);
+        if (track.kind === 'video') this._videoSender = sender;
+      }
+    }
+    if (!this._videoSender) {
+      // Answering without a camera: open the offered picture channel in this
+      // direction too, still empty, so this side can show a screen later.
+      const offered = this.pc.getTransceivers().find((t) => t.receiver?.track?.kind === 'video'
+        && t.direction !== 'stopped' && t.currentDirection === null && !t.sender.track);
+      if (offered) {
+        offered.direction = 'sendrecv';
+        if (localStream) { try { offered.sender.setStreams?.(localStream); } catch { /* optional */ } }
+        this._videoSender = offered.sender;
+      }
     }
     const answer = await this.pc.createAnswer();
     await this.pc.setLocalDescription(answer);
@@ -219,23 +247,41 @@ export class PeerConnection {
     await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
   }
 
-  /** Send another camera's picture in place of the current one, without
-   *  renegotiating: the far side sees the switch and nothing else. */
-  async replaceVideoTrack(track) {
-    const sender = this.pc?.getSenders().find((s) => s.track?.kind === 'video');
-    if (!sender) throw new Error('no video being sent');
-    await sender.replaceTrack(track);
+  /** Whether this call negotiated a picture channel in our direction. A peer
+   *  on an older client offers none for a voice call. */
+  canSendVideo() {
+    const sender = this._videoSender;
+    if (!sender || !this.pc) return false;
+    const transceiver = this.pc.getTransceivers().find((t) => t.sender === sender);
+    return !!transceiver && (transceiver.currentDirection === 'sendrecv'
+      || transceiver.currentDirection === 'sendonly');
   }
 
-  /** Stop local media and remove tracks from the connection. */
+  /** Send another picture in place of the current one — the other camera, a
+   *  screen, or nothing (null) — without renegotiating: the far side sees the
+   *  switch and nothing else. */
+  async replaceVideoTrack(track) {
+    if (!this.canSendVideo()) throw new Error('no picture channel in this call');
+    await this._videoSender.replaceTrack(track);
+  }
+
+  /** Stop local media and retire the call's channels. */
   stopMedia() {
     if (this.localStream) {
       for (const track of this.localStream.getTracks()) track.stop();
       this.localStream = null;
     }
+    this._videoSender = null;
     if (this.pc) {
-      for (const sender of this.pc.getSenders()) {
-        if (sender.track) { try { this.pc.removeTrack(sender); } catch (_) { /* */ } }
+      // Stopped, not merely emptied. Emptied channels stayed in every later
+      // offer: each call added two, the offer grew by some seven kilobytes a
+      // call, and the ninth video call in one conversation crossed the size a
+      // peer accepts — it was dropped unanswered and the call never connected.
+      // A stopped channel is rejected in the next offer and its slot reused
+      // after that, so the offer stops growing.
+      for (const transceiver of this.pc.getTransceivers()) {
+        if (transceiver.direction === 'stopped') continue;
+        try { transceiver.stop(); } catch (_) { /* already gone */ }
       }
     }
   }
@@ -315,9 +361,7 @@ export class PeerConnection {
 
     // Incoming remote media tracks (audio/video calls)
     pc.ontrack = (e) => {
-      if (this.onRemoteTrack) {
-        this.onRemoteTrack(e.streams[0] || new MediaStream([e.track]));
-      }
+      if (this.onRemoteTrack) this.onRemoteTrack(e.track);
     };
 
     pc.onconnectionstatechange = () => {

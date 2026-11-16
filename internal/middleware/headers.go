@@ -53,7 +53,7 @@ func SecurityHeaders(next http.Handler, scriptHashes ...string) http.Handler {
 		// exactly that error, so this list stays honest.
 		h.Set("Permissions-Policy",
 			"camera=(self), microphone=(self), fullscreen=(self), autoplay=(self), "+
-				"display-capture=(), geolocation=(), payment=(), usb=(), serial=(), "+
+				"display-capture=(self), geolocation=(), payment=(), usb=(), serial=(), "+
 				"hid=(), midi=(), accelerometer=(), gyroscope=(), magnetometer=(), "+
 				"idle-detection=(), local-fonts=(), compute-pressure=(), "+
 				"screen-wake-lock=(self), "+

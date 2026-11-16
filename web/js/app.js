@@ -407,6 +407,8 @@ class DeadDrop {
       toggleMic:     $('#toggle-mic'),
       toggleCam:     $('#toggle-cam'),
       flipCam:       $('#flip-cam'),
+      shareScreen:   $('#share-screen'),
+      screenNote:    $('#screen-note'),
       backToChat:    $('#back-to-chat'),
       endCall:       $('#end-call'),
     };
@@ -580,6 +582,7 @@ class DeadDrop {
     this.el.toggleMic.addEventListener('click', () => this._toggleMic());
     this.el.toggleCam.addEventListener('click', () => this._toggleCam());
     this.el.flipCam.addEventListener('click', () => this._flipCam());
+    this.el.shareScreen.addEventListener('click', () => this._toggleScreenShare());
     this.el.backToChat.addEventListener('click', () => this._toggleCallOverlay(false));
     this.el.endCall.addEventListener('click', () => this._endCall());
 
@@ -1600,7 +1603,7 @@ class DeadDrop {
       { iceServers: this.iceConfig.iceServers, relayOnly: this._relayOnly },
       this.identity,
     );
-    conn.onRemoteTrack = (stream) => this._onRemoteTrack(stream);
+    conn.onRemoteTrack = (track) => this._onRemoteTrack(track);
     s = {
       conn,
       crypto: cryptoLayer,
@@ -2695,6 +2698,8 @@ class DeadDrop {
         && msg.audio !== undefined && typeof msg.audio !== 'boolean') return;
     if (msg.type === 'call-mute'
         && msg.video !== undefined && typeof msg.video !== 'boolean') return;
+    if (msg.type === 'call-mute'
+        && msg.screen !== undefined && typeof msg.screen !== 'boolean') return;
     switch (msg.type) {
       case 'call-req':    this._onCallReq(peerId, msg); break;
       case 'call-accept': this._onCallAccept();     break;
@@ -2854,6 +2859,7 @@ class DeadDrop {
       this.callState = 'active';
       this._startCallClock();
       this._updateCallBtn(true);
+      this._onCallActive();
     } catch (err) {
       console.error('Call offer handling failed:', err);
       this._endCall();
@@ -2867,6 +2873,7 @@ class DeadDrop {
       this.callState = 'active';
       this._startCallClock();
       this._updateCallBtn(true);
+      this._onCallActive();
     } catch (err) {
       console.error('Call answer handling failed:', err);
       this._endCall();
@@ -2880,10 +2887,24 @@ class DeadDrop {
   }
 
   _onCallMute(msg) {
-    if (msg.video !== undefined) {
-      this.el.remotePlaceholder.classList.toggle('hidden', msg.video);
-      if (!msg.video) this._showPlaceholder('call.cameraOff');
-    }
+    if (msg.video === undefined) return;
+    this._remotePictureOff = !msg.video;
+    this._remoteScreen = msg.video && msg.screen === true;
+    this._syncRemotePicture();
+  }
+
+  /** Media is negotiated: what each side can now do is known. */
+  _onCallActive() {
+    this._syncShareButton();
+    // A video call answered without a camera says so, but not in the first
+    // moments, when the picture is simply still on its way.
+    const call = this._callGen;
+    clearTimeout(this._pictureGrace);
+    this._pictureGrace = setTimeout(() => {
+      if (call !== this._callGen) return;
+      this._pictureGraceOver = true;
+      this._syncRemotePicture();
+    }, 2500);
   }
 
   /** What stands in for the other side's picture, in words that fit the call:
@@ -2918,6 +2939,25 @@ class DeadDrop {
       this.localStream = null;
     }
     this.remoteStream = null;
+    if (this._screenTrack) {
+      // Not part of localStream, so nothing above stopped it.
+      this._screenTrack.stop();
+      this._screenTrack = null;
+    }
+    this._camBeforeShare = null;
+    this._screenBusy = false;
+    this._remoteVideoTrack = null;
+    this._remotePictureOff = false;
+    this._remoteScreen = false;
+    this._remoteLastPicture = null;
+    clearTimeout(this._pictureGrace);
+    this._pictureGraceOver = false;
+    this.el.remoteVideo.classList.remove('screen');
+    this.el.screenNote.classList.add('hidden');
+    this.el.screenNote.textContent = '';
+    this.el.shareScreen.classList.add('hidden');
+    this.el.shareScreen.classList.remove('sharing');
+    this.el.shareScreen.setAttribute('aria-pressed', 'false');
     this.el.localVideo.srcObject = null;
     this.el.remoteVideo.srcObject = null;
     // A call that fails mid-negotiation gets torn down here, and left the last
@@ -2935,14 +2975,193 @@ class DeadDrop {
     this._refreshRoomState();
   }
 
-  _onRemoteTrack(stream) {
-    this.remoteStream = stream;
-    this.el.remoteVideo.srcObject = stream;
-    // A voice call has no picture to show: keep the placeholder up, and say
-    // why when a video call was answered without one.
-    const video = stream.getVideoTracks().length > 0;
-    this.el.remotePlaceholder.classList.toggle('hidden', video);
-    if (!video && this._callVideo) this._showPlaceholder('call.voiceOnly');
+  _onRemoteTrack(track) {
+    if (!this._callInProgress()) return;
+    if (!this.remoteStream) {
+      this.remoteStream = new MediaStream();
+      this.el.remoteVideo.srcObject = this.remoteStream;
+    }
+    if (track.kind !== 'video') {
+      if (!this.remoteStream.getTracks().includes(track)) this.remoteStream.addTrack(track);
+      return;
+    }
+    // Every call has a picture channel, so that a screen can be shown without
+    // negotiating again; in a voice call nothing travels on it. The track is
+    // therefore only put on screen while pictures are actually arriving.
+    this._remoteVideoTrack = track;
+    const sync = () => { if (this._remoteVideoTrack === track) this._syncRemotePicture(); };
+    track.addEventListener('unmute', sync);
+    track.addEventListener('mute', sync);
+    track.addEventListener('ended', sync);
+    this._syncRemotePicture();
+  }
+
+  /** Show the other side's picture while there is one, and say why when not. */
+  _syncRemotePicture() {
+    if (!this._callInProgress()) return;
+    const track = this._remoteVideoTrack;
+    const live = !!track && track.readyState === 'live' && !track.muted && !this._remotePictureOff;
+    if (track && this.remoteStream) {
+      const shown = this.remoteStream.getVideoTracks().includes(track);
+      if (live && !shown) this.remoteStream.addTrack(track);
+      else if (!live && shown) this.remoteStream.removeTrack(track);
+    }
+    if (live) this._remoteLastPicture = this._remoteScreen ? 'screen' : 'camera';
+    this.el.remotePlaceholder.classList.toggle('hidden', live);
+    this.el.remoteVideo.classList.toggle('screen', live && this._remoteScreen);
+    if (!live) {
+      if (this._remotePictureOff && this._remoteLastPicture === 'camera') {
+        this._showPlaceholder('call.cameraOff');
+      } else if (!this._callVideo) {
+        this._showPlaceholder('call.voice');
+      } else {
+        this._showPlaceholder(this._pictureGraceOver ? 'call.voiceOnly' : 'call.waitingVideo');
+      }
+    }
+    this._syncScreenNote();
+  }
+
+  /** Offered only where the browser can capture a screen and this call has a
+   *  picture channel to put it on. Phones have no such capture. */
+  _syncShareButton() {
+    const can = this.callState === 'active'
+      && typeof navigator.mediaDevices?.getDisplayMedia === 'function'
+      && !!this._callConn()?.canSendVideo();
+    const sharing = !!this._screenTrack;
+    this.el.shareScreen.classList.toggle('hidden', !can);
+    this.el.shareScreen.classList.toggle('sharing', sharing);
+    this.el.shareScreen.setAttribute('aria-pressed', String(sharing));
+    const label = t(sharing ? 'aria.stopShare' : 'aria.shareScreen');
+    this.el.shareScreen.dataset.i18nAria = sharing ? 'aria.stopShare' : 'aria.shareScreen';
+    this.el.shareScreen.setAttribute('aria-label', label);
+    this.el.shareScreen.title = label;
+  }
+
+  /** Whose screen is on show, in words — above all when it is one's own. */
+  _syncScreenNote() {
+    const peer = this.peers.get(this._callPeerId)?.label ?? '';
+    let text = '';
+    if (this._screenTrack) {
+      text = t('call.youShare').replace('{peer}', peer);
+    } else if (this._remoteScreen && this.el.remoteVideo.classList.contains('screen')) {
+      text = t('call.peerShares').replace('{peer}', peer);
+    }
+    this.el.screenNote.textContent = text;
+    this.el.screenNote.classList.toggle('hidden', !text);
+    this.el.screenNote.classList.toggle('mine', !!this._screenTrack);
+  }
+
+  /** Tell the other side what this one is sending, so its screen can say so. */
+  _announceMedia() {
+    const mic = this.localStream?.getAudioTracks()[0];
+    const cam = this.localStream?.getVideoTracks()[0];
+    const screen = !!this._screenTrack;
+    this._sendBestEffort(this._callConn(), {
+      type: 'call-mute',
+      audio: mic?.enabled ?? true,
+      video: screen || (cam?.enabled ?? false),
+      screen,
+    });
+  }
+
+  /**
+   * Show this screen in place of the camera, or stop.
+   *
+   * The screen goes out on the call's existing picture channel — the one
+   * bound to the verified safety code — by swapping the track on it, so
+   * nothing is negotiated and the other side cannot ask for it: only this
+   * button, and then the browser's own picker, start a capture. The camera
+   * is switched off while the screen is shown rather than left running
+   * unseen, and comes back afterwards if it was on.
+   */
+  async _toggleScreenShare() {
+    if (this._screenBusy) return;
+    if (this._screenTrack) { await this._stopScreenShare(); return; }
+    const conn = this._callConn();
+    if (this.callState !== 'active' || !conn?.canSendVideo()) return;
+    this._screenBusy = true;
+    const call = this._callGen;
+    let track = null;
+    try {
+      const display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+      track = display.getVideoTracks()[0] ?? null;
+      for (const extra of display.getTracks()) if (extra !== track) extra.stop();
+      if (!track || call !== this._callGen || this.callState !== 'active') throw new CallGone();
+      try { track.contentHint = 'detail'; } catch { /* only a hint */ }
+      await conn.replaceVideoTrack(track);
+      if (call !== this._callGen) throw new CallGone();
+      const cam = this.localStream?.getVideoTracks()[0];
+      this._camBeforeShare = cam ? { enabled: cam.enabled } : null;
+      if (cam) { this.localStream.removeTrack(cam); cam.stop(); }
+      const shared = track;
+      track = null;
+      this._screenTrack = shared;
+      // The browser's own "stop sharing" control ends the track from outside.
+      shared.addEventListener('ended', () => {
+        if (this._screenTrack === shared) this._stopScreenShare();
+      });
+      this._syncCamButton();
+      this._syncShareButton();
+      this._syncScreenNote();
+      this._announceMedia();
+    } catch (err) {
+      const declined = err instanceof CallGone
+        || err?.name === 'NotAllowedError' || err?.name === 'AbortError';
+      if (!declined) {
+        console.warn('Screen sharing failed:', err);
+        this.el.screenNote.textContent = t('call.screenFailed');
+        this.el.screenNote.classList.remove('hidden', 'mine');
+      }
+    } finally {
+      track?.stop();
+      this._screenBusy = false;
+    }
+  }
+
+  async _stopScreenShare() {
+    const shared = this._screenTrack;
+    if (!shared) return;
+    this._screenTrack = null;
+    shared.stop();
+    const call = this._callGen;
+    const conn = this._callConn();
+    const before = this._camBeforeShare;
+    this._camBeforeShare = null;
+    let cam = null;
+    try {
+      if (before && this.callState === 'active') {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: this._facing || 'user' } },
+        });
+        cam = stream.getVideoTracks()[0] ?? null;
+        if (call !== this._callGen || !this.localStream) throw new CallGone();
+        if (cam) cam.enabled = before.enabled;
+      }
+      if (call !== this._callGen) throw new CallGone();
+      await conn?.replaceVideoTrack(cam);
+      if (cam && this.localStream) {
+        this.localStream.addTrack(cam);
+        cam = null;
+      }
+    } catch (err) {
+      if (!(err instanceof CallGone)) {
+        console.warn('Could not return to the camera:', err);
+        // Whatever happens, the screen must not stay on the channel.
+        if (call === this._callGen) await conn?.replaceVideoTrack(null).catch(() => {});
+      }
+    } finally {
+      cam?.stop();
+    }
+    if (call !== this._callGen) return;
+    this._syncCamButton();
+    const restored = this.localStream?.getVideoTracks()[0];
+    if (restored) {
+      this.el.toggleCam.classList.toggle('muted', !restored.enabled);
+      this.el.toggleCam.textContent = restored.enabled ? '📹' : '🚫';
+    }
+    this._syncShareButton();
+    this._syncScreenNote();
+    this._announceMedia();
   }
 
   /** No camera in this call: the camera button has nothing to switch. */
@@ -3083,11 +3302,7 @@ class DeadDrop {
     track.enabled = !track.enabled;
     this.el.toggleMic.classList.toggle('muted', !track.enabled);
     this.el.toggleMic.textContent = track.enabled ? '🎤' : '🔇';
-    this._sendBestEffort(this._callConn(), {
-      type: 'call-mute',
-      audio: track.enabled,
-      video: this.localStream.getVideoTracks()[0]?.enabled ?? false,
-    });
+    this._announceMedia();
   }
 
   _toggleCam() {
@@ -3097,11 +3312,7 @@ class DeadDrop {
     track.enabled = !track.enabled;
     this.el.toggleCam.classList.toggle('muted', !track.enabled);
     this.el.toggleCam.textContent = track.enabled ? '📹' : '🚫';
-    this._sendBestEffort(this._callConn(), {
-      type: 'call-mute',
-      audio: this.localStream.getAudioTracks()[0]?.enabled ?? true,
-      video: track.enabled,
-    });
+    this._announceMedia();
   }
 
   _resetMuteButtons() {

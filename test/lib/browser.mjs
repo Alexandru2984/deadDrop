@@ -250,6 +250,22 @@ export class Peer {
   }
 
   /**
+   * The same, as if the user had just clicked or pressed a key. Some browser
+   * features — capturing a screen is one — refuse to start from script alone,
+   * so a test that clicks their button has to carry that activation with it.
+   */
+  async gesture(expression) {
+    const res = await this.cdp.send('Runtime.evaluate', {
+      expression, awaitPromise: true, returnByValue: true, userGesture: true,
+    }, this.sessionId);
+    if (res.exceptionDetails) {
+      throw new Error(`${this.name}: ${res.exceptionDetails.exception?.description
+        || res.exceptionDetails.text}`);
+    }
+    return res.result.value;
+  }
+
+  /**
    * Navigate, and do not come back until the app is actually running.
    *
    * Waiting on readyState alone is not enough, and failing quietly is worse. The

@@ -11,6 +11,16 @@ compare rather than take a hash on trust.
 
 ## Unreleased
 
+- **Screen sharing** in calls, on desktop browsers. The screen goes out on the
+  call's verified picture channel in place of the camera, which is switched off
+  meanwhile; only the person sharing can start it, and they are told for as
+  long as it lasts.
+- Fix calls failing after several in one conversation. Every call left its two
+  channels behind in each later offer, which grew by about seven kilobytes a
+  call; the ninth video call crossed the size a peer accepts, was dropped
+  unanswered, and never connected. Finished calls now retire their channels.
+- `SECURITY.md`, and an operator-set `/.well-known/security.txt`
+  (`SECURITY_CONTACT`), say where to report a vulnerability.
 - The public verifier refuses a manifest that leaves out any module. Four were
   not on its required list — the page's first script and the three that strip
   location and author data from files — so a manifest omitting them still got a
