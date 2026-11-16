@@ -9,6 +9,25 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## 0.7.3 — 2026-11-16
+
+**Security update.** Rebuild and redeploy the server, then reload open tabs to
+pick up the client fix.
+
+- **Security:** requests that another site makes a browser send are refused
+  before rate limiting. Any web page open in another tab could spend a visitor's
+  sign-in allowance with forged requests — each refused, each still counted —
+  and keep that person, and everyone sharing their address, from signing in. A
+  sibling subdomain could do the same to an account's signaling and relay
+  allowances. Pages remain linkable from anywhere.
+- **Security:** a sign-out or Panic that cannot reach the server is no longer
+  forgotten. Only the server can end a session, since the cookie is HttpOnly;
+  with no connection both survived, and the next reload was signed in again.
+  The app now leaves at once, keeps trying, finishes the sign-out on the next
+  load before it believes the cookie, and holds a new sign-in until that is done.
+- Browser privacy regressions cover signing out and Panic with the server
+  unreachable.
+
 ## 0.7.2 — 2026-11-11
 
 **Security update.** Reload open tabs after deployment to pick up the client fixes.
