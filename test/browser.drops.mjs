@@ -55,6 +55,24 @@ ok(await alice.eval(`document.querySelector('#drops-compose').classList.contains
   'nor with them on, until someone has been met and saved');
 
 console.log('\nmeeting once');
+// From here Bob's storage is slow, as a phone's or Tor Browser's can be: every
+// opening of the database answers 300 ms late. Changes to his record of Alice
+// then take long enough that the ones starting together overlap — every run,
+// rather than the once in ten that made an inbox key go missing.
+await bob.eval(`(() => {
+  const open = IDBFactory.prototype.open;
+  const onsuccess = Object.getOwnPropertyDescriptor(IDBRequest.prototype, 'onsuccess');
+  IDBFactory.prototype.open = function (...args) {
+    const request = open.apply(this, args);
+    Object.defineProperty(request, 'onsuccess', {
+      configurable: true,
+      get() { return onsuccess.get.call(this); },
+      set(fn) { onsuccess.set.call(this, fn && ((e) => setTimeout(() => fn.call(this, e), 300))); },
+    });
+    return request;
+  };
+  return true;
+})()`);
 await chooseDirectTransport(alice);
 await chooseDirectTransport(bob);
 await alice.eval(`document.querySelector('#create-room').click(); true`);
@@ -74,8 +92,35 @@ await bob.clickVerify();
 ok(await waitFor(() => alice.verified()) && await waitFor(() => bob.verified()), 'compare the safety code');
 ok(await waitFor(async () => (await alice.notices()).some((n) => n.includes('Bob')) && (await bob.notices()).some((n) => n.includes('Alice')), { timeout: 15000 }),
   'and save each other as contacts');
-// The inbox keys travel over the verified channel just after; give them a beat.
-await sleep(1500);
+// The inbox keys travel over the verified channel just after. Each side mints
+// a key to its own inbox and accepts the other's at about the same moment,
+// both into the one record it keeps for that contact: done at once, the
+// second write undid the first, and a lost inbox key meant the contact's
+// messages could never be opened. Both keys, on both sides, and still both
+// after a moment more.
+const keys = (peer) => peer.eval(`(async () => {
+  const db = await new Promise((resolve, reject) => {
+    const r = indexedDB.open('deaddrop-identity');
+    r.onsuccess = () => resolve(r.result);
+    r.onerror = () => reject(r.error);
+  });
+  try {
+    const all = await new Promise((resolve, reject) => {
+      const q = db.transaction('drops').objectStore('drops').getAll();
+      q.onsuccess = () => resolve(q.result);
+      q.onerror = () => reject(q.error);
+    });
+    return all.map((r) => ({ inbox: (r.inbox || []).length, outbox: !!r.outbox }));
+  } finally { db.close(); }
+})()`);
+const bothKeys = async (peer) => {
+  const records = await keys(peer);
+  return records.length === 1 && records[0].inbox === 1 && records[0].outbox;
+};
+await waitFor(async () => await bothKeys(alice) && await bothKeys(bob), { timeout: 10000 });
+await sleep(1000);
+ok(await bothKeys(alice) && await bothKeys(bob),
+  `each keeps the key to its own inbox and to the other's (${JSON.stringify([await keys(alice), await keys(bob)])})`);
 
 console.log('\na message left while the other is away');
 await home(bob, 'Alice');

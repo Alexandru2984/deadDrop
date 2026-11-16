@@ -4,7 +4,7 @@
  * they use `this` exactly as if written there.
  */
 
-import { listContacts, loadDropRecord, saveDropRecord, listDropRecords } from './identity.js';
+import { listContacts, loadDropRecord, saveDropRecord, listDropRecords, withDropRecords } from './identity.js';
 import { mintInbox, acceptCapability, sealDrop, namesToCheck, openDrop, DROP_TTLS, MAX_DROP_TEXT } from './drops.js';
 import { t } from './i18n.js';
 import { DROP_READ_TTLS, DROP_POLL_MS, h } from './app-shared.js';
@@ -23,12 +23,15 @@ export class DropMethods {
     const fp = s.identityFp;
     const current = () => !this._wiping && this.peers.get(peerId) === s && !!this.identity;
     try {
-      const { record, capability } = mintInbox(await loadDropRecord(fp));
-      if (!current()) return;
       // Stored before it is handed over: a key given out that this browser
       // does not hold would make every message left with it unreadable.
-      await saveDropRecord(fp, record, { isCurrent: current });
-      if (!current()) return;
+      const capability = await withDropRecords(async () => {
+        const { record, capability: minted } = mintInbox(await loadDropRecord(fp));
+        if (!current()) return null;
+        await saveDropRecord(fp, record, { isCurrent: current });
+        return minted;
+      });
+      if (!capability || !current()) return;
       await this._sendBestEffort(s.conn, { type: 'drop-inbox', ...capability });
     } catch {
       // Storage unavailable: no inbox this time, and no harm done.
@@ -41,9 +44,11 @@ export class DropMethods {
     const fp = s.identityFp;
     const current = () => !this._wiping && this.peers.get(peerId) === s && !!this.identity;
     try {
-      const record = acceptCapability(await loadDropRecord(fp), capability);
-      if (!record || !current()) return;
-      await saveDropRecord(fp, record, { isCurrent: current });
+      await withDropRecords(async () => {
+        const record = acceptCapability(await loadDropRecord(fp), capability);
+        if (!record || !current()) return;
+        await saveDropRecord(fp, record, { isCurrent: current });
+      });
     } catch { /* storage unavailable */ }
   }
 
@@ -135,9 +140,11 @@ export class DropMethods {
         if (res.status === 404) this._renderDropNote(t('drops.gone'));
         return;
       }
-      const record = await loadDropRecord(fp);
-      const { message, record: after } = await openDrop(record, name, res.data.box, res.data.iv);
-      await saveDropRecord(fp, after);
+      const message = await withDropRecords(async () => {
+        const opened = await openDrop(await loadDropRecord(fp), name, res.data.box, res.data.iv);
+        await saveDropRecord(fp, opened.record);
+        return opened.message;
+      });
       (this._dropsOpened ||= new Set()).add(name.id);
       row.replaceWith(this._renderOpenedDrop(label, message));
     } catch {
@@ -199,26 +206,30 @@ export class DropMethods {
     const name = this.el.dropsTo.selectedOptions[0]?.textContent || '';
     this.el.dropsSend.disabled = true;
     try {
-      let record = await loadDropRecord(fp);
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const sealed = await sealDrop(record, { text, readTtl });
-        const res = await this._postJSON('/api/drop', { id: sealed.id, box: sealed.box, iv: sealed.iv, ttl });
-        if (res.ok || res.status === 409) {
-          // Taken, or a box already sits under that name: either way that
-          // name is used, and the next message goes under the next one.
-          record = sealed.advance();
-          await saveDropRecord(fp, record);
-          if (res.ok) {
-            this.el.dropsText.value = '';
-            say(`drops.left.${ttl}`, true, name);
-            return;
+      // Held until the name used is stored as used: two messages sent at once
+      // would otherwise both be sealed under the same one.
+      await withDropRecords(async () => {
+        let record = await loadDropRecord(fp);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const sealed = await sealDrop(record, { text, readTtl });
+          const res = await this._postJSON('/api/drop', { id: sealed.id, box: sealed.box, iv: sealed.iv, ttl });
+          if (res.ok || res.status === 409) {
+            // Taken, or a box already sits under that name: either way that
+            // name is used, and the next message goes under the next one.
+            record = sealed.advance();
+            await saveDropRecord(fp, record);
+            if (res.ok) {
+              this.el.dropsText.value = '';
+              say(`drops.left.${ttl}`, true, name);
+              return;
+            }
+            continue;
           }
-          continue;
+          say(res.status === 429 ? 'drops.full' : 'drops.failed');
+          return;
         }
-        say(res.status === 429 ? 'drops.full' : 'drops.failed');
-        return;
-      }
-      say('drops.failed');
+        say('drops.failed');
+      });
     } catch {
       say('drops.failed');
     } finally {

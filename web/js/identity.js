@@ -233,7 +233,28 @@ export async function loadDropRecord(fp) {
   }
 }
 
-/** Only for a contact still pinned: a record must never outlive its pin. */
+let dropQueue = Promise.resolve();
+
+/**
+ * Run `fn` with the drop records to itself. Every change to one is load,
+ * change, store, and two at once both start from the same copy, so the second
+ * store undoes the first. That is how meeting a contact could lose the key to
+ * one's own inbox: it was minted while the contact's key was being accepted,
+ * and the contact went on to leave messages nobody could open. Web Locks make
+ * it one at a time across this origin's tabs; where a browser has none, a
+ * queue does it within the page.
+ */
+export function withDropRecords(fn) {
+  if (globalThis.navigator?.locks?.request) {
+    return navigator.locks.request('deaddrop-drop-records', () => fn());
+  }
+  const run = dropQueue.then(() => fn());
+  dropQueue = run.catch(() => {});
+  return run;
+}
+
+/** Only for a contact still pinned: a record must never outlive its pin.
+ *  A change to one belongs inside withDropRecords. */
 export async function saveDropRecord(fp, record, { isCurrent = () => true } = {}) {
   const db = await openDB();
   try {
