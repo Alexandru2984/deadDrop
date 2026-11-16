@@ -422,6 +422,12 @@ func main() {
 	// The audited browser bundle is compiled into the binary. Files edited in
 	// the checkout after build time are never served by this process.
 	mux.Handle("/", embeddedWebHandler(appassets.WebFS()))
+	// Where to report a vulnerability in this deployment, if its operator said.
+	if contact, _ := securityContact(); contact != "" {
+		body := securityTxtBody(contact, publicOrigin(), securityTxtExpiry(time.Now()))
+		mux.HandleFunc("/.well-known/security.txt", publicRL.Wrap(securityTxtHandler(body)))
+		log.Printf("[security.txt] publishing the operator's contact")
+	}
 	// The file IndexNow's search engines read to know a submission is ours.
 	if key, _ := indexNowKey(); key != "" {
 		mux.HandleFunc("/"+key+".txt", indexNowKeyHandler(key))
@@ -675,6 +681,9 @@ func validateRuntimeEnvironment(port int) ([]string, turn.Config, error) {
 		return nil, turn.Config{}, fmt.Errorf("ENABLE_ADMIN_API requires an ADMIN_TOKEN of at least 32 characters")
 	}
 	if _, err := indexNowKey(); err != nil {
+		return nil, turn.Config{}, err
+	}
+	if _, err := securityContact(); err != nil {
 		return nil, turn.Config{}, err
 	}
 	origins, err := allowedOrigins(port)

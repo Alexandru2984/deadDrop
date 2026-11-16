@@ -62,6 +62,7 @@ TURN_REALM=dead.micutu.com
 ALLOWED_ORIGINS=https://dead.micutu.com,http://<onion>.onion
 OPEN_REGISTRATION=0
 INDEXNOW_KEY=<openssl rand -hex 16>
+SECURITY_CONTACT=mailto:<an address you read>
 ```
 
 `TURN_SECRET` must match coturn's `static-auth-secret`. The app never sends it to
@@ -73,6 +74,13 @@ submission comes from the site. `./scripts/deploy.sh` then tells them which of
 the three public pages a deploy changed; `deaddrop indexnow` tells them about
 all three by hand. What leaves is the public origin, those pages' addresses and
 the key. Unset, nothing is served and nothing is sent.
+
+`SECURITY_CONTACT` is optional: a `mailto:` or `https:` URI where somebody who
+finds a vulnerability in *your* deployment can reach you. Set, the service
+answers `/.well-known/security.txt` with it; the file expires a year after the
+commit the binary was built from, so a deployment nobody updates stops
+vouching for its contact. Unset, the path answers 404 — no contact is better
+than one nobody reads.
 
 ## 3. nginx vhost
 
