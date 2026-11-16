@@ -84,6 +84,11 @@ jobs:
         run: node test/crypto.selftest.mjs
       - name: Bounded message and file lifecycle
         run: node test/lifecycle.selftest.mjs
+      # Messages left for an offline contact sit on the server, so the claim
+      # that a device seized later cannot open what was collected is tested
+      # here, against everything the browser still holds.
+      - name: Messages left for an offline contact
+        run: node test/drops.selftest.mjs
       # The post-quantum half of the handshake is the one part of this repository
       # nobody here wrote. Vendoring kept the client free of package managers and
       # third-party origins, but it moved the supply chain from "npm resolves it"
@@ -212,6 +217,12 @@ jobs:
           # own page for everything else an account can do.
           - name: guest link
             suite: browser.guest.mjs
+          # The one thing this app keeps on the server between conversations.
+          # Two browsers meet, save each other, and one leaves the other a
+          # message while it is away; this checks what the server was given
+          # and that collecting it is the end of it.
+          - name: messages left offline
+            suite: browser.drops.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0

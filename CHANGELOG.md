@@ -11,6 +11,15 @@ compare rather than take a hash on trust.
 
 ## Unreleased
 
+- **Messages left for someone offline.** Two people who saved each other as
+  contacts can leave each other a message while the other is away; it waits
+  up to an hour, a day or a week, and once opened stays on screen until closed
+  or for 30 seconds or 5 minutes. The keys are handed over in a verified
+  session and never reach the server. Each message has a key and a name of its
+  own from a hash chain that only moves forward, so a browser seized later
+  cannot open what it already collected, and two messages share nothing the
+  server could match. The server keeps the sealed box until it is collected or
+  expires, and learns which account left it and which collected it.
 - **Files up to 1 GB**, up from 25 MB. A file now travels in 64 KB parts,
   each sealed on its own with its place in the file bound into it, read from
   disk and handed to the browser as it goes, so neither side holds the whole

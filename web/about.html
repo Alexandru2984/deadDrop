@@ -28,7 +28,7 @@
   <meta name="twitter:description" content="What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — security and privacy model","url":"https://dead.micutu.com/about.html","description":"What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-htKBxhdsLoQ2bxRYb+fxdVvBIzTgRcS7YL7hdT/Y/hs=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-V6sNFGkFEuDDPg9aB/YP4Ya9RAJDUc/OCcHl6fLaKwU=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -75,6 +75,7 @@
     <h2>What the service and network can see</h2>
     <ul>
       <li><span class="no">Content:</span> with the intended client, uncompromised endpoints, and mutually verified safety codes, the signaling server/TURN relay receives ciphertext rather than message, file, or call plaintext.</li>
+      <li><span class="yes">Messages left for someone offline:</span> between saved contacts only. The keys are handed over in a verified conversation and never reach the server; each message has a key of its own, forgotten once used, so a phone seized later cannot open what it already collected. The server keeps each sealed message — padded to one of three sizes — until it is collected or its time runs out (a week at most), and is not backed up. It cannot read it, but it does learn which account left it and when, and which account collected it.</li>
       <li><span class="yes">Guests:</span> someone let in by a guest link has no account and gives no name. The server knows which account's session made the link and which room it opens, holds that in memory for as long as the guest's session lasts — two hours at most — and writes none of it down. The link is a one-time pass, not proof of who used it: compare the safety code with a guest as you would with anyone.</li>
       <li><span class="yes">Account and session metadata:</span> the Go server can associate a handle/session and source IP with a room code, peer ID, other room members, connection times, and the SDP/ICE signaling it relays. These values are kept in memory for active sessions but are not written to the app log.</li>
       <li><span class="yes">Network metadata:</span> nginx, Cloudflare, journald, coturn, the VPS host, and upstream networks may record IP addresses, paths, timing, sizes, or traffic volume. The application's generic logs are not the only logs in the system.</li>
@@ -84,7 +85,7 @@
 
     <h2>Storage, TTL, burn, and panic</h2>
     <ul>
-      <li>The server persists handles, password verifiers/KDF labels, optional duress verifiers, invites, and an anti-enumeration secret. It does not persist chat rooms, messages, files, or calls. Deleting an account does not erase existing backups; the supplied deployment keeps them for about two weeks.</li>
+      <li>The server persists handles, password verifiers/KDF labels, optional duress verifiers, invites, an anti-enumeration secret, and — sealed, until collected or expired — messages left for someone offline. It does not persist chat rooms, conversations, files, or calls. Deleting an account does not erase existing backups; the supplied deployment keeps them for about two weeks.</li>
       <li>TTL, burn-after-reading, and bilateral delete are cooperative browser behavior. A peer can screenshot, save, instrument, or modify their client; downloaded files and OS/browser forensic traces can survive.</li>
       <li>A burn-after-reading message starts burning when it can be seen — the tab in front and the privacy screen lifted — with time to read that grows with its length, up to 30 seconds; a file gets 15. A received message's timer also starts when it can be seen, or ten minutes after it arrived unseen, and removes only that copy. Timers keep wall-clock time, so a phone that slept drops what expired as soon as the page is back.</li>
       <li>A reply names the message it answers and never repeats its words. Each side quotes its own copy, and the quote is wiped when that copy is removed, so a reply cannot keep a timed or burned message alive.</li>

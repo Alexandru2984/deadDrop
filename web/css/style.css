@@ -336,6 +336,61 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
 .prefs summary:hover { color: var(--accent); }
 .prefs[open] summary { margin-bottom: 4px; }
 
+/* ── Messages left for an offline contact ── */
+
+.drops-inbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 360px;
+  margin-bottom: 18px;
+}
+.drop-waiting,
+.drop-opened {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+}
+.drop-waiting { flex-direction: row; align-items: center; justify-content: space-between; }
+.drop-from { font-size: 13px; color: var(--accent); overflow-wrap: anywhere; }
+.drop-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.drop-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.drop-countdown { font-size: 12px; color: var(--warn); font-variant-numeric: tabular-nums; }
+.drop-note { margin: 0; font-size: 12px; color: var(--dim); text-align: center; }
+
+.drops-compose textarea {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  font: inherit;
+}
+.drops-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Side by side where both fit whole; one above the other on a phone, where
+   two would cut their options short. */
+.drops-row .drops-field { flex: 1 1 170px; }
+.drops-compose #drops-send { width: 100%; }
+.drops-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.drops-field select { width: 100%; }
+
 /* ── Buttons & inputs ── */
 
 .btn {

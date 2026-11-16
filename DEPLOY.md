@@ -337,7 +337,13 @@ Test through Tor: `curl --socks5-hostname 127.0.0.1:9050 http://<onion>.onion/`.
 
 Account state is three files in `/var/lib/deaddrop/data/`: `users.json` (SRP verifiers and salts),
 `invites.json`, and `srp_dummy.key`. Nothing else on the box is irreplaceable —
-the binary is rebuilt from the repo, and message content never touches the disk.
+the binary is rebuilt from the repo, and conversations never touch the disk.
+
+`data/drops/` holds messages left for someone offline: one sealed box per file,
+end-to-end encrypted with keys the server never had, deleted when collected or
+when it expires (a week at most). The backup leaves it out on purpose — a box
+restored from an archive would be one its recipient may already have
+collected, kept past the time its sender gave it.
 
 ```bash
 sudo install -m 0700 scripts/deaddrop-backup /usr/local/sbin/deaddrop-backup

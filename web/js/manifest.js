@@ -26,6 +26,7 @@ export const REQUIRED_INTEGRITY_PATHS = Object.freeze([
   'js/callsignal.js',
   'js/crypto.js',
   'js/docscrub.js',
+  'js/drops.js',
   'js/filetransfer.js',
   'js/handshake.js',
   'js/i18n.js',

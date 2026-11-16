@@ -120,6 +120,10 @@ because local CI has no TURN server; they do not depend on a privacy fallback.
 session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 (one audio/video call, with the DTLS fingerprint binding checked against the
 certificates actually in use) drive headless Chrome over the DevTools Protocol.
+`browser.drops.mjs` has two browsers meet once, save each other, and leave
+messages while the other is away: what the server is handed, the notice, the
+text, collecting several in any order, and a panic wipe taking the inbox keys.
+
 `browser.guest.mjs` joins a room with a guest link and no account, then asks
 the server — from the guest's own page — for everything an account can do:
 rooms, passes, account settings, a second connection into another room. It also

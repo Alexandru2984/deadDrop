@@ -24,6 +24,7 @@ import (
 
 	appassets "deaddrop"
 	"deaddrop/internal/auth"
+	"deaddrop/internal/drop"
 	"deaddrop/internal/middleware"
 	"deaddrop/internal/signaling"
 	"deaddrop/internal/turn"
@@ -290,6 +291,14 @@ func main() {
 
 	warnIfRegistrationIsOpen()
 
+	// Messages left for someone offline: sealed boxes the server cannot open,
+	// one file each, gone once collected or once their time runs out.
+	drops, err := drop.Open(filepath.Join("data", "drops"))
+	if err != nil {
+		log.Fatalf("drop store init: %v", err)
+	}
+	go drops.Reap()
+
 	hub := signaling.NewHub()
 	go hub.Run()
 
@@ -409,6 +418,19 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":"` + code + `"}`))
 	})))
+
+	// Drops are for accounts: a guest has no contacts to leave anything for.
+	dropPrincipal := func(r *http.Request) (string, bool) {
+		if _, guest := authH.SessionGuestRoom(r); guest {
+			return "", false
+		}
+		return authH.SessionPrincipal(r)
+	}
+	dropRL := middleware.NewRateLimiter(10, 15, time.Minute)
+	dropReadRL := middleware.NewRateLimiter(30, 30, time.Minute)
+	mux.HandleFunc("/api/drop", middleware.RequireSameOrigin(perAccount(dropRL, drops.PutHandler(dropPrincipal))))
+	mux.HandleFunc("/api/drop/check", middleware.RequireSameOrigin(perAccount(dropReadRL, drops.CheckHandler(dropPrincipal))))
+	mux.HandleFunc("/api/drop/collect", middleware.RequireSameOrigin(perAccount(dropReadRL, drops.TakeHandler(dropPrincipal))))
 
 	// Guests: an account in a room mints a one-time pass for it; whoever
 	// presents the pass gets a session good for that room and nothing else.

@@ -157,9 +157,23 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   else, and a guest's browser does not present its saved-contact key. The
   server learns that an account vouched for a guest in a room; it keeps that
   in memory with the session and writes none of it down.
+- Two saved contacts can leave each other messages while the other is
+  offline. The keys are handed over in a verified session, never through the
+  server: each side gives the other the start of a hash chain for its inbox,
+  and every message is sealed with the next key in it under a name derived
+  from that key, after which the key is forgotten. Two messages for the same
+  person share no name, and a browser seized later cannot open anything
+  already collected. A new inbox is opened at every meeting. The server keeps
+  the sealed box — padded to one of three sizes, one file each in
+  `data/drops/`, never in backups — until it is collected or its hour, day or
+  week runs out. It sees which account left a box and when, and which account
+  asked after it and collected it; who left it is held in memory only, to cap
+  an account at 50 waiting boxes. Once opened, a message is shown until closed
+  or for 30 seconds or 5 minutes, and is not kept anywhere.
 - The server persists handles, SRP salts/verifiers/KDF labels, optional duress
   verifiers, invites (single-use, expiring after 14 days by default), and one
-  local anti-enumeration secret. It does not persist
+  local anti-enumeration secret, and the sealed boxes of messages left for
+  someone offline until they are collected or expire. It does not persist
   rooms, peer IDs, chat messages, files, calls, or session cookies across restart.
 - Messages/files exist in browser memory and may be downloaded. TTL, burn, and
   bilateral-delete notices are cooperative UI behavior; a peer, extension,
@@ -368,7 +382,7 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
 go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1 -exclude-generated \
   -nosec-require-rules -nosec-require-justification ./...
 go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --no-banner --redact .
-for t in crypto lifecycle mlkem srp fingerprint config manifest callsignal \
+for t in crypto lifecycle drops mlkem srp fingerprint config manifest callsignal \
          ice-grace scrub seo property; do node "test/$t.selftest.mjs"; done
 node scripts/gen-integrity.mjs --check
 ```
@@ -384,7 +398,7 @@ DD_URL=http://127.0.0.1:8100 DD_INVITE=$(./deaddrop invite) \
   DD_REQUIRE_BROWSER=1 node test/browser.smoke.mjs
 ```
 
-The same goes for `browser.{a11y,support,pair,group,call,hostile,integrity,guest}.mjs`.
+The same goes for `browser.{a11y,support,pair,group,call,hostile,integrity,guest,drops}.mjs`.
 `DD_SCREENSHOT_DIR=dir` keeps the smoke suite's phone-size screenshots.
 
 The live SRP migration test is `node test/srp.e2e.mjs` against a disposable local

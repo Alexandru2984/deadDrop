@@ -21,9 +21,13 @@
 import { concatBytes } from './util.js';
 
 const DB_NAME = 'deaddrop-identity';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const KEY_STORE = 'identity';
 const TRUST_STORE = 'contacts';
+// Per contact: the boxes this browser can be left messages in, and the one it
+// can leave messages in for them (drops.js). Kept beside the pin it belongs
+// to, and gone with it.
+const DROP_STORE = 'drops';
 const SELF_ID = 'self';
 
 const enc = new TextEncoder();
@@ -43,6 +47,7 @@ function openDB() {
       const db = request.result;
       if (!db.objectStoreNames.contains(KEY_STORE)) db.createObjectStore(KEY_STORE);
       if (!db.objectStoreNames.contains(TRUST_STORE)) db.createObjectStore(TRUST_STORE);
+      if (!db.objectStoreNames.contains(DROP_STORE)) db.createObjectStore(DROP_STORE);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -113,12 +118,13 @@ export async function clearIdentity() {
   try {
     db = await openDB();
     await new Promise((resolve, reject) => {
-      const tx = db.transaction([KEY_STORE, TRUST_STORE], 'readwrite');
+      const tx = db.transaction([KEY_STORE, TRUST_STORE, DROP_STORE], 'readwrite');
       tx.oncomplete = () => resolve();
       tx.onabort = () => reject(tx.error);
       tx.onerror = () => reject(tx.error);
       tx.objectStore(KEY_STORE).delete(SELF_ID);
       tx.objectStore(TRUST_STORE).clear();
+      tx.objectStore(DROP_STORE).clear();
     });
   } catch { /* nothing stored, or storage unavailable */ }
   finally { db?.close(); }
@@ -211,5 +217,62 @@ export async function forgetContact(fp) {
   try {
     await withStore(TRUST_STORE, 'readwrite', (store) => store.delete(fp));
   } catch { /* already gone */ }
+  // Whatever could be left for them, or collected from them, goes too.
+  try {
+    await withStore(DROP_STORE, 'readwrite', (store) => store.delete(fp));
+  } catch { /* already gone */ }
+}
+
+/* ── Drop boxes ── */
+
+export async function loadDropRecord(fp) {
+  try {
+    return (await withStore(DROP_STORE, 'readonly', (store) => store.get(fp))) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Only for a contact still pinned: a record must never outlive its pin. */
+export async function saveDropRecord(fp, record, { isCurrent = () => true } = {}) {
+  const db = await openDB();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction([TRUST_STORE, DROP_STORE], 'readwrite');
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+      tx.onerror = () => reject(tx.error);
+      const pinned = tx.objectStore(TRUST_STORE).get(fp);
+      pinned.onsuccess = () => {
+        if (!pinned.result || !isCurrent()) {
+          tx.abort();
+          return;
+        }
+        tx.objectStore(DROP_STORE).put(record, fp);
+      };
+    });
+  } finally {
+    db.close();
+  }
+}
+
+export async function listDropRecords() {
+  try {
+    const db = await openDB();
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(DROP_STORE, 'readonly');
+        const store = tx.objectStore(DROP_STORE);
+        const keys = store.getAllKeys();
+        const values = store.getAll();
+        tx.oncomplete = () => resolve(keys.result.map((fp, i) => ({ fp, record: values.result[i] })));
+        tx.onerror = () => reject(tx.error);
+      });
+    } finally {
+      db.close();
+    }
+  } catch {
+    return [];
+  }
 }
 
