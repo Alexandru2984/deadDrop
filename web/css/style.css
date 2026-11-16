@@ -285,6 +285,24 @@ h1, h2, .auth-hint, .account-hint, .verify-hint {
   max-width: 320px;
 }
 
+/* An invitation that needs no account: the one thing to do, above the form. */
+.guest-invite {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 320px;
+  margin-bottom: 8px;
+}
+.guest-invite .btn { width: 100%; }
+.guest-invite .auth-hint { margin: 0; }
+
+/* A guest has one room: no room to create, no code to type, no account. */
+.landing.guest #create-room,
+.landing.guest .divider { display: none; }
+.landing.guest #room-code-input { color: var(--dim); }
+
 .gen-pass-btn { align-self: flex-start; }
 .gen-pass-note { color: var(--warn); margin: 0; }
 .relay-toggle small { color: var(--dim); }

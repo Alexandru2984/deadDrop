@@ -74,13 +74,18 @@ type Peer struct {
 	windowMsgs   int
 	windowBytes  int
 	principal    string
+	onlyRoom     string
 }
 
 // ConnectionAccess binds a WebSocket to an authenticated principal and lets the
 // pumps re-check that its session has not been revoked.
 type ConnectionAccess struct {
 	Principal string
-	Valid     func() bool
+	// Room, when set, is the only room this connection may join. A guest's
+	// session is good for one room; the limit is applied here, where the join
+	// happens, rather than trusted to the client that was handed the link.
+	Room  string
+	Valid func() bool
 	// Revoked, when set, tells an ended session from an expired one, so the
 	// browser can be told it was signed out and end what it still has open.
 	Revoked func() bool
@@ -148,6 +153,7 @@ func HandleWebSocket(hub *Hub, w http.ResponseWriter, r *http.Request, access Co
 		sessionGone:  access.Revoked,
 		windowAt:     time.Now(),
 		principal:    access.Principal,
+		onlyRoom:     access.Room,
 	}
 	peer.joinTimer = time.AfterFunc(joinTimeout, func() {
 		peer.closeWithPolicy("room join timeout")
@@ -257,6 +263,12 @@ func (p *Peer) handleMessage(msg SignalMessage) {
 	switch msg.Type {
 	case "join":
 		if !ValidateRoomCode(msg.Room) || msg.To != "" || msg.From != "" || msg.PeerID != "" || len(msg.Payload) != 0 || msg.Error != "" {
+			p.sendError("invalid room code")
+			return
+		}
+		if p.onlyRoom != "" && msg.Room != p.onlyRoom {
+			// The same answer as a malformed code: which rooms exist is not
+			// something a guest gets to probe.
 			p.sendError("invalid room code")
 			return
 		}

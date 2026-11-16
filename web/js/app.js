@@ -106,6 +106,8 @@ const SERVER_ERRORS = {
   'not authenticated': 'srv.expired',
   'room unavailable': 'srv.roomFull',
   'invalid room code': 'err.roomCode',
+  'invalid or used guest link': 'guest.failed',
+  'guest links are temporarily unavailable': 'srv.unavailable',
 };
 
 function serverMessage(text, fallbackKey) {
@@ -290,11 +292,13 @@ class DeadDrop {
     } catch { /* default: invite required */ }
   }
 
-  // Parse a shared join link (#join=<code>) and remember the room to pre-fill.
+  // Parse a shared join link (#join=<code>, with &guest=<pass> for someone
+  // without an account) and remember the room to pre-fill.
   _readJoinHash() {
-    const m = location.hash.match(/^#join=([0-9a-f]{24})$/i);
+    const m = location.hash.match(/^#join=([0-9a-f]{24})(?:&guest=([0-9a-f]{32}))?$/i);
     if (m) {
       this._pendingJoin = m[1].toLowerCase();
+      this._pendingGuest = m[2] ? m[2].toLowerCase() : null;
       history.replaceState(null, '', location.pathname); // drop the code from the URL bar
     }
   }
@@ -365,6 +369,8 @@ class DeadDrop {
       msgInput:    $('#msg-input'),
       landingError: $('#landing-error'),
       authInvited: $('#auth-invited'),
+      authGuest: $('#auth-guest'),
+      guestJoinBtn: $('#guest-join-btn'),
       landingInvited: $('#landing-invited'),
       sendBtn:     $('#send-btn'),
       attachBtn:   $('#attach-btn'),
@@ -429,6 +435,7 @@ class DeadDrop {
       this._drawStatus();
     });
     this.el.logoutBtn.addEventListener('click', () => this._logout());
+    this.el.guestJoinBtn.addEventListener('click', () => this._joinAsGuest());
     window.addEventListener('online', () => { if (signOutOwed()) this._retrySignOut(0); });
     this.el.settingsBtn.addEventListener('click', () => {
       this.el.accountPanel.classList.toggle('hidden');
@@ -642,6 +649,19 @@ class DeadDrop {
       if (res.ok) {
         const data = await res.json();
         if (!work.current()) return;
+        if (data.guest === true) {
+          // A link to some other room: being a guest of this one is no way
+          // into that one. Offer what the link offers — a new pass replaces
+          // this guest session, an ordinary invitation asks for an account —
+          // rather than drop the visitor into the room they were not sent to.
+          const elsewhere = this._pendingJoin && this._pendingJoin !== data.room;
+          if (!elsewhere && ROOM_CODE_RE.test(data.room)) this._becomeGuest(data.room);
+          else this._showPage('auth');
+          return;
+        }
+        // Signed in to an account: the invitation is joined with it, and the
+        // guest pass is left unused for whoever else it may have been sent to.
+        this._pendingGuest = null;
         this.username = data.username;
         // A returning visitor lands here rather than in _afterAuth, so without
         // this the identity stays unloaded and every saved contact is silently
@@ -803,6 +823,11 @@ class DeadDrop {
   }
 
   _afterAuth() {
+    // Signed in to an account: whatever guest pass or guest session this
+    // browser had is beside the point now.
+    this.guest = false;
+    this._guestRoom = null;
+    this._pendingGuest = null;
     this._concealPasswords();
     this.el.authPass.value = '';
     this.el.authInvite.value = '';
@@ -993,9 +1018,68 @@ class DeadDrop {
     return { ok: res.ok, status: res.status, data };
   }
 
+  /**
+   * Join the room a guest link points to, with no account.
+   *
+   * The pass in the link is spent here, once, for a session that can enter
+   * that one room and do nothing else. It proves nothing about who holds it,
+   * which is why it changes nothing about what comes next: the safety code is
+   * still compared before a word can be exchanged.
+   */
+  async _joinAsGuest() {
+    if (this._wiping || !this._pendingGuest) return;
+    const work = this._workScope();
+    this._hideAuthError();
+    this._setAuthBusy(true);
+    try {
+      if (!await this._finishSignOut()) {
+        if (work.current()) this._showSignOutOwed();
+        return;
+      }
+      if (!work.current()) return;
+      const res = await this._postJSON('/api/guest/redeem', { token: this._pendingGuest }, work);
+      if (res.ok && res.data.guest === true && ROOM_CODE_RE.test(res.data.room)) {
+        this._pendingGuest = null;
+        this._becomeGuest(res.data.room);
+        return;
+      }
+      // Spent, expired or withdrawn: it will not work on a second try either.
+      if (res.status === 403) {
+        this._pendingGuest = null;
+        this.el.authGuest.classList.add('hidden');
+        this.el.authInvited.classList.toggle('hidden', !this._pendingJoin);
+      }
+      this._showAuthError(serverMessage(res.data.error, 'guest.failed'));
+    } catch {
+      if (work.current()) this._showAuthError(t('err.connection'));
+    } finally {
+      if (work.current()) this._setAuthBusy(false);
+    }
+  }
+
+  _becomeGuest(room) {
+    this.guest = true;
+    this._guestRoom = room;
+    this._pendingGuest = null;
+    this._pendingJoin = room;
+    this.username = t('guest.name');
+    // "No account and no name" has to include the key this browser may hold
+    // for saved contacts. Presenting it would let the host recognise the
+    // guest as someone it has met before — a name by another route. It stays
+    // on disk, untouched, for the account that turned it on.
+    this._identityGeneration = (this._identityGeneration || 0) + 1;
+    this.identity = null;
+    this.el.authUser.value = '';
+    this.el.authPass.value = '';
+    this.el.authInvite.value = '';
+    this._showPage('landing');
+    this._armIdleLock();
+  }
+
   _setAuthBusy(busy) {
     this.el.loginBtn.disabled = busy;
     this.el.registerBtn.disabled = busy;
+    this.el.guestJoinBtn.disabled = busy;
     this.el.loginBtn.textContent = busy ? '…' : t('auth.login');
   }
 
@@ -1052,6 +1136,8 @@ class DeadDrop {
     // wait for the server first: offline, the request threw, the page stayed
     // where it was, and a reload signed the next person at the keyboard back in.
     this.username = null;
+    this.guest = false;
+    this._guestRoom = null;
     this.el.authUser.value = '';
     this.el.authPass.value = '';
     setSignOutOwed('1');
@@ -1123,8 +1209,17 @@ class DeadDrop {
 
     // Arriving through an invitation link: say so on whichever page comes
     // first, until the room is joined or left behind.
-    this.el.authInvited.classList.toggle('hidden', !this._pendingJoin);
-    this.el.landingInvited.classList.toggle('hidden', !(name === 'landing' && this._pendingJoin));
+    this.el.authInvited.classList.toggle('hidden', !this._pendingJoin || !!this._pendingGuest);
+    this.el.authGuest.classList.toggle('hidden', !this._pendingGuest);
+    this.el.landingInvited.classList.toggle('hidden', !(name === 'landing' && (this._pendingJoin || this.guest)));
+    // A guest has one room and no account: nothing to create, nothing to set.
+    this.el.landing.classList.toggle('guest', !!this.guest);
+    this.el.roomInput.readOnly = !!this.guest;
+    const note = this.guest ? 'guest.landingNote' : 'invite.landingNote';
+    if (this.el.landingInvited.dataset.i18n !== note) {
+      this.el.landingInvited.dataset.i18n = note;
+      this.el.landingInvited.textContent = t(note);
+    }
 
     switch (name) {
       case 'auth':
@@ -1134,7 +1229,12 @@ class DeadDrop {
       case 'landing':
         this.el.landing.classList.remove('hidden');
         this.el.userDisplay.textContent = this.username;
-        this.el.settingsBtn.style.display = '';
+        // Keyed for the translator only when it is a word of ours, never when
+        // it is somebody's handle.
+        if (this.guest) this.el.userDisplay.dataset.i18n = 'guest.name';
+        else delete this.el.userDisplay.dataset.i18n;
+        this.el.settingsBtn.style.display = this.guest ? 'none' : '';
+        if (this.guest) this._pendingJoin = this._guestRoom;
         if (this._pendingJoin) {
           this.el.roomInput.value = this._pendingJoin;
           this._pendingJoin = null;
@@ -1249,16 +1349,17 @@ class DeadDrop {
     this._setStatus('waiting', () => t('st.waiting'));
   }
 
-  _renderShareLink(code) {
-    const link = `${location.origin}/#join=${code}`;
+  _renderShareLink(code, guestPass = null) {
+    const link = `${location.origin}/#join=${code}${guestPass ? `&guest=${guestPass}` : ''}`;
     const el = document.createElement('div');
     el.className = 'msg system share-link';
     // Keyed for the translator, so switching language turns the invitation
     // too instead of leaving it in the one it was drawn in.
     const btn = h('button', { class: 'btn btn-sm copy-link-btn', 'data-i18n': 'share.copy', text: t('share.copy') });
     const actions = h('div', { class: 'share-actions' }, btn);
+    const intro = guestPass ? 'share.guestIntro' : 'share.intro';
     el.append(
-      h('span', { class: 'share-intro', 'data-i18n': 'share.intro', text: t('share.intro') }),
+      h('span', { class: 'share-intro', 'data-i18n': intro, text: t(intro) }),
       h('br'),
       h('span', { class: 'share-url', text: link }),
       ' ',
@@ -1283,6 +1384,37 @@ class DeadDrop {
         navigator.share({ url: link }).catch(() => { /* dismissed */ });
       });
       actions.append(shareBtn);
+    }
+    // For someone without an account: a link that lets one person into this
+    // room once. Asked for, not made by default — most invitations go to
+    // people who have an account, and a pass nobody needs should not exist.
+    if (!guestPass && !this.guest) {
+      const guestBtn = h('button', { class: 'btn btn-sm guest-link-btn', 'data-i18n': 'share.guest', text: t('share.guest') });
+      guestBtn.addEventListener('click', async () => {
+        const work = this._workScope();
+        guestBtn.disabled = true;
+        try {
+          const res = await this._postJSON('/api/guest', { room: code }, work);
+          if (!el.isConnected || this.roomCode !== code) return;
+          if (res.ok && /^[0-9a-f]{32}$/.test(res.data.token || '')) {
+            el.remove();
+            this._renderShareLink(code, res.data.token);
+            return;
+          }
+          guestBtn.dataset.i18n = 'share.guestFailed';
+          guestBtn.textContent = t('share.guestFailed');
+        } catch {
+          if (!work.current()) return;
+          guestBtn.dataset.i18n = 'share.guestFailed';
+          guestBtn.textContent = t('share.guestFailed');
+        }
+        setTimeout(() => {
+          guestBtn.disabled = false;
+          guestBtn.dataset.i18n = 'share.guest';
+          guestBtn.textContent = t('share.guest');
+        }, 2500);
+      });
+      actions.append(guestBtn);
     }
     this.el.messages.appendChild(el);
     // The link is the useful half and appears at once; the QR joins it when the
@@ -1322,7 +1454,7 @@ class DeadDrop {
   async _joinRoom() {
     const work = this._workScope();
     this._landingError('');
-    this.el.landingInvited.classList.add('hidden');
+    if (!this.guest) this.el.landingInvited.classList.add('hidden');
     if (!this.el.roomInput.value.trim()) return;
     const code = roomCodeFrom(this.el.roomInput.value);
     if (!code || !ROOM_CODE_RE.test(code)) {

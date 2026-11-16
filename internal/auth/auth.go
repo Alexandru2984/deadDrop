@@ -161,6 +161,10 @@ type session struct {
 	username  string
 	duress    bool
 	expiresAt time.Time
+	// guestRoom is set only for a guest: the one room it may join. host is
+	// the account that vouched for it, kept for counting and never shown.
+	guestRoom string
+	host      string
 	// lastSeen tracks activity for the idle bound. It is an atomic so a validity
 	// check can refresh it while holding only a read lock — every WebSocket pump
 	// re-checks its session every few seconds, so this is a hot path.
@@ -403,6 +407,7 @@ type Handler struct {
 	invites    *invites
 	lockout    *lockout
 	challenges *challengeStore
+	guests     *guestPasses
 }
 
 func NewHandler(dataDir string) (*Handler, error) {
@@ -420,6 +425,7 @@ func NewHandler(dataDir string) (*Handler, error) {
 		invites:    newInvites(dataDir),
 		lockout:    newLockout(),
 		challenges: challenges,
+		guests:     newGuestPasses(),
 	}, nil
 }
 
@@ -455,13 +461,18 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return
 	}
-	username, _, ok := h.sess.getMeta(c.Value)
+	username, guestRoom, ok := h.sess.access(c.Value)
 	if !ok {
 		if h.sess.wasRevoked(c.Value) {
 			jsonErr(w, "signed out", http.StatusUnauthorized)
 			return
 		}
 		jsonErr(w, "session expired", http.StatusUnauthorized)
+		return
+	}
+	if guestRoom != "" {
+		// No name to show and nothing to configure: the room is all there is.
+		jsonOK(w, map[string]any{"username": "guest", "guest": true, "room": guestRoom, "features": []string{}})
 		return
 	}
 	jsonOK(w, map[string]any{"username": username, "features": sessionFeatures(false)})

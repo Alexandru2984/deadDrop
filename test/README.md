@@ -120,6 +120,11 @@ because local CI has no TURN server; they do not depend on a privacy fallback.
 session), `browser.group.mjs` (three peers, a full mesh) and `browser.call.mjs`
 (one audio/video call, with the DTLS fingerprint binding checked against the
 certificates actually in use) drive headless Chrome over the DevTools Protocol.
+`browser.guest.mjs` joins a room with a guest link and no account, then asks
+the server — from the guest's own page — for everything an account can do:
+rooms, passes, account settings, a second connection into another room. It also
+spends the same link twice and uses one after its maker signed out.
+
 ## Third engine — WebKit
 
 `webkit.boot.mjs` (one Safari session) and `webkit.cross.mjs` (Safari on one side,

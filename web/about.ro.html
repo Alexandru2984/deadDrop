@@ -28,7 +28,7 @@
   <meta name="twitter:description" content="Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — securitate și confidențialitate","inLanguage":"ro","url":"https://dead.micutu.com/about.ro.html","description":"Ce protejează Dead Drop, ce nu protejează și cum verifici singur: modelul de amenințare, handshake-ul hibrid P-256 + ML-KEM-768 și metadatele pe care serviciul încă le vede.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-1pmBauxCF9buO2LYCAEmjKCguun/Wjb33tW5koWVTLg=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-AcFCSvIi051J7l85mZPUWUuyu3nssF3t4y4Ho3x3+5A=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -75,6 +75,7 @@
     <h2>Ce văd serviciul și rețeaua</h2>
     <ul>
       <li><span class="no">Conținut:</span> cu clientul intenționat, dispozitive necompromise și coduri de siguranță verificate reciproc, serverul de semnalizare / relay-ul TURN primește text cifrat, nu textul mesajelor, al fișierelor sau al apelurilor.</li>
+      <li><span class="yes">Oaspeți:</span> cine intră cu un link de oaspete nu are cont și nu dă niciun nume. Serverul știe sesiunea cărui cont a creat linkul și ce cameră deschide, ține asta în memorie cât durează sesiunea oaspetelui — cel mult două ore — și nu scrie nimic din ea pe disc. Linkul e un bilet de unică folosință, nu o dovadă a celui care l-a folosit: compară codul de siguranță cu un oaspete la fel ca în cazul oricui.</li>
       <li><span class="yes">Metadate de cont și de sesiune:</span> serverul Go poate asocia un nume de utilizator / o sesiune și IP-ul sursă cu un cod de cameră, un ID de partener, ceilalți membri ai camerei, orele conexiunilor și semnalizarea SDP/ICE pe care o retransmite. Aceste valori sunt păstrate în memorie pentru sesiunile active, dar nu sunt scrise în logul aplicației.</li>
       <li><span class="yes">Metadate de rețea:</span> nginx, Cloudflare, journald, coturn, gazda VPS-ului și rețelele din amonte pot înregistra adrese IP, căi, momente, mărimi sau volumul traficului. Logurile generice ale aplicației nu sunt singurele loguri din sistem.</li>
       <li><strong>Modul doar-relay</strong> ascunde IP-ul fiecărui capăt de celălalt partener, când TURN reușește. Operatorul VPS-ului / TURN vede în continuare IP-urile ambelor capete și momentele. E confidențialitatea IP-ului față de partener, nu anonimat.</li>

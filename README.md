@@ -139,6 +139,17 @@ calls, or total volume. Optional cover packets are occasional randomized decoys
   expired keeps them, as direct conversations do not need the server. The
   server remembers which sessions were ended, by hash, until each would have
   expired anyway.
+- A guest link lets one person into one room without an account. Whoever is in
+  the room asks for it; the link carries a one-time pass in its fragment, good
+  for 15 minutes and only while the session that made it lasts. Redeeming it
+  gives a session with no name, held in memory for at most two hours, that can
+  join that room and ask for relay settings — it cannot open rooms, make
+  passes or reach any account route, and the room limit is enforced where the
+  join happens rather than by the page. The pass is a bearer token and proves
+  nothing about who holds it: a guest compares the safety code like anyone
+  else, and a guest's browser does not present its saved-contact key. The
+  server learns that an account vouched for a guest in a room; it keeps that
+  in memory with the session and writes none of it down.
 - The server persists handles, SRP salts/verifiers/KDF labels, optional duress
   verifiers, invites (single-use, expiring after 14 days by default), and one
   local anti-enumeration secret. It does not persist
@@ -361,7 +372,7 @@ DD_URL=http://127.0.0.1:8100 DD_INVITE=$(./deaddrop invite) \
   DD_REQUIRE_BROWSER=1 node test/browser.smoke.mjs
 ```
 
-The same goes for `browser.{a11y,support,pair,group,call,hostile,integrity}.mjs`.
+The same goes for `browser.{a11y,support,pair,group,call,hostile,integrity,guest}.mjs`.
 `DD_SCREENSHOT_DIR=dir` keeps the smoke suite's phone-size screenshots.
 
 The live SRP migration test is `node test/srp.e2e.mjs` against a disposable local

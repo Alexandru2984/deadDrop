@@ -1220,6 +1220,12 @@ func (h *Handler) requireLiveSession(w http.ResponseWriter, r *http.Request) (us
 		jsonErr(w, "not authenticated", http.StatusUnauthorized)
 		return "", false, nil, false
 	}
+	if isGuestPrincipal(name) {
+		// A guest has no account to change. Refused here, by name, rather
+		// than left to fail further down for want of a stored credential.
+		jsonErr(w, "not available to guests", http.StatusForbidden)
+		return "", false, nil, false
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, srpMaxBody)
 	return name, isDuress, c, true
 }

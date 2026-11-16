@@ -28,7 +28,7 @@
   <meta name="twitter:description" content="What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see." />
   <meta name="twitter:image" content="https://dead.micutu.com/og.png" />
   <script type="application/ld+json">{"@context":"https://schema.org","@type":"TechArticle","headline":"Dead Drop — security and privacy model","url":"https://dead.micutu.com/about.html","description":"What Dead Drop protects, what it does not, and how to check it yourself: the threat model, the hybrid P-256 + ML-KEM-768 handshake, and the metadata the service can still see.","about":{"@type":"Thing","name":"End-to-end encryption"},"isPartOf":{"@type":"WebApplication","name":"Dead Drop","url":"https://dead.micutu.com/"}}</script>
-  <link rel="stylesheet" href="css/style.css" integrity="sha256-1pmBauxCF9buO2LYCAEmjKCguun/Wjb33tW5koWVTLg=" />
+  <link rel="stylesheet" href="css/style.css" integrity="sha256-AcFCSvIi051J7l85mZPUWUuyu3nssF3t4y4Ho3x3+5A=" />
   <link rel="stylesheet" href="css/about.css" integrity="sha256-5uDvLFrzsPgJJkc8PgDFWf1VA/FJuW/Trk8tYZtGNkk=" />
   <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 </head>
@@ -75,6 +75,7 @@
     <h2>What the service and network can see</h2>
     <ul>
       <li><span class="no">Content:</span> with the intended client, uncompromised endpoints, and mutually verified safety codes, the signaling server/TURN relay receives ciphertext rather than message, file, or call plaintext.</li>
+      <li><span class="yes">Guests:</span> someone let in by a guest link has no account and gives no name. The server knows which account's session made the link and which room it opens, holds that in memory for as long as the guest's session lasts — two hours at most — and writes none of it down. The link is a one-time pass, not proof of who used it: compare the safety code with a guest as you would with anyone.</li>
       <li><span class="yes">Account and session metadata:</span> the Go server can associate a handle/session and source IP with a room code, peer ID, other room members, connection times, and the SDP/ICE signaling it relays. These values are kept in memory for active sessions but are not written to the app log.</li>
       <li><span class="yes">Network metadata:</span> nginx, Cloudflare, journald, coturn, the VPS host, and upstream networks may record IP addresses, paths, timing, sizes, or traffic volume. The application's generic logs are not the only logs in the system.</li>
       <li><strong>Relay-only mode</strong> hides each endpoint's IP from the other peer when TURN succeeds. The VPS/TURN operator still sees both endpoint IPs and timing. This is IP privacy from the peer, not anonymity.</li>

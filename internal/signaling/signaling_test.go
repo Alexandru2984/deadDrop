@@ -709,3 +709,49 @@ func expectSignal(t *testing.T, conn *websocket.Conn, typ, peerID string) {
 		t.Fatalf("expected %s %s, got %+v", typ, peerID, msg)
 	}
 }
+
+// A guest session is good for one room. The client it was handed to is not
+// trusted to respect that: the join itself is where it is enforced.
+func TestRoomBoundConnectionCanJoinOnlyItsRoom(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+	const allowed = "abcdef123456abcdef123456"
+	const other = "123456abcdef123456abcdef"
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		HandleWebSocket(hub, w, r, ConnectionAccess{
+			Principal: "guest:0011223344556677", Room: allowed,
+			Valid: func() bool { return true },
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	var welcome SignalMessage
+	if err := conn.ReadJSON(&welcome); err != nil || welcome.Type != "welcome" {
+		t.Fatalf("welcome: %+v, %v", welcome, err)
+	}
+
+	if err := conn.WriteJSON(SignalMessage{Type: "join", Room: other}); err != nil {
+		t.Fatal(err)
+	}
+	var refused SignalMessage
+	if err := conn.ReadJSON(&refused); err != nil || refused.Type != "error" || refused.Error != "invalid room code" {
+		t.Fatalf("joining another room: %+v, %v — want the same refusal as a malformed code", refused, err)
+	}
+	if stats := hub.Snapshot(); stats.Rooms != 0 {
+		t.Fatalf("the refused join still created a room: %+v", stats)
+	}
+
+	if err := conn.WriteJSON(SignalMessage{Type: "join", Room: allowed}); err != nil {
+		t.Fatal(err)
+	}
+	expectSignal(t, conn, "joined", "")
+}

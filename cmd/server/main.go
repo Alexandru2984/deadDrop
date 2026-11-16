@@ -299,6 +299,8 @@ func main() {
 	roomRL := middleware.NewRateLimiter(10, 15, time.Minute)
 	turnRL := middleware.NewRateLimiter(10, 15, time.Minute)
 	wsRL := middleware.NewRateLimiter(5, 8, time.Minute)
+	// Guest links: a handful a minute is every legitimate use there is.
+	guestRL := middleware.NewRateLimiter(6, 6, time.Minute)
 	// Unauthenticated reads. Generous — a page load costs two — but bounded:
 	// each health probe parks a goroutine on the hub until it answers, and
 	// nothing else stood between an anonymous flood and that queue.
@@ -391,6 +393,13 @@ func main() {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// A guest was let into one room; it does not get to open others.
+		if _, guest := authH.SessionGuestRoom(r); guest {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":"not available to guests"}`))
+			return
+		}
 		code, err := signaling.GenerateRoomCode()
 		if err != nil {
 			log.Printf("[room] code generation error: %v", err)
@@ -400,6 +409,11 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"code":"` + code + `"}`))
 	})))
+
+	// Guests: an account in a room mints a one-time pass for it; whoever
+	// presents the pass gets a session good for that room and nothing else.
+	mux.HandleFunc("/api/guest", middleware.RequireSameOrigin(perAccount(guestRL, authH.GuestPass(signaling.ValidateRoomCode))))
+	mux.HandleFunc("/api/guest/redeem", authRL.Wrap(middleware.RequireSameOrigin(authH.GuestRedeem)))
 
 	// Ephemeral TURN/STUN credentials (auth required; never exposes the secret).
 	if turnCfg.Enabled() {
@@ -412,8 +426,10 @@ func main() {
 	// WebSocket signaling — requires valid session + rate limited
 	mux.HandleFunc("/ws", perAccount(wsRL, func(w http.ResponseWriter, r *http.Request) {
 		principal, _ := authH.SessionPrincipal(r)
+		guestRoom, _ := authH.SessionGuestRoom(r)
 		signaling.HandleWebSocket(hub, w, r, signaling.ConnectionAccess{
 			Principal: principal,
+			Room:      guestRoom,
 			Valid:     func() bool { return authH.SessionValid(r) },
 			Revoked:   func() bool { return authH.SessionRevoked(r) },
 		})

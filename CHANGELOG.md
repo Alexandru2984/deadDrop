@@ -11,6 +11,12 @@ compare rather than take a hash on trust.
 
 ## Unreleased
 
+- **Guest links.** From inside a room you can make a link that lets one person
+  in without an account: it works once, within 15 minutes, and stops working
+  if you sign out. The guest gets that one room for at most two hours and
+  nothing else — no rooms of their own, no links to hand on, no settings — and
+  the conversation stays locked until you have compared the safety code, the
+  same as with anyone.
 - **Screen sharing** in calls, on desktop browsers. The screen goes out on the
   call's verified picture channel in place of the camera, which is switched off
   meanwhile; only the person sharing can start it, and they are told for as

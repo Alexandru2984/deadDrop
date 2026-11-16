@@ -207,6 +207,11 @@ jobs:
           # hostile edge would, and checks the app refuses to start.
           - name: module integrity
             suite: browser.integrity.mjs
+          # A guest link is a bearer token for a session meant to open one
+          # room. This joins with one, then asks the server from the guest's
+          # own page for everything else an account can do.
+          - name: guest link
+            suite: browser.guest.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
