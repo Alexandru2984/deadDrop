@@ -9,6 +9,15 @@ SHA-256 of the client it serves. The build is reproducible, so the same commit
 yields the same binary on any machine with the same Go version — rebuild and
 compare rather than take a hash on trust.
 
+## 0.8.3 — 2026-11-17
+
+- **Built with Go 1.27.4**, the current major release, up from 1.26.11; the
+  install kit's image too. Both carry the same security fixes, released the
+  same day, so this changes nothing about what is known to be safe — it keeps
+  the server on the release line that gets fixes longest. `govulncheck` finds
+  nothing, and every test passes on it, through the install kit as well.
+- The install guide in Romanian: [`INSTALL.ro.md`](INSTALL.ro.md).
+
 ## 0.8.2 — 2026-11-16
 
 - Fix: **messages left for an offline contact could be lost for good.** When
