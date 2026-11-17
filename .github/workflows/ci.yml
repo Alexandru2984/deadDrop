@@ -46,7 +46,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
       - name: Go security static analysis
         run: >-
-          go run github.com/securego/gosec/v2/cmd/gosec@v2.27.1
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0
           -exclude-generated -nosec-require-rules
           -nosec-require-justification ./...
       # The seed corpora run as ordinary tests above; this explores new input on
