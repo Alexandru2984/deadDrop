@@ -13,8 +13,8 @@ script — and `test/seo.selftest.mjs` fails the build if one appears. The previ
 Drop involves no third party.
 
 To run your own instance — Docker, one script, HTTPS and a call relay
-included — see [`INSTALL.md`](INSTALL.md). It serves this same client, byte for
-byte.
+included — see [`INSTALL.md`](INSTALL.md) (în română: [`INSTALL.ro.md`](INSTALL.ro.md)).
+It serves this same client, byte for byte.
 
 A fork should change the host in `web/robots.txt`, `web/sitemap.xml` and the
 canonical/`og:` tags. Those are static because the bundle is hashed: a server

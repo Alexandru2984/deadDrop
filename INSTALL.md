@@ -1,5 +1,7 @@
 # Running your own Dead Drop
 
+Română: [INSTALL.ro.md](INSTALL.ro.md)
+
 This is the short way: Docker, one script, HTTPS certificates that renew
 themselves. It runs the same code as the public instance — the same client,
 byte for byte, which anyone can check (see [Is it the real thing?](#is-it-the-real-thing)).
